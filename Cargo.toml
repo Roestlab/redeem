@@ -7,10 +7,10 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 ndarray = "0.15"
-candle-core = { path = "/home/singjc/Documents/github/candle/candle-core" }
-candle-nn = { path = "/home/singjc/Documents/github/candle/candle-nn" }
-#candle-core = { git = "https://github.com/huggingface/candle", branch = "main" }
-#candle-nn = { git = "https://github.com/huggingface/candle", branch = "main" }
+# candle-core = { path = "/home/singjc/Documents/github/candle/candle-core" }
+# candle-nn = { path = "/home/singjc/Documents/github/candle/candle-nn" }
+candle-core = { git = "https://github.com/huggingface/candle", branch = "main" }
+candle-nn = { git = "https://github.com/huggingface/candle", branch = "main" }
 anyhow = "1.0"
 reqwest = { version = "0.11", features = ["blocking"] }
 csv = "1.1"
