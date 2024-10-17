@@ -5,6 +5,8 @@ use candle_core::{Device, Tensor};
 use anyhow::{Result, anyhow};
 use crate::model_interface::ModelInterface;
 use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
+use std::collections::HashMap;
+use crate::utils::peptdeep_utils::ModificationMap;
 
 // Enum for different types of retention time models
 pub enum RTModelArch {
@@ -17,7 +19,7 @@ pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm"];
 
 // A wrapper struct for RT models
 pub struct RTModelWrapper {
-    model: Box<dyn ModelInterface>,
+    model: Box<dyn ModelInterface + Send + Sync>,
 }
 
 impl RTModelWrapper {
@@ -41,6 +43,10 @@ impl RTModelWrapper {
         self.model.encode_peptides(peptide_sequences, mods, mod_sites)
     }
 
+    pub fn fine_tune(&mut self, training_data: &[(String, f32)], modifications: HashMap<(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {
+        self.model.fine_tune(training_data, modifications, learning_rate, epochs)
+    }
+
     pub fn set_evaluation_mode(&mut self) {
         self.model.set_evaluation_mode()
     }
@@ -55,6 +61,10 @@ impl RTModelWrapper {
 
     pub fn print_weights(&self) {
         self.model.print_weights()
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.model.save(path)
     }
 }
 
