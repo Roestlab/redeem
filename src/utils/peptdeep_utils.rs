@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, Error};
+use candle_core::op::Op;
 use std::fs::File;
 use std::path::PathBuf;
 use std::io;
@@ -9,10 +10,30 @@ use reqwest;
 use regex::Regex;
 use candle_core::Error as CandleError;
 use std::collections::HashMap;
-use crate::models::rt_cnn_lstm_model::ModelConstants;
+use serde::Deserialize;
+// use crate::models::rt_cnn_lstm_model::ModelConstants;
 
 const MOD_TSV_URL: &str = "https://raw.githubusercontent.com/MannLabs/alphabase/main/alphabase/constants/const_files/modification.tsv";
 const MOD_TSV_PATH: &str = "data/modification.tsv";
+
+// Constants and Utility Structs
+
+#[derive(Clone, Debug, Deserialize)]
+/// Represents the constants used in a model.
+pub struct ModelConstants {
+    /// The size of the amino acid embedding.
+    pub aa_embedding_size: usize,
+    /// The charge factor used in the model.
+    pub charge_factor: Option<f32>,
+    /// The list of instruments used in the model.
+    pub instruments: Vec<String>,
+    /// The maximum number of instruments allowed in the model.
+    pub max_instrument_num: usize,
+    /// The list of modification elements used in the model.
+    pub mod_elements: Vec<String>,
+    /// The NCE (Normalized Collision Energy) factor used in the model.
+    pub nce_factor: Option<f32>,
+}
 
 #[derive(Debug, serde::Deserialize)]
 struct ModFeature {

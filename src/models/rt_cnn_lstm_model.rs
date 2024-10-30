@@ -9,26 +9,8 @@ use ndarray::Array2;
 // use crate::models::rt_model::RTModel;
 use crate::model_interface::ModelInterface;
 use crate::building_blocks::bilstm::BidirectionalLSTM;
-use crate::utils::peptdeep_utils::{load_mod_to_feature, parse_model_constants, remove_mass_shift, extract_masses_and_indices, get_modification_indices, load_modifications, ModificationMap};
+use crate::utils::peptdeep_utils::{load_mod_to_feature, parse_model_constants, remove_mass_shift, extract_masses_and_indices, get_modification_indices, load_modifications, ModificationMap, ModelConstants};
 
-// Constants and Utility Structs
-
-#[derive(Clone, Debug, Deserialize)]
-/// Represents the constants used in a model.
-pub struct ModelConstants {
-    /// The size of the amino acid embedding.
-    aa_embedding_size: usize,
-    /// The charge factor used in the model.
-    charge_factor: f32,
-    /// The list of instruments used in the model.
-    instruments: Vec<String>,
-    /// The maximum number of instruments allowed in the model.
-    max_instrument_num: usize,
-    /// The list of modification elements used in the model.
-    pub mod_elements: Vec<String>,
-    /// The NCE (Normalized Collision Energy) factor used in the model.
-    nce_factor: f32,
-}
 
 // Main Model Struct
 
@@ -289,11 +271,11 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
     fn print_summary(&self) {
         println!("RTModel Summary:");
         println!("AA Embedding Size: {}", self.constants.aa_embedding_size);
-        println!("Charge Factor: {}", self.constants.charge_factor);
+        println!("Charge Factor: {:?}", self.constants.charge_factor);
         println!("Instruments: {:?}", self.constants.instruments);
         println!("Max Instrument Num: {}", self.constants.max_instrument_num);
         println!("Mod Elements: {:?}", self.constants.mod_elements);
-        println!("NCE Factor: {}", self.constants.nce_factor);
+        println!("NCE Factor: {:?}", self.constants.nce_factor);
     }
 
     /// Print the model's weights.
@@ -607,11 +589,11 @@ mod tests {
         assert!(result.is_ok());
         let constants = result.unwrap();
         assert_eq!(constants.aa_embedding_size, 27);
-        assert_eq!(constants.charge_factor, 0.1);
+        assert_eq!(constants.charge_factor, Some(0.1));
         assert_eq!(constants.instruments.len(), 4);
         assert_eq!(constants.max_instrument_num, 8);
         assert_eq!(constants.mod_elements.len(), 109);
-        assert_eq!(constants.nce_factor, 0.01);
+        assert_eq!(constants.nce_factor, Some(0.01));
     }
 
     #[test]
