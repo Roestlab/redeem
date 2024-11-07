@@ -35,12 +35,12 @@ impl RTModelWrapper {
 
     // Delegate methods to the underlying model
     pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str) -> Result<Vec<f32>> {
-        self.model.predict(peptide_sequence, mods, mod_sites)
+        self.model.predict(peptide_sequence, mods, mod_sites, None, None, None)
     }
 
     // Add other methods as needed, delegating to self.model
     pub fn encode_peptides(&self, peptide_sequences: &[String], mods: &str, mod_sites: &str) -> Result<Tensor> {
-        self.model.encode_peptides(peptide_sequences, mods, mod_sites)
+        self.model.encode_peptides(peptide_sequences, mods, mod_sites, None, None, None)
     }
 
     pub fn fine_tune(&mut self, training_data: &[(String, f32)], modifications: HashMap<(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {

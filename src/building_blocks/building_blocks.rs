@@ -8,8 +8,8 @@ use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
 use crate::building_blocks::sequential::{Sequential, seq};
 
 /// constant MOD_FEATURE_SIZE set to 109
-const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
-const AA_EMBEDDING_SIZE: usize = 27; // TODO: derive from constants yaml
+pub const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
+pub const AA_EMBEDDING_SIZE: usize = 27; // TODO: derive from constants yaml
 const MAX_INSTRUMENT_NUM: usize = 8; // TODO: derive from constants yaml
 
 #[derive(Clone)]
@@ -49,7 +49,7 @@ impl DecoderLinear {
             varstore.get((64, in_features), names[0]).unwrap(),
             Some(varstore.get(64, names_bias[0]).unwrap()),
         );
-        let prelu = nn::PReLU::new(varstore.get(1, names[1]).unwrap(), false);
+        let prelu = nn::PReLU::new(varstore.get(1, names[1]).unwrap(), true);
         let linear2 = nn::Linear::new(
             varstore.get((out_features, 64), names[2]).unwrap(),
             Some(varstore.get(out_features, names_bias[1]).unwrap()),
@@ -66,6 +66,8 @@ impl DecoderLinear {
 
 impl Module for DecoderLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        println!("DecoderLinear forward");
+        println!("x shape: {:?}", x.shape());
         self.nn.forward(x)
     }
 }
@@ -104,7 +106,10 @@ impl AAEmbedding {
 
 impl Module for AAEmbedding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.embeddings.forward(x)
+        println!("AAEmbedding forward");
+        println!("x shape: {:?}", x.shape());
+        println!("x first 5 elements: {:?}", x.narrow(1, 0, 5)?);
+        self.embeddings.forward(&x.to_dtype(DType::I64)?)
     }
 }
 
@@ -260,12 +265,18 @@ impl Input26aaModPositionalEncoding {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
+        println!("Input26aaModPositionalEncoding forward");
+        println!("passing through mod_nn");
         let mod_x = self.mod_nn.forward(mod_x)?;
+        println!("passing through aa_emb");
         let x = self.aa_emb.forward(aa_indices)?;
 
         // Concatenate x and mod_x along the last dimension
+        println!("Concatenating x and mod_x");
+        println!("x shape: {:?}", x.shape());
+        println!("mod_x shape: {:?}", mod_x.shape());
         let concatenated = Tensor::cat(&[&x, &mod_x], 2)?;
-
+        println!("passing through pos_encoder");
         self.pos_encoder.forward(&concatenated)
     }
 }
@@ -326,7 +337,7 @@ impl MetaEmbedding {
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
         // One-hot encode the instrument indices
-        let inst_x = self.one_hot(instrument_indices, 10).unwrap(); // Assuming max_instrument_num is 10
+        let inst_x = self.one_hot(&instrument_indices.to_dtype(DType::I64)?, MAX_INSTRUMENT_NUM).unwrap(); 
 
         // Concatenate the one-hot encoded instrument indices with NCEs
         let combined_input = Tensor::cat(&[&inst_x, nces], 1)?;
@@ -369,6 +380,7 @@ impl MetaEmbedding {
 #[derive(Clone)]
 pub struct HiddenHfaceTransformer {
     pub bert: transformers::models::bert::BertEncoder,
+    pub config: transformers::models::bert::Config,
 }
 
 impl HiddenHfaceTransformer {
@@ -404,12 +416,40 @@ impl HiddenHfaceTransformer {
 
         let bert = transformers::models::bert::BertEncoder::load(varstore, &config).unwrap();
 
-        Ok(Self { bert })
+        Ok(Self { bert, config })
     }
 
-    pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        self.bert.forward(x, mask)
+    pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+        // Determine batch size and sequence length from input tensor
+        let (batch_size, seq_len, _) = x.shape().dims3()?; // Assuming x has shape [batch_size, seq_len, hidden_dim]
+    
+        // Create or adjust the mask
+        let mask = match mask {
+            Some(m) => {
+                // Unsqueeze and repeat to match attention scores shape
+                m.unsqueeze(1)?
+                    .repeat(vec![1, self.config.num_attention_heads as usize, 1])? // Shape: [batch_size, n_heads, seq_len]
+                    .unsqueeze(2)? // Add an extra dimension for broadcasting
+            },
+            None => {
+                // Create a new mask filled with zeros
+                let zeros_mask = Tensor::zeros((batch_size, 1, seq_len), DType::F32, x.device())?; // Shape: [batch_size, 1, seq_len]
+                zeros_mask.repeat(vec![1, self.config.num_attention_heads as usize, 1])? // Shape: [batch_size, n_heads, seq_len]
+                    .unsqueeze(2)? // Add an extra dimension for broadcasting
+            }
+        };
+    
+        println!("HiddenHfaceTransformer forward");
+        println!("x shape: {:?}", x.shape());
+        println!("mask shape: {:?}", mask.shape());
+    
+        // Forward pass through BERT encoder
+        self.bert.forward(x, &mask)
     }
+    
+    
+    
+    
 }
 
 impl fmt::Debug for HiddenHfaceTransformer {

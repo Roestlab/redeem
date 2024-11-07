@@ -18,6 +18,27 @@ const MOD_TSV_PATH: &str = "data/modification.tsv";
 
 // Constants and Utility Structs
 
+const INSTRUMENT_DICT: &[(&str, usize)] = &[
+    ("QE", 0),
+    ("LUMOS", 1),
+    ("TIMSTOF", 2),
+    ("SCIEXTOF", 3),
+    ("THERMOTOF", 4),
+];
+
+const MAX_INSTRUMENT_NUM: usize = 8;
+
+const UNKNOWN_INSTRUMENT_NUM: usize = MAX_INSTRUMENT_NUM - 1;
+
+pub fn parse_instrument_index(instrument: &str) -> usize {
+    let upper_instrument = instrument.to_uppercase();
+    
+    INSTRUMENT_DICT.iter()
+        .find(|&&(name, _)| name == upper_instrument)
+        .map_or(UNKNOWN_INSTRUMENT_NUM, |&(_, index)| index)
+}
+
+
 #[derive(Clone, Debug, Deserialize)]
 /// Represents the constants used in a model.
 pub struct ModelConstants {
