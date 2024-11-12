@@ -1,0 +1,29 @@
+[package]
+name = "redeem-properties"
+version = "0.1.0"
+authors = ["Justin Sing <justincsing@gmail.com>"]
+edition = "2021"
+rust-version = "1.79"
+description = "A repository of deep-learning models for mass spectrometry data"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+ndarray = "0.15"
+candle-core = { path = "/home/singjc/Documents/github/candle/candle-core" }
+candle-nn = { path = "/home/singjc/Documents/github/candle/candle-nn" }
+candle-transformers = { path = "/home/singjc/Documents/github/candle/candle-transformers" }
+# candle-core = { git = "https://github.com/huggingface/candle", branch = "main" }
+# candle-nn = { git = "https://github.com/huggingface/candle", branch = "main" }
+# candle-transformers = { git = "https://github.com/huggingface/candle", branch = "main" }
+anyhow = "1.0"
+reqwest = { version = "0.11", features = ["blocking"] }
+csv = "1.1"
+regex = "1.6"
+#linfa-svm = "0.7.0"
+
+[lib]
+name = "redeem_properties"
+path = "src/lib.rs"
