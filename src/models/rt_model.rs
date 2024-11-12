@@ -3,7 +3,7 @@
 use std::path::Path;
 use candle_core::{Device, Tensor};
 use anyhow::{Result, anyhow};
-use crate::model_interface::ModelInterface;
+use crate::model_interface::{ModelInterface,PredictionResult};
 use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
@@ -25,7 +25,7 @@ pub struct RTModelWrapper {
 impl RTModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "rt_cnn_lstm" => Box::new(RTCNNLSTMModel::new(model_path, constants_path, device)?),
+            "rt_cnn_lstm" => Box::new(RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
             // Add other cases here as you implement more models
             _ => return Err(anyhow!("Unsupported RT model architecture: {}", arch)),
         };
@@ -34,7 +34,7 @@ impl RTModelWrapper {
     }
 
     // Delegate methods to the underlying model
-    pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str) -> Result<Vec<f32>> {
+    pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str) -> Result<PredictionResult> {
         self.model.predict(peptide_sequence, mods, mod_sites, None, None, None)
     }
 

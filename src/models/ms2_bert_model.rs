@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, Tensor, Var, D, IndexOp};
+use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
 use candle_nn::{
     ops, Conv1d, Conv1dConfig, Dropout, Linear, Module, Optimizer, PReLU, VarBuilder, VarMap,
 };
@@ -9,13 +9,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::building_blocks::building_blocks::{AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
-    DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding, ModLossNN,
+use crate::building_blocks::building_blocks::{
+    DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
+    ModLossNN, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
 use crate::{
-    model_interface::ModelInterface,
-    utils::peptdeep_utils::{ModelConstants, load_mod_to_feature, parse_model_constants, parse_instrument_index},
+    model_interface::{ModelInterface, PredictionResult},
+    utils::peptdeep_utils::{
+        load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
+    },
 };
 
 // Constants
@@ -29,6 +32,14 @@ pub struct MS2BertModel<'a> {
     var_store: VarBuilder<'a>,
     constants: ModelConstants,
     mod_to_feature: HashMap<String, Vec<f32>>,
+    fixed_sequence_len: usize,
+    // Total number of fragment types of a fragmentation position to predict
+    num_frag_types: usize,
+    // Number of fragment types of a fragmentation position to predict, by default 0
+    num_modloss_types: usize,
+    // If True, the modloss layer will be disabled, by default True
+    mask_modloss: bool,
+    min_inten: f32,
     device: Device,
     dropout: Dropout,
     input_nn: Input26aaModPositionalEncoding,
@@ -45,7 +56,15 @@ unsafe impl<'a> Sync for MS2BertModel<'a> {}
 // Code Model Implementation
 impl<'a> ModelInterface for MS2BertModel<'a> {
     /// Create a new MS2BERT model from the given model and constants files.
-    fn new<P: AsRef<Path>>(model_path: P, constants_path: P, device: Device) -> Result<Self> {
+    fn new<P: AsRef<Path>>(
+        model_path: P,
+        constants_path: P,
+        fixed_sequence_len: usize,
+        num_frag_types: usize,
+        num_modloss_types: usize,
+        mask_modloss: bool,
+        device: Device,
+    ) -> Result<Self> {
         let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
 
         let constants: ModelConstants =
@@ -123,6 +142,11 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
             var_store: var_store,
             constants: constants,
             mod_to_feature: mod_to_feature,
+            fixed_sequence_len: fixed_sequence_len,
+            num_frag_types: num_frag_types,
+            num_modloss_types: num_modloss_types,
+            mask_modloss: mask_modloss,
+            min_inten: 1e-4,
             device,
             dropout: dropout,
             input_nn: input_nn,
@@ -141,10 +165,18 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         charge: Option<i32>,
         nce: Option<i32>,
         intsrument: Option<&str>,
-    ) -> Result<Vec<f32>> {
-        let input_tensor = self.encode_peptides(peptide_sequence, mods, mod_sites, charge, nce, intsrument)?;
+    ) -> Result<PredictionResult> {
+        let input_tensor =
+            self.encode_peptides(peptide_sequence, mods, mod_sites, charge, nce, intsrument)?;
         let output = self.forward(&input_tensor)?;
-        Ok(output.to_vec1()?)
+
+        let out = self.process_predictions(&output, self.min_inten)?;
+
+        let predictions = PredictionResult::MS2Result(out.squeeze(0)?.to_vec2()?);
+
+        println!("Predictions: {:?}", predictions);
+
+        Ok(predictions)
     }
 
     fn encode_peptides(
@@ -182,13 +214,28 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         )?;
 
         // Charges
-        let charge = Tensor::from_slice(&vec![charge.unwrap() as f64* CHARGE_FACTOR; seq_len], &[batch_size, seq_len, 1], &self.device)?.to_dtype(DType::F32)?;
+        let charge = Tensor::from_slice(
+            &vec![charge.unwrap() as f64 * CHARGE_FACTOR; seq_len],
+            &[batch_size, seq_len, 1],
+            &self.device,
+        )?
+        .to_dtype(DType::F32)?;
 
         // NCE
-        let nce = Tensor::from_slice(&vec![nce.unwrap() as f64 * NCE_FACTOR; seq_len], &[batch_size, seq_len, 1], &self.device)?.to_dtype(DType::F32)?;
+        let nce = Tensor::from_slice(
+            &vec![nce.unwrap() as f64 * NCE_FACTOR; seq_len],
+            &[batch_size, seq_len, 1],
+            &self.device,
+        )?
+        .to_dtype(DType::F32)?;
 
         // Instrument
-        let instrument_indices = Tensor::from_slice(&vec![parse_instrument_index(intsrument.unwrap()) as u32; seq_len], &[batch_size, seq_len, 1], &self.device)?.to_dtype(DType::F32)?;
+        let instrument_indices = Tensor::from_slice(
+            &vec![parse_instrument_index(intsrument.unwrap()) as u32; seq_len],
+            &[batch_size, seq_len, 1],
+            &self.device,
+        )?
+        .to_dtype(DType::F32)?;
 
         // println!("Encoding Peptides");
         // println!("aa_indices_tensor: {:?}", aa_indices_tensor.shape());
@@ -198,7 +245,10 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         // println!("instrument_indices: {:?}", instrument_indices.shape());
 
         // Combine aa_one_hot, mod_x, charge, nce, and instrument
-        let combined = Tensor::cat(&[aa_indices_tensor, mod_x, charge, nce, instrument_indices], 2)?;
+        let combined = Tensor::cat(
+            &[aa_indices_tensor, mod_x, charge, nce, instrument_indices],
+            2,
+        )?;
 
         Ok(combined)
     }
@@ -240,21 +290,20 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
 // Module Trait Implementation
 impl<'a> Module for MS2BertModel<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        
         let (batch_size, seq_len, _) = xs.shape().dims3()?;
-        
+
         // Separate the input tensor into the different parts
         println!("xs shape: {:?}", xs.shape());
 
         // Calculate starting indices
-        let start_mod_x = 1; 
-        let start_charge = start_mod_x + MOD_FEATURE_SIZE; 
-        let start_nce = start_charge + 1; 
-        let start_instrument = start_nce + 1; 
+        let start_mod_x = 1;
+        let start_charge = start_mod_x + MOD_FEATURE_SIZE;
+        let start_nce = start_charge + 1;
+        let start_instrument = start_nce + 1;
 
         // Extract tensors using indexing
-        let aa_indices_out = xs.i((.., .., 0))?; 
-        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?; 
+        let aa_indices_out = xs.i((.., .., 0))?;
+        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
         let charge_out = xs.i((.., 0..1, start_charge..start_charge + 1))?;
         let nce_out = xs.i((.., 0..1, start_nce..start_nce + 1))?;
         let instrument_out = xs.i((.., 0..1, start_instrument..start_instrument + 1))?;
@@ -278,12 +327,16 @@ impl<'a> Module for MS2BertModel<'a> {
 
         // Forward pass through input_nn with dropout
         println!("Forward pass through input_nn with dropout");
-        let in_x = self.dropout.forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
+        let in_x = self
+            .dropout
+            .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
         println!("in_x shape: {:?}", in_x.shape());
 
         // Prepare metadata for meta_nn
         println!("Prepare metadata for meta_nn");
-        let meta_x = self.meta_nn.forward(&charge_out, &nce_out, &instrument_out)?
+        let meta_x = self
+            .meta_nn
+            .forward(&charge_out, &nce_out, &instrument_out)?
             .unsqueeze(1)?
             .repeat(vec![1, seq_len as usize, 1])?;
 
@@ -314,19 +367,52 @@ impl<'a> Module for MS2BertModel<'a> {
         // Forward pass through output_nn
         println!("Forward pass through output_nn");
         println!("hidden_output (dropout) shape: {:?}", hidden_output.shape());
-        let out_x = self.output_nn.forward(&hidden_output)?;
+        let mut out_x = self.output_nn.forward(&hidden_output)?;
 
         // Handle modloss if applicable (similar logic as PyTorch)
+        if self.num_modloss_types > 0 {
+            println!("Num modloss types: {}", self.num_modloss_types);
+
+            if self.mask_modloss {
+                // Create a tensor of zeros with the appropriate shape
+                let zeros_shape = (out_x.shape().dims()[0], out_x.shape().dims()[1], self.num_modloss_types);
+                let zeros_tensor = Tensor::zeros(zeros_shape, DType::F32, &self.device)?; // Adjust device as necessary
+
+                // Concatenate along the last dimension
+                out_x = Tensor::cat(&[out_x, zeros_tensor], 2)?;
+                println!("out_x (mask modloss) shape: {:?}", out_x.shape());
+            } else {
+                // // Forward pass through the first modloss neural network
+                // let modloss_output = self.modloss_nn[0].forward(in_x)?;
+
+                // // // If output attentions is enabled, save them
+                // // if self.output_attentions {
+                // //     self.modloss_attentions = Some(modloss_output.clone()); // Assuming you want to store a clone
+                // // }
+
+                // // Add hidden_x to the first output
+                // let modloss_combined = &modloss_output + hidden_x;
+
+                // // Forward pass through the last modloss neural network
+                // let modloss_final = self.modloss_nn.last().unwrap().forward(&modloss_combined)?;
+
+                // // Concatenate the outputs along the last dimension
+                // out_x = Tensor::cat(&[out_x, modloss_final], 2)?;
+                todo!();
+            }
+        }
 
         println!("out_x: {:?}", out_x.shape());
         // first few values of out_x
         // println!("out_x: {:?}", out_x.to_vec3::<f32>()?.to_vec());
 
         // print out_x[:,3:,:] values
-        println!("out_x[:,3:,:]: {:?}", out_x.i((.., 3.., ..))?.to_vec3::<f32>()?.to_vec());
-        
-        Ok(out_x)
+        println!(
+            "out_x[:,3:,:]: {:?}",
+            out_x.i((.., 3.., ..))?.to_vec3::<f32>()?.to_vec()
+        );
 
+        Ok(out_x.i((.., 3.., ..))?)
     }
 }
 
@@ -408,7 +494,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, device).unwrap();
+        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
         println!("{:?}", model);
     }
@@ -419,7 +505,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, device).unwrap();
+        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
         let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
@@ -428,7 +514,8 @@ mod tests {
         let nce = Some(20);
         let instrument = Some("QE");
 
-        let result = model.encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+        let result =
+            model.encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
 
         println!("{:?}", result);
 
@@ -438,12 +525,12 @@ mod tests {
     }
 
     #[test]
-    fn test_forward(){
+    fn test_forward() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, device).unwrap();
+        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
         let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
@@ -452,9 +539,29 @@ mod tests {
         let nce = Some(20);
         let instrument = Some("QE");
 
-        let input_tensor = model.encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument).unwrap();
+        let input_tensor = model
+            .encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument)
+            .unwrap();
         let output = model.forward(&input_tensor).unwrap();
         println!("{:?}", output);
     }
 
+    #[test]
+    fn test_predict(){
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+
+        let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
+        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let mod_sites = "0;4;8";
+        let charge = Some(2);
+        let nce = Some(20);
+        let instrument = Some("QE");
+
+        let result = model.predict(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+        println!("{:?}", result);
+    }
 }

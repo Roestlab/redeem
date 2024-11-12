@@ -8,7 +8,7 @@ use std::path::Path;
 
 // use crate::models::rt_model::RTModel;
 use crate::building_blocks::bilstm::BidirectionalLSTM;
-use crate::model_interface::ModelInterface;
+use crate::model_interface::{ModelInterface, PredictionResult};
 use crate::utils::peptdeep_utils::{
     extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
     parse_model_constants, remove_mass_shift, ModelConstants, ModificationMap,
@@ -43,7 +43,15 @@ unsafe impl<'a> Sync for RTCNNLSTMModel<'a> {}
 
 impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
     /// Create a new RTCNNLSTMModel from the given model and constants files.
-    fn new<P: AsRef<Path>>(model_path: P, constants_path: P, device: Device) -> Result<Self> {
+    fn new<P: AsRef<Path>>(
+        model_path: P,
+        constants_path: P,
+        _fixed_sequence_len: usize,
+        _num_frag_types: usize,
+        _num_modloss_types: usize,
+        _mask_modloss: bool,
+        device: Device,
+    ) -> Result<Self> {
         let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
 
         let constants: ModelConstants =
@@ -146,7 +154,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         charge: Option<i32>,
         nce: Option<i32>,
         intsrument: Option<&str>,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<PredictionResult> {
         // Preprocess the peptide sequences and modifications
         let input_tensor =
             self.encode_peptides(peptide_sequence, mods, mod_sites, None, None, None)?;
@@ -155,7 +163,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         let output = self.forward(&input_tensor)?;
 
         // Convert the output tensor to a Vec<f32>
-        let predictions = output.to_vec1()?;
+        let predictions = PredictionResult::RTResult(output.to_vec1()?);
 
         Ok(predictions)
     }
@@ -276,7 +284,8 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
                 let mod_site_str = &modified_indices;
 
                 // Forward pass
-                let input = self.encode_peptides(peptides_str, mod_str, mod_site_str, None, None, None)?;
+                let input =
+                    self.encode_peptides(peptides_str, mod_str, mod_site_str, None, None, None)?;
                 let predicted_rt = self.forward(&input)?;
 
                 // Compute loss
@@ -872,7 +881,8 @@ mod tests {
             "Test constants file does not exist"
         );
 
-        let model = RTCNNLSTMModel::new(model_path, constants_path, Device::Cpu).unwrap();
+        let model =
+            RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, Device::Cpu).unwrap();
 
         let aa_one_hot = model.aa_one_hot(&aa_indices_tensor).unwrap();
 
@@ -896,7 +906,8 @@ mod tests {
             "Test constants file does not exist"
         );
 
-        let model = RTCNNLSTMModel::new(model_path, constants_path, Device::Cpu).unwrap();
+        let model =
+            RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, Device::Cpu).unwrap();
 
         let var_map = match model.create_var_map() {
             Ok(vars) => vars,
@@ -947,7 +958,7 @@ mod tests {
             constants_path
         );
 
-        let result = RTCNNLSTMModel::new(&model_path, &constants_path, Device::Cpu);
+        let result = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, Device::Cpu);
 
         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
 
@@ -986,7 +997,8 @@ mod tests {
             Err(e) => {
                 println!("Error during prediction: {:?}", e);
                 println!("Attempting to encode peptide...");
-                match model.encode_peptides(&[peptide.clone()], &mods, &mod_sites, None, None, None) {
+                match model.encode_peptides(&[peptide.clone()], &mods, &mod_sites, None, None, None)
+                {
                     Ok(encoded) => println!("Encoded peptide shape: {:?}", encoded.shape()),
                     Err(e) => println!("Error encoding peptide: {:?}", e),
                 }
@@ -1002,7 +1014,7 @@ mod tests {
 
         // Assert model and constants files exist (your existing assertions)
 
-        let result = RTCNNLSTMModel::new(&model_path, &constants_path, Device::Cpu);
+        let result = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, Device::Cpu);
         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
         let mut model = result.unwrap();
 
