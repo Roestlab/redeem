@@ -677,7 +677,7 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
     }
 
     pub fn from_varstore(
-        varstore: nn::VarBuilder,
+        varstore: &nn::VarBuilder,
         mod_hidden_dim: usize,
         hidden_dim: usize,
         num_layers: usize,

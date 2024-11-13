@@ -90,7 +90,7 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
             ],
             "ccs_encoder.hidden_nn",
             vec!["ccs_encoder.attn_sum.attn.0.weight"]
-        );
+        ).unwrap();
 
         let ccs_decoder = DecoderLinear::from_varstore(
             &var_store,
