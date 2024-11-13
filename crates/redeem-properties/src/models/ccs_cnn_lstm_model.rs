@@ -94,8 +94,8 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
 
         let ccs_decoder = DecoderLinear::from_varstore(
             &var_store,
-            256,
-            4,
+            257,
+            1,
             vec![
                 "ccs_decoder.nn.0.weight",
                 "ccs_decoder.nn.1.weight",
