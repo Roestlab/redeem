@@ -174,3 +174,86 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         todo!()
     }
 }
+
+
+
+impl<'a> fmt::Debug for CCSCNNLSTMModel<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "ModelCCS_LSTM(")?;
+        writeln!(f, "  (dropout): Dropout(p={}, inplace={})", 0.1, false)?;
+        writeln!(f, "  (ccs_encoder): Input_AA_CNN_LSTM_cat_Charge_Encoder(")?;
+
+        // Mod Net
+        writeln!(f, "    (mod_nn): InputModNetFixFirstK(")?;
+        writeln!(
+            f,
+            "      (nn): Linear(in_features=103, out_features=2, bias=False)"
+        )?;
+        writeln!(f, "    )")?;
+
+        // CNN
+        writeln!(f, "    (input_cnn): SeqCNN(")?;
+        writeln!(f, "      (cnn_short): Conv1d(36, 36, kernel_size=(3,), stride=(1,), padding=(1,))")?;
+        writeln!(f, "      (cnn_medium): Conv1d(36, 36, kernel_size=(5,), stride=(1,), padding=(2,))")?;
+        writeln!(f, "      (cnn_long): Conv1d(36, 36, kernel_size=(7,), stride=(1,), padding=(3,))")?;
+        writeln!(f, "    )")?;
+
+        // Hidden LSTM
+        writeln!(f, "    (hidden_nn): SeqLSTM(")?;
+        writeln!(f, "      (rnn): LSTM(144, 128, num_layers=2, batch_first=True, bidirectional=True)")?;
+        writeln!(f, "    )")?;
+
+        // Attention Sum
+        writeln!(f, "    (attn_sum): SeqAttentionSum(")?;
+        writeln!(f, "      (attn): Sequential(")?;
+        writeln!(
+            f,
+            "        (0): Linear(in_features=256, out_features=1, bias=False)"
+        )?;
+        writeln!(f, "        (1): Softmax(dim=1)")?;
+        writeln!(f, "      )")?;
+        writeln!(f, "    )")?;
+
+        writeln!(f, "  )")?;
+
+        // Decoder
+        writeln!(f, "  (ccs_decoder): LinearDecoder(")?;
+        writeln!(f, "    (nn): Sequential(")?;
+        writeln!(
+            f,
+            "      (0): Linear(in_features=257, out_features=64, bias=True)"
+        )?;
+        writeln!(f, "      (1): PReLU(num_parameters=1)")?;
+        writeln!(
+            f,
+            "      (2): Linear(in_features=64, out_features=1, bias=True)"
+        )?;
+        writeln!(f, "    )")?;
+        
+        writeln!(f, "  )")?;
+        
+        write!(f, ")")
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_interface::ModelInterface;
+    use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
+    use candle_core::Device;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_load_pretrained_ccs_cnn_lstm_model() {
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+
+        println!("{:?}", model);
+    }
+
+}
