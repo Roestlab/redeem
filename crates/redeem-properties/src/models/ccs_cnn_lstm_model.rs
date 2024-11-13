@@ -138,10 +138,49 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         mods: &str,
         mod_sites: &str,
         charge: Option<i32>,
-        nce: Option<i32>,
-        intsrument: Option<&str>,
+        _nce: Option<i32>,
+        _intsrument: Option<&str>,
     ) -> Result<Tensor> {
-        todo!()
+        let aa_indices = get_aa_indices(peptide_sequences)?;
+
+        // Convert ndarray to Tensor and ensure it's F32
+        let aa_indices_tensor = Tensor::from_slice(
+            &aa_indices.as_slice().unwrap(),
+            (aa_indices.shape()[0], aa_indices.shape()[1]),
+            &self.device,
+        )?
+        .to_dtype(DType::F32)?;
+
+        let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
+
+        // unsqueeze aa_indices_tensor to match the shape of mod_x, which is batch_size x seq_len x mod_feature_size
+        let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?;
+
+        // Get modification features
+        let mod_x = get_mod_features(
+            mods,
+            mod_sites,
+            seq_len,
+            self.constants.mod_elements.len(),
+            self.mod_to_feature.clone(),
+            self.device.clone(),
+        )?;
+
+        // Charges
+        let charge = Tensor::from_slice(
+            &vec![charge.unwrap() as f64 * CHARGE_FACTOR; seq_len],
+            &[batch_size, seq_len, 1],
+            &self.device,
+        )?
+        .to_dtype(DType::F32)?;
+
+        // Combine aa_one_hot, mod_x, charge, nce, and instrument
+        let combined = Tensor::cat(
+            &[aa_indices_tensor, mod_x, charge],
+            2,
+        )?;
+
+        Ok(combined)
     }
     
     fn fine_tune(
@@ -254,6 +293,31 @@ mod tests {
         let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
         println!("{:?}", model);
+    }
+
+    #[test]
+    fn test_encode_peptides() {
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+
+        let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
+        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let mod_sites = "0;4;8";
+        let charge = Some(2);
+        let nce = Some(20);
+        let instrument = Some("QE");
+
+        let result =
+            model.encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+
+        println!("{:?}", result);
+
+        // assert!(result.is_ok());
+        // let encoded_peptides = result.unwrap();
+        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
     }
 
 }
