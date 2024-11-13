@@ -43,7 +43,7 @@ pub fn parse_instrument_index(instrument: &str) -> usize {
 /// Represents the constants used in a model.
 pub struct ModelConstants {
     /// The size of the amino acid embedding.
-    pub aa_embedding_size: usize,
+    pub aa_embedding_size: Option<usize>,
     /// The charge factor used in the model.
     pub charge_factor: Option<f32>,
     /// The list of instruments used in the model.

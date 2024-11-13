@@ -480,7 +480,7 @@ mod tests {
         let result = parse_model_constants(path);
         assert!(result.is_ok());
         let constants = result.unwrap();
-        assert_eq!(constants.aa_embedding_size, 27);
+        assert_eq!(constants.aa_embedding_size.unwrap(), 27);
         // assert_eq!(constants.charge_factor, 0.1);
         assert_eq!(constants.instruments.len(), 4);
         assert_eq!(constants.max_instrument_num, 8);

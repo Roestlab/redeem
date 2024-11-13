@@ -311,7 +311,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
     /// Print a summary of the model's constants.
     fn print_summary(&self) {
         println!("RTModel Summary:");
-        println!("AA Embedding Size: {}", self.constants.aa_embedding_size);
+        println!("AA Embedding Size: {}", self.constants.aa_embedding_size.unwrap());
         println!("Charge Factor: {:?}", self.constants.charge_factor);
         println!("Instruments: {:?}", self.constants.instruments);
         println!("Max Instrument Num: {}", self.constants.max_instrument_num);
@@ -683,7 +683,7 @@ impl<'a> RTCNNLSTMModel<'a> {
     /// One-hot encode amino acid indices.
     fn aa_one_hot(&self, aa_indices: &Tensor) -> Result<Tensor> {
         let (batch_size, seq_len) = aa_indices.shape().dims2()?;
-        let num_classes = self.constants.aa_embedding_size;
+        let num_classes = self.constants.aa_embedding_size.unwrap();
 
         let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
 
@@ -850,7 +850,7 @@ mod tests {
         let result = parse_model_constants(path);
         assert!(result.is_ok());
         let constants = result.unwrap();
-        assert_eq!(constants.aa_embedding_size, 27);
+        assert_eq!(constants.aa_embedding_size.unwrap(), 27);
         assert_eq!(constants.charge_factor, Some(0.1));
         assert_eq!(constants.instruments.len(), 4);
         assert_eq!(constants.max_instrument_num, 8);
@@ -890,7 +890,7 @@ mod tests {
         let (batch_size, seq_len, num_classes) = aa_one_hot.shape().dims3().unwrap();
         assert_eq!(
             (batch_size, seq_len, num_classes),
-            (1, 13, model.constants.aa_embedding_size)
+            (1, 13, model.constants.aa_embedding_size.unwrap())
         );
     }
 
