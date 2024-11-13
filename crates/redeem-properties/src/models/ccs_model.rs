@@ -1,40 +1,38 @@
-// rt_model.rs
-
 use std::path::Path;
 use candle_core::{Device, Tensor};
 use anyhow::{Result, anyhow};
 use crate::model_interface::{ModelInterface,PredictionResult};
-use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
+use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
 
-// Enum for different types of retention time models
-pub enum RTModelArch {
-    RTCNNLSTM,
+// Enum for different types of CCS models
+pub enum CCSModelArch {
+    CCSCNNLSTM,
     // Add other architectures here as needed
 }
 
-// Constants for different types of retention time models
-pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm"];
+// Constants for different types of CCS models
+pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm"];
 
-// A wrapper struct for RT models
-pub struct RTModelWrapper {
+// A wrapper struct for CCS models
+pub struct CCSModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
 
-impl RTModelWrapper {
+impl CCSModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "rt_cnn_lstm" => Box::new(RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
+            "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
             // Add other cases here as you implement more models
-            _ => return Err(anyhow!("Unsupported RT model architecture: {}", arch)),
+            _ => return Err(anyhow!("Unsupported CCS model architecture: {}", arch)),
         };
 
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str) -> Result<PredictionResult> {
-        self.model.predict(peptide_sequence, mods, mod_sites, None, None, None)
+    pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str, charge: i32) -> Result<PredictionResult> {
+        self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), None, None)
     }
 
     pub fn encode_peptides(&self, peptide_sequences: &[String], mods: &str, mod_sites: &str) -> Result<Tensor> {
@@ -66,23 +64,23 @@ impl RTModelWrapper {
     }
 }
 
-// Public API Function to load a new RT model
-pub fn load_retention_time_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<RTModelWrapper> {
-    RTModelWrapper::new(model_path, constants_path, arch, device)
+// Public API Function to load a new CCS model
+pub fn load_collision_cross_section_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<CCSModelWrapper> {
+    CCSModelWrapper::new(model_path, constants_path, arch, device)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::models::rt_model::load_retention_time_model;
+    use crate::models::ccs_model::load_collision_cross_section_model;
     use candle_core::Device;
+    use std::char;
     use std::path::PathBuf;
     use std::time::Instant;
 
     #[test]
-    fn peptide_retention_time_prediction() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        // let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt_resaved_model.pth");
-        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+    fn peptide_ccs_prediction() {
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
+        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         
         assert!(
             model_path.exists(),
@@ -114,34 +112,35 @@ mod tests {
             constants_path
         );
 
-        let result = load_retention_time_model(&model_path, &constants_path, "rt_cnn_lstm", Device::Cpu);
+        let result = load_collision_cross_section_model(&model_path, &constants_path, "ccs_cnn_lstm", Device::Cpu);
         
         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
 
         let mut model = result.unwrap();
-        model.print_summary();
+        // model.print_summary();
         
         // Print the model's weights
-        model.print_weights();
+        // model.print_weights();
 
         // Test prediction with real peptides
         let peptide = "AGHCEWQMKYR".to_string();
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string();
         let mod_sites = "0;4;8".to_string();
+        let charge = 2;
 
-        println!("Predicting retention time for peptide: {:?}", peptide);
+        println!("Predicting ccs for peptide: {:?}", peptide);
         println!("Modifications: {:?}", mods);
         println!("Modification sites: {:?}", mod_sites);
 
-        model.set_evaluation_mode();
+        // model.set_evaluation_mode();
 
         let start = Instant::now();
-        match model.predict(&[peptide.clone()], &mods, &mod_sites) {
+        match model.predict(&[peptide.clone()], &mods, &mod_sites, charge) {
             Ok(predictions) => {
                 let io_time = Instant::now() - start;
                 assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
                 println!("Prediction for real peptide:");
-                println!("Peptide: {} ({} @ {}), Predicted RT: {}:  {:8} ms", peptide, mods, mod_sites, predictions[0], io_time.as_millis());
+                println!("Peptide: {} ({} @ {}), Predicted CCS: {}:  {:8} ms", peptide, mods, mod_sites, predictions[0], io_time.as_millis());
             },
             Err(e) => {
                 println!("Error during prediction: {:?}", e);
