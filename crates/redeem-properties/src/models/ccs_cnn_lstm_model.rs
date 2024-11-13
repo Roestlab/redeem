@@ -6,6 +6,7 @@ use candle_nn::{
 use ndarray::Array2;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::process::Output;
 use std::{fmt, vec};
 use std::path::Path;
 
@@ -126,10 +127,15 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         mods: &str,
         mod_sites: &str,
         charge: Option<i32>,
-        nce: Option<i32>,
-        intsrument: Option<&str>,
+        _nce: Option<i32>,
+        _intsrument: Option<&str>,
     ) -> Result<PredictionResult> {
-        todo!()
+        let input_tesnor = self.encode_peptides(peptide_sequence, mods, mod_sites, charge, _nce, _intsrument)?;
+        let output = self.forward(&input_tesnor)?;
+        let predictions = PredictionResult::IMResult(output.to_vec1()?);
+
+        Ok(predictions)
+
     }
     
     fn encode_peptides(
@@ -215,6 +221,33 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
 }
 
 
+// Forward Module Trait Implementation
+impl <'a> Module for CCSCNNLSTMModel<'a> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
+        let (batch_size, seq_len, _) = xs.shape().dims3()?;
+
+        // Separate input into aa_indices, mod_x, charge
+        let start_mod_x = 1;
+        let start_charge = start_mod_x + MOD_FEATURE_SIZE;
+
+        let aa_indices_out = xs.i((.., .., 0))?;
+        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
+        let charge_out = xs.i((.., 0..1, start_charge..start_charge + 1))?;
+        let charge_out = charge_out.squeeze(2)?;
+
+        println!("aa_indices_out: {:?}", aa_indices_out.shape());
+        println!("mod_x_out: {:?}", mod_x_out.shape());
+        println!("charge_out: {:?}", charge_out.shape());
+        
+        let x = self.ccs_encoder.forward(&aa_indices_out, &mod_x_out, &charge_out)?;
+        let x = self.dropout.forward(&x, true)?;
+        let x = Tensor::cat(&[x, charge_out], 1)?;
+        let x = self.ccs_decoder.forward(&x)?;
+
+        Ok(x.squeeze(1)?)
+    }
+    
+}
 
 impl<'a> fmt::Debug for CCSCNNLSTMModel<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -318,6 +351,23 @@ mod tests {
         // assert!(result.is_ok());
         // let encoded_peptides = result.unwrap();
         // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+    }
+
+    #[test]
+    fn test_predict(){
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+
+        let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
+        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let mod_sites = "0;4;8";
+        let charge = Some(2);
+
+        let result = model.predict(&peptide_sequences, mods, mod_sites, charge, None, None);
+        println!("{:?}", result);
     }
 
 }

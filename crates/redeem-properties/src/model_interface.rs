@@ -9,6 +9,7 @@ use std::ops::{Index, IndexMut};
 #[derive(Debug)]
 pub enum PredictionResult {
     RTResult(Vec<f32>),
+    IMResult(Vec<f32>),
     MS2Result(Vec<Vec<f32>>),
 }
 
@@ -16,6 +17,7 @@ impl PredictionResult {
     pub fn len(&self) -> usize {
         match self {
             PredictionResult::RTResult(vec) => vec.len(),
+            PredictionResult::IMResult(vec) => vec.len(),
             PredictionResult::MS2Result(vec) => vec.len(),
         }
     }
@@ -27,6 +29,7 @@ impl Index<usize> for PredictionResult {
     fn index(&self, index: usize) -> &Self::Output {
         match self {
             PredictionResult::RTResult(vec) => &vec[index],
+            PredictionResult::IMResult(vec) => &vec[index],
             PredictionResult::MS2Result(vec) => &vec[index][0], // Assuming you want the first element of each inner vector
         }
     }
@@ -37,6 +40,7 @@ impl IndexMut<usize> for PredictionResult {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         match self {
             PredictionResult::RTResult(vec) => &mut vec[index],
+            PredictionResult::IMResult(vec) => &mut vec[index],
             PredictionResult::MS2Result(vec) => &mut vec[index][0], // Assuming you want the first element of each inner vector
         }
     }
@@ -46,14 +50,16 @@ impl IndexMut<usize> for PredictionResult {
 impl PredictionResult {
     pub fn get(&self, i: usize, j: usize) -> Option<&f32> {
         match self {
-            PredictionResult::RTResult(_) => None, // Or you could return Some if i == 0 and j is in range
+            PredictionResult::RTResult(_) => None, 
+            PredictionResult::IMResult(_) => None,
             PredictionResult::MS2Result(vec) => vec.get(i).and_then(|row| row.get(j)),
         }
     }
 
     pub fn get_mut(&mut self, i: usize, j: usize) -> Option<&mut f32> {
         match self {
-            PredictionResult::RTResult(_) => None, // Or you could return Some if i == 0 and j is in range
+            PredictionResult::RTResult(_) => None, 
+            PredictionResult::IMResult(_) => None,
             PredictionResult::MS2Result(vec) => vec.get_mut(i).and_then(|row| row.get_mut(j)),
         }
     }

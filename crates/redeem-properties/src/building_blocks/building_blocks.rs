@@ -5,10 +5,10 @@ use candle_transformers as transformers;
 use core::num;
 use std::fmt;
 
-use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
-use crate::building_blocks::sequential::{Sequential, seq};
 use crate::building_blocks::bilstm::BidirectionalLSTM;
 use crate::building_blocks::featurize::aa_one_hot;
+use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
+use crate::building_blocks::sequential::{seq, Sequential};
 
 /// constants used by PeptDeep Models
 pub const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
@@ -81,7 +81,6 @@ impl fmt::Debug for DecoderLinear {
             .field("nn", &"<Sequential>")
             .finish()
     }
-    
 }
 
 #[derive(Debug, Clone)]
@@ -340,7 +339,12 @@ impl MetaEmbedding {
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
         // One-hot encode the instrument indices
-        let inst_x = self.one_hot(&instrument_indices.to_dtype(DType::I64)?, MAX_INSTRUMENT_NUM).unwrap(); 
+        let inst_x = self
+            .one_hot(
+                &instrument_indices.to_dtype(DType::I64)?,
+                MAX_INSTRUMENT_NUM,
+            )
+            .unwrap();
 
         // Concatenate the one-hot encoded instrument indices with NCEs
         let combined_input = Tensor::cat(&[&inst_x, nces], 1)?;
@@ -425,7 +429,7 @@ impl HiddenHfaceTransformer {
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
         // Determine batch size and sequence length from input tensor
         let (batch_size, seq_len, _) = x.shape().dims3()?; // Assuming x has shape [batch_size, seq_len, hidden_dim]
-    
+
         // Create or adjust the mask
         let mask = match mask {
             Some(m) => {
@@ -433,26 +437,23 @@ impl HiddenHfaceTransformer {
                 m.unsqueeze(1)?
                     .repeat(vec![1, self.config.num_attention_heads as usize, 1])? // Shape: [batch_size, n_heads, seq_len]
                     .unsqueeze(2)? // Add an extra dimension for broadcasting
-            },
+            }
             None => {
                 // Create a new mask filled with zeros
                 let zeros_mask = Tensor::zeros((batch_size, 1, seq_len), DType::F32, x.device())?; // Shape: [batch_size, 1, seq_len]
-                zeros_mask.repeat(vec![1, self.config.num_attention_heads as usize, 1])? // Shape: [batch_size, n_heads, seq_len]
+                zeros_mask
+                    .repeat(vec![1, self.config.num_attention_heads as usize, 1])? // Shape: [batch_size, n_heads, seq_len]
                     .unsqueeze(2)? // Add an extra dimension for broadcasting
             }
         };
-    
+
         println!("HiddenHfaceTransformer forward");
         println!("x shape: {:?}", x.shape());
         println!("mask shape: {:?}", mask.shape());
-    
+
         // Forward pass through BERT encoder
         self.bert.forward(x, &mask)
     }
-    
-    
-    
-    
 }
 
 impl fmt::Debug for HiddenHfaceTransformer {
@@ -496,7 +497,8 @@ impl ModLossNN {
         };
 
         let bert =
-            transformers::models::bert::BertEncoder::load(varstore.clone().pp(bert_name), &config).unwrap();
+            transformers::models::bert::BertEncoder::load(varstore.clone().pp(bert_name), &config)
+                .unwrap();
         let bert_module = BertEncoderModule::new(bert);
 
         let mut modules = ModuleList::new();
@@ -533,7 +535,6 @@ impl fmt::Debug for ModLossNN {
             .field("modules[1]", &"<DecoderLinear>")
             .finish()
     }
-    
 }
 
 #[derive(Debug, Clone)]
@@ -548,40 +549,50 @@ impl SeqCNN {
         unimplemented!();
     }
 
-    pub fn from_varstore( 
-        varstore: nn::VarBuilder, 
-        embedding_hidden: usize, 
+    pub fn from_varstore(
+        varstore: nn::VarBuilder,
+        embedding_hidden: usize,
         names_weight: Vec<&str>,
-        names_bias: Vec<&str>, 
-    ) ->  Result<Self> {
-            let cnn_short = nn::Conv1d::new(
-                varstore.get((embedding_hidden, embedding_hidden, 3), names_weight[0]).unwrap(),
-                Some(varstore.get(embedding_hidden, names_bias[0]).unwrap()),
-                nn::Conv1dConfig {
-                    padding: 1,
-                    ..Default::default()
-                }
-            );
+        names_bias: Vec<&str>,
+    ) -> Result<Self> {
+        let cnn_short = nn::Conv1d::new(
+            varstore
+                .get((embedding_hidden, embedding_hidden, 3), names_weight[0])
+                .unwrap(),
+            Some(varstore.get(embedding_hidden, names_bias[0]).unwrap()),
+            nn::Conv1dConfig {
+                padding: 1,
+                ..Default::default()
+            },
+        );
 
-            let cnn_medium = nn::Conv1d::new(
-                varstore.get((embedding_hidden, embedding_hidden, 5), names_weight[1]).unwrap(),
-                Some(varstore.get(embedding_hidden, names_bias[1]).unwrap()),
-                nn::Conv1dConfig {
-                    padding: 2,
-                    ..Default::default()
-                }
-            );
+        let cnn_medium = nn::Conv1d::new(
+            varstore
+                .get((embedding_hidden, embedding_hidden, 5), names_weight[1])
+                .unwrap(),
+            Some(varstore.get(embedding_hidden, names_bias[1]).unwrap()),
+            nn::Conv1dConfig {
+                padding: 2,
+                ..Default::default()
+            },
+        );
 
-            let cnn_long = nn::Conv1d::new(
-                varstore.get((embedding_hidden, embedding_hidden, 7), names_weight[2]).unwrap(),
-                Some(varstore.get(embedding_hidden, names_bias[2]).unwrap()),
-                nn::Conv1dConfig {
-                    padding: 3,
-                    ..Default::default()
-                }
-            );
-        
-            Ok(Self { cnn_short, cnn_medium, cnn_long })
+        let cnn_long = nn::Conv1d::new(
+            varstore
+                .get((embedding_hidden, embedding_hidden, 7), names_weight[2])
+                .unwrap(),
+            Some(varstore.get(embedding_hidden, names_bias[2]).unwrap()),
+            nn::Conv1dConfig {
+                padding: 3,
+                ..Default::default()
+            },
+        );
+
+        Ok(Self {
+            cnn_short,
+            cnn_medium,
+            cnn_long,
+        })
     }
 }
 
@@ -599,8 +610,8 @@ impl Module for SeqCNN {
 }
 
 #[derive(Debug, Clone)]
-struct SeqLSTM{
-    lstm: BidirectionalLSTM
+struct SeqLSTM {
+    lstm: BidirectionalLSTM,
 }
 
 impl SeqLSTM {
@@ -614,12 +625,7 @@ impl SeqLSTM {
         hidden_dim: usize,
         num_layers: usize,
     ) -> Result<Self> {
-        let lstm = BidirectionalLSTM::new(
-            input_size,
-            hidden_dim,
-            num_layers,
-            &varstore
-        )?;
+        let lstm = BidirectionalLSTM::new(input_size, hidden_dim, num_layers, &varstore)?;
         Ok(Self { lstm })
     }
 }
@@ -636,35 +642,42 @@ struct SeqAttentionSum {
 }
 
 impl SeqAttentionSum {
-    pub fn from_varstore(
-        varstore: nn::VarBuilder,
-        hidden_dim: usize,
-        name: &str,
-    ) -> Result<Self> {
-        let attention = nn::Linear::new(
-            varstore.get((1, hidden_dim), name).unwrap(), 
-            None,
-        );
+    pub fn from_varstore(varstore: nn::VarBuilder, hidden_dim: usize, name: &str) -> Result<Self> {
+        let attention = nn::Linear::new(varstore.get((1, hidden_dim), name).unwrap(), None);
         Ok(Self { attention })
     }
 }
 
 impl Module for SeqAttentionSum {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        println!("SeqAttentionSum forward");
+        println!("x shape: {:?}", x.shape());
         let attention_weights = self.attention.forward(x)?;
-        
+        println!("attention_weights shape: {:?}", attention_weights.shape());
+
         // Apply softmax to normalize weights
         // TODO: This is done in the model itself in the PyTorch implementation
         let attention_weights = nn::ops::softmax(&attention_weights, 1)?;
+        println!("attention_weights (post softmax) shape: {:?}", attention_weights.shape());
 
-        let output = x.mul(&attention_weights)?;
-        
-        Ok(output.sum(1)?)
+        // Explicitly broadcast attention_weights to match x's shape
+        let broadcasted_weights = attention_weights.broadcast_as(x.shape())?;
+        println!("broadcasted_weights shape: {:?}", broadcasted_weights.shape());
+
+        // Element-wise multiplication
+        let weighted = x.mul(&broadcasted_weights)?;
+        println!("weighted shape: {:?}", weighted.shape());
+
+        // Sum over the sequence length dimension (dim 1)
+        let output = weighted.sum(1)?;
+        println!("output shape: {:?}", output.shape());
+
+        Ok(output)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder26aaModChargeCnnLstmAttnSum{
+pub struct Encoder26aaModChargeCnnLstmAttnSum {
     mod_nn: ModEmbeddingFixFirstK,
     input_cnn: SeqCNN,
     input_lstm: SeqLSTM,
@@ -715,26 +728,28 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
         })
     }
 
-    pub fn forward(
-        &self,
-        aa_indices: &Tensor,
-        mod_x: &Tensor,
-        charges: &Tensor
-    ) -> AnyHowResult<Tensor> {
+    pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor, charges: &Tensor) -> Result<Tensor> {
         println!("Encoder26aaModChargeCnnLstmAttnSum forward");
 
+        println!("aa_indices shape: {:?}", aa_indices.shape());
+        println!("mod_x shape: {:?}", mod_x.shape());
+        println!("charges shape: {:?}", charges.shape());
+
         let mod_x = self.mod_nn.forward(mod_x)?;
+        println!("mod_x (post mod_nn) shape: {:?}", mod_x.shape());
 
         let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
         let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
-        let x = aa_one_hot(&aa_indices, &additional_tensors)?;
-
+        let x = aa_one_hot(&aa_indices, &additional_tensors)
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        println!("x (aa_one_hot) shape: {:?}", x.shape());
         let x = self.input_cnn.forward(&x)?;
+        println!("x (post cnn) shape: {:?}", x.shape());
         let x = self.input_lstm.forward(&x)?;
+        println!("x (post lstm) shape: {:?}", x.shape());
         let x = self.attn_sum.forward(&x)?;
         Ok(x)
     }
-    
 }
 
 #[cfg(test)]
@@ -846,7 +861,11 @@ mod tests {
             &var_store,
             256,
             4,
-            vec!["output_nn.nn.0.weight", "output_nn.nn.1.weight", "output_nn.nn.2.weight"],
+            vec![
+                "output_nn.nn.0.weight",
+                "output_nn.nn.1.weight",
+                "output_nn.nn.2.weight",
+            ],
             vec!["output_nn.nn.0.bias", "output_nn.nn.2.bias"],
         )
         .unwrap();
@@ -1007,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mod_loss_nn(){
+    fn test_mod_loss_nn() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1031,7 +1050,11 @@ mod tests {
             false,
             4,
             "modloss_nn.0.bert",
-            vec!["modloss_nn.1.nn.0.weight", "modloss_nn.1.nn.1.weight", "modloss_nn.1.nn.2.weight"],
+            vec![
+                "modloss_nn.1.nn.0.weight",
+                "modloss_nn.1.nn.1.weight",
+                "modloss_nn.1.nn.2.weight",
+            ],
             vec!["modloss_nn.1.nn.0.bias", "modloss_nn.1.nn.2.bias"],
         )
         .unwrap();
@@ -1040,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn test_seq_cnn(){
+    fn test_seq_cnn() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
@@ -1057,8 +1080,16 @@ mod tests {
         let seq_cnn = SeqCNN::from_varstore(
             var_store,
             36,
-            vec!["ccs_encoder.input_cnn.cnn_short.weight", "ccs_encoder.input_cnn.cnn_medium.weight", "ccs_encoder.input_cnn.cnn_long.weight"],
-            vec!["ccs_encoder.input_cnn.cnn_short.bias", "ccs_encoder.input_cnn.cnn_medium.bias", "ccs_encoder.input_cnn.cnn_long.bias"],
+            vec![
+                "ccs_encoder.input_cnn.cnn_short.weight",
+                "ccs_encoder.input_cnn.cnn_medium.weight",
+                "ccs_encoder.input_cnn.cnn_long.weight",
+            ],
+            vec![
+                "ccs_encoder.input_cnn.cnn_short.bias",
+                "ccs_encoder.input_cnn.cnn_medium.bias",
+                "ccs_encoder.input_cnn.cnn_long.bias",
+            ],
         )
         .unwrap();
 
@@ -1066,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn test_seq_lstm(){
+    fn test_seq_lstm() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
@@ -1080,19 +1111,14 @@ mod tests {
         let var_store =
             VarBuilder::from_pth(model_path, candle_core::DType::F32, &Device::Cpu).unwrap();
 
-        let seq_lstm = SeqLSTM::from_varstore(
-            var_store.pp("ccs_encoder.hidden_nn"),
-            144,
-            128,
-            2
-        )
-        .unwrap();
+        let seq_lstm =
+            SeqLSTM::from_varstore(var_store.pp("ccs_encoder.hidden_nn"), 144, 128, 2).unwrap();
 
         println!("seq_lstm : {:?}", seq_lstm);
     }
 
     #[test]
-    fn test_seq_attention_sum(){
+    fn test_seq_attention_sum() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
@@ -1106,14 +1132,10 @@ mod tests {
         let var_store =
             VarBuilder::from_pth(model_path, candle_core::DType::F32, &Device::Cpu).unwrap();
 
-        let seq_attention_sum = SeqAttentionSum::from_varstore(
-            var_store,
-            256,
-            "ccs_encoder.attn_sum.attn.0.weight"
-        )
-        .unwrap();
+        let seq_attention_sum =
+            SeqAttentionSum::from_varstore(var_store, 256, "ccs_encoder.attn_sum.attn.0.weight")
+                .unwrap();
 
         println!("seq_attention_sum : {:?}", seq_attention_sum);
     }
-
 }
