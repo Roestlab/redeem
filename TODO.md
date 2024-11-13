@@ -13,6 +13,8 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 ### In Progress
 
 - [ ] Implement fine tuning for peptdeep CCS CNN-LSTM model  
+- [ ] Implement XGBoost classifier TDA scoring  
+- [ ] Implement redeem property prediction into Sage  
 
 ### Done ✓
 
