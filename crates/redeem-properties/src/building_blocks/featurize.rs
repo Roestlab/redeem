@@ -1,7 +1,9 @@
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 use ndarray::Array2;
 use candle_core::{Tensor, Device};
+
+use crate::building_blocks::building_blocks::AA_EMBEDDING_SIZE;
 
 /// Convert peptide sequences into AA ID array.
 /// 
@@ -21,10 +23,10 @@ pub fn get_aa_indices(seq_array: &[String]) -> Result<Array2<i64>> {
 }
 
 
-/// One-hot encode amino acid indices.
-pub fn aa_one_hot(aa_indices: &Tensor, aa_embedding_size: usize) -> Result<Tensor> {
+/// One-hot encode amino acid indices and concatenate additional tensors.
+pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor> {
     let (batch_size, seq_len) = aa_indices.shape().dims2()?;
-    let num_classes = aa_embedding_size;
+    let num_classes = AA_EMBEDDING_SIZE;
 
     let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
 
@@ -40,8 +42,17 @@ pub fn aa_one_hot(aa_indices: &Tensor, aa_embedding_size: usize) -> Result<Tenso
     }
 
     // Convert the one_hot_data vector directly to a tensor
-    Tensor::from_slice(&one_hot_data, (batch_size, seq_len, num_classes), aa_indices.device())
-        .map_err(|e| anyhow!("{}", e))
+    let one_hot_tensor = Tensor::from_slice(&one_hot_data, (batch_size, seq_len, num_classes), aa_indices.device())
+        .map_err(|e| anyhow!("{}", e))?;
+
+    // Concatenate additional tensors if provided
+    let mut output_tensor = one_hot_tensor;
+
+    for other in cat_others {
+        output_tensor = Tensor::cat(&[output_tensor, other.deref().clone()], 2)?;
+    }
+
+    Ok(output_tensor)
 }
 
 

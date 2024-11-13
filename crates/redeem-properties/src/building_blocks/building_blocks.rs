@@ -8,8 +8,9 @@ use std::fmt;
 use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
 use crate::building_blocks::sequential::{Sequential, seq};
 use crate::building_blocks::bilstm::BidirectionalLSTM;
+use crate::building_blocks::featurize::aa_one_hot;
 
-/// constant MOD_FEATURE_SIZE set to 109
+/// constants used by PeptDeep Models
 pub const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
 pub const AA_EMBEDDING_SIZE: usize = 27; // TODO: derive from constants yaml
 const MAX_INSTRUMENT_NUM: usize = 8; // TODO: derive from constants yaml
@@ -663,7 +664,7 @@ impl Module for SeqAttentionSum {
 }
 
 #[derive(Debug, Clone)]
-struct Encoder26aaModChargeCnnLstmAttnSum{
+pub struct Encoder26aaModChargeCnnLstmAttnSum{
     mod_nn: ModEmbeddingFixFirstK,
     input_cnn: SeqCNN,
     input_lstm: SeqLSTM,
@@ -677,7 +678,7 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 
     pub fn from_varstore(
         varstore: nn::VarBuilder,
-        embedding_hidden: usize,
+        mod_hidden_dim: usize,
         hidden_dim: usize,
         num_layers: usize,
         names_mod_nn: Vec<&str>,
@@ -686,22 +687,23 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
         lstm_pp: &str,
         names_attn_sum: Vec<&str>,
     ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim + 1;
         Ok(Self {
             mod_nn: ModEmbeddingFixFirstK::from_varstore(
                 &varstore,
                 MOD_FEATURE_SIZE,
-                hidden_dim,
+                mod_hidden_dim,
                 names_mod_nn[0],
             )?,
             input_cnn: SeqCNN::from_varstore(
                 varstore.clone(),
-                embedding_hidden,
+                input_dim,
                 names_input_cnn_weight,
                 names_input_cnn_bias,
             )?,
             input_lstm: SeqLSTM::from_varstore(
                 varstore.pp(lstm_pp).clone(),
-                embedding_hidden * 4,
+                input_dim * 4,
                 hidden_dim,
                 num_layers,
             )?,
@@ -717,18 +719,18 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
         &self,
         aa_indices: &Tensor,
         mod_x: &Tensor,
-        charges: &Tensor,
-        nces: &Tensor,
-        instrument_indices: &Tensor,
-    ) -> Result<Tensor> {
+        charges: &Tensor
+    ) -> AnyHowResult<Tensor> {
         println!("Encoder26aaModChargeCnnLstmAttnSum forward");
-        println!("passing through mod_nn");
+
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("passing through input_cnn");
-        let x = self.input_cnn.forward(&mod_x)?;
-        println!("passing through input_lstm");
+
+        let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
+        let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
+        let x = aa_one_hot(&aa_indices, &additional_tensors)?;
+
+        let x = self.input_cnn.forward(&x)?;
         let x = self.input_lstm.forward(&x)?;
-        println!("passing through attn_sum");
         let x = self.attn_sum.forward(&x)?;
         Ok(x)
     }
