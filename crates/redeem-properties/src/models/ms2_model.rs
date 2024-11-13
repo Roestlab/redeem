@@ -2,41 +2,41 @@ use std::path::Path;
 use candle_core::{Device, Tensor};
 use anyhow::{Result, anyhow};
 use crate::model_interface::{ModelInterface,PredictionResult};
-use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
+use crate::models::ms2_bert_model::MS2BertModel;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
 
-// Enum for different types of CCS models
-pub enum CCSModelArch {
-    CCSCNNLSTM,
+// Enum for different types of MS2 models
+pub enum MS2ModelArch {
+    MS2Bert,
     // Add other architectures here as needed
 }
 
-// Constants for different types of CCS models
-pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm"];
+// Constants for different types of MS2 models
+pub const MS2MODEL_ARCHS: &[&str] = &["ms2_bert"];
 
-// A wrapper struct for CCS models
-pub struct CCSModelWrapper {
+// A wrapper struct for MS2 models
+pub struct MS2ModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
 
-impl CCSModelWrapper {
+impl MS2ModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
+            "ms2_bert" => Box::new(MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
             // Add other cases here as you implement more models
-            _ => return Err(anyhow!("Unsupported CCS model architecture: {}", arch)),
+            _ => return Err(anyhow!("Unsupported MS2 model architecture: {}", arch)),
         };
 
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str, charge: i32) -> Result<PredictionResult> {
-        self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), None, None)
+    pub fn predict(&self, peptide_sequence: &[String], mods: &str, mod_sites: &str, charge: i32, nce: i32, intsrument: &str) -> Result<PredictionResult> {
+        self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), Some(nce), Some(intsrument))
     }
 
-    pub fn encode_peptides(&self, peptide_sequences: &[String], mods: &str, mod_sites: &str, charge: i32) -> Result<Tensor> {
-        self.model.encode_peptides(peptide_sequences, mods, mod_sites, Some(charge), None, None)
+    pub fn encode_peptides(&self, peptide_sequences: &[String], mods: &str, mod_sites: &str, charge: i32, nce: i32, intsrument: &str) -> Result<Tensor> {
+        self.model.encode_peptides(peptide_sequences, mods, mod_sites, Some(charge), Some(nce), Some(intsrument))
     }
 
     pub fn fine_tune(&mut self, training_data: &[(String, f32)], modifications: HashMap<(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {
@@ -58,29 +58,25 @@ impl CCSModelWrapper {
     pub fn print_weights(&self) {
         self.model.print_weights()
     }
-
-    pub fn save(&self, path: &Path) -> Result<()> {
-        self.model.save(path)
-    }
 }
 
-// Public API Function to load a new CCS model
-pub fn load_collision_cross_section_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<CCSModelWrapper> {
-    CCSModelWrapper::new(model_path, constants_path, arch, device)
+// Public API Function to load a new MS2 model
+pub fn load_ms2_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<MS2ModelWrapper> {
+    MS2ModelWrapper::new(model_path, constants_path, arch, device)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::models::ccs_model::load_collision_cross_section_model;
+    use crate::models::ms2_model::load_ms2_model;
     use candle_core::Device;
     use std::char;
     use std::path::PathBuf;
     use std::time::Instant;
 
     #[test]
-    fn peptide_ccs_prediction() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
-        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+    fn peptide_ms2_prediction() {
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
+        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         
         assert!(
             model_path.exists(),
@@ -112,7 +108,7 @@ mod tests {
             constants_path
         );
 
-        let result = load_collision_cross_section_model(&model_path, &constants_path, "ccs_cnn_lstm", Device::Cpu);
+        let result = load_ms2_model(&model_path, &constants_path, "ms2_bert", Device::Cpu);
         
         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
 
@@ -127,26 +123,30 @@ mod tests {
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string();
         let mod_sites = "0;4;8".to_string();
         let charge = 2;
+        let nce = 20;
+        let instrument = "QE";
 
-        println!("Predicting ccs for peptide: {:?}", peptide);
+        println!("Predicting MS2 for peptide: {:?}", peptide);
         println!("Modifications: {:?}", mods);
         println!("Modification sites: {:?}", mod_sites);
         println!("Charge: {:?}", charge);
+        println!("NCE: {:?}", nce);
+        println!("Instrument: {:?}", instrument);
 
         // model.set_evaluation_mode();
 
         let start = Instant::now();
-        match model.predict(&[peptide.clone()], &mods, &mod_sites, charge) {
+        match model.predict(&[peptide.clone()], &mods, &mod_sites, charge, nce, instrument) {
             Ok(predictions) => {
                 let io_time = Instant::now() - start;
-                assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
+                assert_eq!(predictions.len(), 10, "Unexpected number of predictions");
                 println!("Prediction for real peptide:");
-                println!("Peptide: {} ({} @ {}), Predicted CCS: {}:  {:8} ms", peptide, mods, mod_sites, predictions[0], io_time.as_millis());
+                println!("Peptide: {} ({} @ {}), Predicted MS2: {}:  {:8} ms", peptide, mods, mod_sites, predictions[0], io_time.as_millis());
             },
             Err(e) => {
                 println!("Error during prediction: {:?}", e);
                 println!("Attempting to encode peptide...");
-                match model.encode_peptides(&[peptide.clone()], &mods, &mod_sites, charge) {
+                match model.encode_peptides(&[peptide.clone()], &mods, &mod_sites, charge, nce, instrument) {
                     Ok(encoded) => println!("Encoded peptide shape: {:?}", encoded.shape()),
                     Err(e) => println!("Error encoding peptide: {:?}", e),
                 }
