@@ -174,7 +174,6 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
 
         let predictions = PredictionResult::MS2Result(out.squeeze(0)?.to_vec2()?);
 
-        println!("Predictions: {:?}", predictions);
 
         Ok(predictions)
     }
@@ -237,13 +236,6 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         )?
         .to_dtype(DType::F32)?;
 
-        // println!("Encoding Peptides");
-        // println!("aa_indices_tensor: {:?}", aa_indices_tensor.shape());
-        // println!("mod_x: {:?}", mod_x.shape());
-        // println!("charge: {:?}", charge.shape());
-        // println!("nce: {:?}", nce.shape());
-        // println!("instrument_indices: {:?}", instrument_indices.shape());
-
         // Combine aa_one_hot, mod_x, charge, nce, and instrument
         let combined = Tensor::cat(
             &[aa_indices_tensor, mod_x, charge, nce, instrument_indices],
@@ -293,7 +285,6 @@ impl<'a> Module for MS2BertModel<'a> {
         let (batch_size, seq_len, _) = xs.shape().dims3()?;
 
         // Separate the input tensor into the different parts
-        println!("xs shape: {:?}", xs.shape());
 
         // Calculate starting indices
         let start_mod_x = 1;
@@ -314,26 +305,12 @@ impl<'a> Module for MS2BertModel<'a> {
         let nce_out = nce_out.squeeze(2)?; // Squeeze to remove dimensions of size 1 if needed
         let instrument_out = instrument_out.squeeze(2)?.squeeze(1)?; // Squeeze to remove dimensions of size 1 if needed
 
-        // // print shapes
-        println!("Separating input tensor into different parts");
-        println!("aa_indices_out: {:?}", aa_indices_out.shape());
-        println!("mod_x_out: {:?}", mod_x_out.shape());
-        // println!("charge_out: {:?}", charge_out.shape());
-        // println!("nce_out: {:?}", nce_out.shape());
-        // println!("instrument_out: {:?}", instrument_out.shape());
-        // println!("charge_out values: {:?}", charge_out.to_vec2::<f32>()?[0..1].to_vec());
-        // println!("nce_out values: {:?}", nce_out.to_vec2::<f32>()?[0..1].to_vec());
-        // println!("instrument_out values: {:?}", instrument_out.to_vec1::<f32>()?[0..1].to_vec());
-
         // Forward pass through input_nn with dropout
-        println!("Forward pass through input_nn with dropout");
         let in_x = self
             .dropout
             .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
-        println!("in_x shape: {:?}", in_x.shape());
 
         // Prepare metadata for meta_nn
-        println!("Prepare metadata for meta_nn");
         let meta_x = self
             .meta_nn
             .forward(&charge_out, &nce_out, &instrument_out)?
@@ -341,12 +318,9 @@ impl<'a> Module for MS2BertModel<'a> {
             .repeat(vec![1, seq_len as usize, 1])?;
 
         // Concatenate in_x and meta_x along dimension 2
-        println!("Concatenate in_x and meta_x along dimension 2");
         let combined_input = Tensor::cat(&[in_x.clone(), meta_x], 2)?;
 
         // Forward pass through hidden_nn
-        println!("Forward pass through hidden_nn");
-        println!("combined_input shape: {:?}", combined_input.shape());
         let hidden_x = self.hidden_nn.forward(&combined_input.clone(), None)?;
 
         // // Handle attentions if needed (similar to PyTorch)
@@ -357,22 +331,14 @@ impl<'a> Module for MS2BertModel<'a> {
         // }
 
         // Apply dropout and combine with input
-        println!("Apply dropout and combine with input");
-        println!("hidden_x shape: {:?}", hidden_x.shape());
-        println!("combined_input shape: {:?}", combined_input.shape());
         let x_tmp = (hidden_x + combined_input * 0.2)?;
-        println!("x_tmp shape: {:?}", x_tmp.shape());
         let hidden_output = self.dropout.forward(&x_tmp, true)?;
 
         // Forward pass through output_nn
-        println!("Forward pass through output_nn");
-        println!("hidden_output (dropout) shape: {:?}", hidden_output.shape());
         let mut out_x = self.output_nn.forward(&hidden_output)?;
 
         // Handle modloss if applicable (similar logic as PyTorch)
         if self.num_modloss_types > 0 {
-            println!("Num modloss types: {}", self.num_modloss_types);
-
             if self.mask_modloss {
                 // Create a tensor of zeros with the appropriate shape
                 let zeros_shape = (out_x.shape().dims()[0], out_x.shape().dims()[1], self.num_modloss_types);
@@ -380,7 +346,6 @@ impl<'a> Module for MS2BertModel<'a> {
 
                 // Concatenate along the last dimension
                 out_x = Tensor::cat(&[out_x, zeros_tensor], 2)?;
-                println!("out_x (mask modloss) shape: {:?}", out_x.shape());
             } else {
                 // // Forward pass through the first modloss neural network
                 // let modloss_output = self.modloss_nn[0].forward(in_x)?;
@@ -401,16 +366,6 @@ impl<'a> Module for MS2BertModel<'a> {
                 todo!();
             }
         }
-
-        println!("out_x: {:?}", out_x.shape());
-        // first few values of out_x
-        // println!("out_x: {:?}", out_x.to_vec3::<f32>()?.to_vec());
-
-        // print out_x[:,3:,:] values
-        println!(
-            "out_x[:,3:,:]: {:?}",
-            out_x.i((.., 3.., ..))?.to_vec3::<f32>()?.to_vec()
-        );
 
         Ok(out_x.i((.., 3.., ..))?)
     }

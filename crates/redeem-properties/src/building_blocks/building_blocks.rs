@@ -15,6 +15,7 @@ pub const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
 pub const AA_EMBEDDING_SIZE: usize = 27; // TODO: derive from constants yaml
 const MAX_INSTRUMENT_NUM: usize = 8; // TODO: derive from constants yaml
 
+/// Decode w linear NN
 #[derive(Clone)]
 pub struct DecoderLinear {
     nn: Sequential,
@@ -69,8 +70,6 @@ impl DecoderLinear {
 
 impl Module for DecoderLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        println!("DecoderLinear forward");
-        println!("x shape: {:?}", x.shape());
         self.nn.forward(x)
     }
 }
@@ -108,13 +107,11 @@ impl AAEmbedding {
 
 impl Module for AAEmbedding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        println!("AAEmbedding forward");
-        println!("x shape: {:?}", x.shape());
-        println!("x first 5 elements: {:?}", x.narrow(1, 0, 5)?);
         self.embeddings.forward(&x.to_dtype(DType::I64)?)
     }
 }
 
+/// transform sequence input into a positional representation
 #[derive(Debug, Clone)]
 struct PositionalEncoding {
     pe: Tensor,
@@ -178,6 +175,7 @@ impl Module for PositionalEncoding {
     }
 }
 
+/// Encodes the modification vector in a single layer feed forward network, but not transforming the first k features
 #[derive(Debug, Clone)]
 struct ModEmbeddingFixFirstK {
     k: usize,
@@ -221,6 +219,7 @@ impl Module for ModEmbeddingFixFirstK {
     }
 }
 
+/// Encodes AA (26 AA letters) and modification vector
 #[derive(Debug, Clone)]
 pub struct Input26aaModPositionalEncoding {
     mod_nn: ModEmbeddingFixFirstK,
@@ -267,22 +266,16 @@ impl Input26aaModPositionalEncoding {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-        println!("Input26aaModPositionalEncoding forward");
-        println!("passing through mod_nn");
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("passing through aa_emb");
         let x = self.aa_emb.forward(aa_indices)?;
 
         // Concatenate x and mod_x along the last dimension
-        println!("Concatenating x and mod_x");
-        println!("x shape: {:?}", x.shape());
-        println!("mod_x shape: {:?}", mod_x.shape());
         let concatenated = Tensor::cat(&[&x, &mod_x], 2)?;
-        println!("passing through pos_encoder");
         self.pos_encoder.forward(&concatenated)
     }
 }
 
+/// Encodes Charge state, Normalized Collision Energy (NCE) and Instrument for a given spectrum into a 'meta' single layer network
 #[derive(Debug, Clone)]
 pub struct MetaEmbedding {
     nn: nn::Linear,
@@ -359,31 +352,7 @@ impl MetaEmbedding {
     }
 }
 
-// struct BertEncoder {
-//     layers: Vec<transformers::models::bert::BertLayer>,
-//     span: tracing::Span,
-// }
-
-// impl BertEncoder {
-//     fn load(vb: VarBuilder, config: &Config, prefix: &str) -> Result<Self> {
-//         let layers = (0..config.num_hidden_layers)
-//             .map(|index| transformers::models::bert::BertLayer::load(vb.pp(format!("{prefix}layer.{index}")), config))
-//             .collect::<Result<Vec<_>>>()?;
-//         let span = tracing::span!(tracing::Level::TRACE, "encoder");
-//         Ok(BertEncoder { layers, span })
-//     }
-
-//     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
-//         let _enter = self.span.enter();
-//         let mut hidden_states = hidden_states.clone();
-//         // Use a loop rather than a fold as it's easier to modify when adding debug/...
-//         for layer in self.layers.iter() {
-//             hidden_states = layer.forward(&hidden_states, attention_mask)?
-//         }
-//         Ok(hidden_states)
-//     }
-// }
-
+/// Transformer NN based on HuggingFace's BertEncoder class
 #[derive(Clone)]
 pub struct HiddenHfaceTransformer {
     pub bert: transformers::models::bert::BertEncoder,
@@ -447,10 +416,6 @@ impl HiddenHfaceTransformer {
             }
         };
 
-        println!("HiddenHfaceTransformer forward");
-        println!("x shape: {:?}", x.shape());
-        println!("mask shape: {:?}", mask.shape());
-
         // Forward pass through BERT encoder
         self.bert.forward(x, &mask)
     }
@@ -464,6 +429,7 @@ impl fmt::Debug for HiddenHfaceTransformer {
     }
 }
 
+/// For transfer learning of modloss frags
 #[derive(Clone)]
 pub struct ModLossNN {
     modules: ModuleList,
@@ -537,6 +503,7 @@ impl fmt::Debug for ModLossNN {
     }
 }
 
+/// Extract sequence features using `Conv1D` with different kernel sizes (1(residue connection),3,5,7), and then concatenate the outputs of these Conv1Ds. The Output dim is 4*embedding_hidden.
 #[derive(Debug, Clone)]
 struct SeqCNN {
     cnn_short: nn::Conv1d,
@@ -609,6 +576,7 @@ impl Module for SeqCNN {
     }
 }
 
+/// LSTM applied on sequence input
 #[derive(Debug, Clone)]
 struct SeqLSTM {
     lstm: BidirectionalLSTM,
@@ -636,6 +604,7 @@ impl Module for SeqLSTM {
     }
 }
 
+/// apply linear transformation and tensor rescaling with softmax
 #[derive(Debug, Clone)]
 struct SeqAttentionSum {
     attention: nn::Linear,
@@ -650,27 +619,20 @@ impl SeqAttentionSum {
 
 impl Module for SeqAttentionSum {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        println!("SeqAttentionSum forward");
-        println!("x shape: {:?}", x.shape());
         let attention_weights = self.attention.forward(x)?;
-        println!("attention_weights shape: {:?}", attention_weights.shape());
 
         // Apply softmax to normalize weights
         // TODO: This is done in the model itself in the PyTorch implementation
         let attention_weights = nn::ops::softmax(&attention_weights, 1)?;
-        println!("attention_weights (post softmax) shape: {:?}", attention_weights.shape());
 
         // Explicitly broadcast attention_weights to match x's shape
         let broadcasted_weights = attention_weights.broadcast_as(x.shape())?;
-        println!("broadcasted_weights shape: {:?}", broadcasted_weights.shape());
 
         // Element-wise multiplication
         let weighted = x.mul(&broadcasted_weights)?;
-        println!("weighted shape: {:?}", weighted.shape());
 
         // Sum over the sequence length dimension (dim 1)
         let output = weighted.sum(1)?;
-        println!("output shape: {:?}", output.shape());
 
         Ok(output)
     }
@@ -730,22 +692,14 @@ impl Encoder26aaModCnnLstmAttnSum {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-        println!("Encoder26aaModCnnLstmAttnSum forward");
-
-        println!("aa_indices shape: {:?}", aa_indices.shape());
-        println!("mod_x shape: {:?}", mod_x.shape());
 
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("mod_x (post mod_nn) shape: {:?}", mod_x.shape());
-
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        println!("x (aa_one_hot) shape: {:?}", x.shape());
+
         let x = self.input_cnn.forward(&x)?;
-        println!("x (post cnn) shape: {:?}", x.shape());
         let x = self.input_lstm.forward(&x)?;
-        println!("x (post lstm) shape: {:?}", x.shape());
         let x = self.attn_sum.forward(&x)?;
         Ok(x)
     }
@@ -805,24 +759,15 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor, charges: &Tensor) -> Result<Tensor> {
-        println!("Encoder26aaModChargeCnnLstmAttnSum forward");
-
-        println!("aa_indices shape: {:?}", aa_indices.shape());
-        println!("mod_x shape: {:?}", mod_x.shape());
-        println!("charges shape: {:?}", charges.shape());
 
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("mod_x (post mod_nn) shape: {:?}", mod_x.shape());
-
         let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
         let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        println!("x (aa_one_hot) shape: {:?}", x.shape());
+
         let x = self.input_cnn.forward(&x)?;
-        println!("x (post cnn) shape: {:?}", x.shape());
         let x = self.input_lstm.forward(&x)?;
-        println!("x (post lstm) shape: {:?}", x.shape());
         let x = self.attn_sum.forward(&x)?;
         Ok(x)
     }

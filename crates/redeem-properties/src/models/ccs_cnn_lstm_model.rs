@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
 use candle_nn::{
-    ops, Conv1d, Conv1dConfig, Dropout, Linear, Module, Optimizer, PReLU, VarBuilder, VarMap,
+    ops, Dropout, Module, Optimizer, VarBuilder, VarMap,
 };
 use ndarray::Array2;
 use serde::Deserialize;
@@ -234,10 +234,6 @@ impl <'a> Module for CCSCNNLSTMModel<'a> {
         let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
         let charge_out = xs.i((.., 0..1, start_charge..start_charge + 1))?;
         let charge_out = charge_out.squeeze(2)?;
-
-        println!("aa_indices_out: {:?}", aa_indices_out.shape());
-        println!("mod_x_out: {:?}", mod_x_out.shape());
-        println!("charge_out: {:?}", charge_out.shape());
         
         let x = self.ccs_encoder.forward(&aa_indices_out, &mod_x_out, &charge_out)?;
         let x = self.dropout.forward(&x, true)?;
