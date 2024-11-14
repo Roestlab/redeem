@@ -29,11 +29,8 @@ impl Sequential {
 
 impl Module for Sequential {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        println!("Sequential forward");
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
-            // println!("Layer: {:?}", layer);
-            println!("xs.shape: {:?}", xs.shape());
             xs = layer.forward(&xs)?
         }
         Ok(xs)
