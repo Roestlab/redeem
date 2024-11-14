@@ -5,6 +5,9 @@ use candle_core::{Device, Tensor};
 use std::collections::HashMap;
 use std::path::Path;
 use std::ops::{Index, IndexMut};
+use std::sync::{Arc, Mutex};
+
+use crate::models::{rt_model::RTModelWrapper, ccs_model::CCSModelWrapper, ms2_model::MS2ModelWrapper};
 
 #[derive(Debug)]
 pub enum PredictionResult {
@@ -117,25 +120,19 @@ pub trait ModelInterface: Send + Sync {
         Ok(tensor.maximum(&min_tensor)?)
     }
 
+    // TODO: Maybe move to ms2_bert_model, since it's specific to that model
     fn process_predictions(&self, predicts: &Tensor, min_inten: f32) -> Result<Tensor> {
-        println!("predicts shape: {:?}", predicts.shape());
-
         // Reshape and get max
         let (batch_size, seq_len, feature_size) = predicts.shape().dims3()?;
         let reshaped = predicts.reshape((batch_size, ()))?;
         let apex_intens = reshaped.max(1)?;
-        println!("apex_intens shape: {:?}", apex_intens.shape());
-        // println!("apex_intens: {:?}", apex_intens.to_vec1::<f32>()?);
 
         // Replace values <= 0 with 1
         // let ones = Tensor::ones_like(&apex_intens)?;
         let apex_intens = apex_intens.maximum(&apex_intens)?;
-        println!("apex_intens: {:?}", apex_intens.to_vec1::<f32>()?);
 
         // Reshape apex_intens for broadcasting
         let apex_intens_reshaped = apex_intens.reshape(((), 1, 1))?;
-        println!("apex_intens_reshaped shape: {:?}", apex_intens_reshaped.shape());
-        println!("apex_intens_reshaped: {:?}", apex_intens_reshaped.to_vec3::<f32>()?);
         
         // Explicitly broadcast apex_intens_reshaped to match predicts shape
         let broadcasted_apex_intens = apex_intens_reshaped.broadcast_as(predicts.shape())?;
@@ -149,8 +146,67 @@ pub trait ModelInterface: Send + Sync {
         let mask = normalized.ge(&min_inten_tensor)?;
         let final_predicts = mask.where_cond(&normalized, &zeros)?;
 
-        println!("predicts: {:?}", final_predicts.to_vec3::<f32>()?);
-
         Ok(final_predicts)
+    }
+}
+
+
+
+/// Represents a collection of deep learning models for various property prediction tasks.
+///
+/// This struct holds optional references to models for retention time (RT),
+/// collision cross-section (CCS), and MS2 intensity predictions. Each model
+/// is wrapped in an Arc<Mutex<>> for thread-safe shared ownership.
+pub struct DLModels {
+    /// Optional retention time prediction model.
+    pub rt_model: Option<Arc<Mutex<RTModelWrapper>>>,
+    
+    /// Optional collision cross-section prediction model.
+    pub ccs_model: Option<Arc<Mutex<CCSModelWrapper>>>,
+    
+    /// Optional MS2 intensity prediction model.
+    pub ms2_model: Option<Arc<Mutex<MS2ModelWrapper>>>,
+}
+
+impl DLModels {
+    /// Creates a new instance of `DLModels` with all models set to `None`.
+    ///
+    /// # Returns
+    ///
+    /// A new `DLModels` instance with no models initialized.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut models = DLModels::new();
+    /// 
+    /// models.rt_model = Some(Arc::new(Mutex::new(RTModelWrapper::new())));
+    /// 
+    /// ```
+    pub fn new() -> Self {
+        DLModels {
+            rt_model: None,
+            ccs_model: None,
+            ms2_model: None,
+        }
+    }
+
+    /// Checks if any of the models are present (not None).
+    ///
+    /// # Returns
+    ///
+    /// `true` if at least one model is present, `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut models = DLModels::new();
+    /// assert!(!models.is_not_empty());
+    ///
+    /// models.rt_model = Some(Arc::new(Mutex::new(RTModelWrapper::new())));
+    /// assert!(models.is_not_empty());
+    /// ```
+    pub fn is_not_empty(&self) -> bool {
+        self.rt_model.is_some() || self.ccs_model.is_some() || self.ms2_model.is_some()
     }
 }
