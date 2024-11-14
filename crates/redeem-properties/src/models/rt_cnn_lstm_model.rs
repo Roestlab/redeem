@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, Tensor, Var, D};
-use candle_nn::{ops, Conv1d, Conv1dConfig, Linear, Module, Optimizer, PReLU, VarBuilder, VarMap};
+use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
+use candle_nn::{ops, Dropout, Module, Optimizer, VarBuilder, VarMap};
 use ndarray::Array2;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -8,6 +8,10 @@ use std::path::Path;
 
 // use crate::models::rt_model::RTModel;
 use crate::building_blocks::bilstm::BidirectionalLSTM;
+use crate::building_blocks::building_blocks::{
+    DecoderLinear, Encoder26aaModCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
+};
+use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
 use crate::model_interface::{ModelInterface, PredictionResult};
 use crate::utils::peptdeep_utils::{
     extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
@@ -23,15 +27,9 @@ pub struct RTCNNLSTMModel<'a> {
     constants: ModelConstants,
     device: Device,
     mod_to_feature: HashMap<String, Vec<f32>>,
-    mod_nn: Linear,
-    cnn_short: Conv1d,
-    cnn_medium: Conv1d,
-    cnn_long: Conv1d,
-    bilstm: BidirectionalLSTM,
-    attn: Linear,
-    decoder: [Linear; 2],
-    prelu: PReLU,
-    dropout: f32,
+    dropout: Dropout,
+    rt_encoder: Encoder26aaModCnnLstmAttnSum,
+    rt_decoder: DecoderLinear,
     is_training: bool,
 }
 
@@ -61,78 +59,38 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         let mod_to_feature = load_mod_to_feature(&constants)?;
 
         // Encoder
+        let dropout = Dropout::new(0.1);
 
-        let mod_nn = Linear::new(
-            var_store.get((2, 103), "rt_encoder.mod_nn.nn.weight")?,
-            None,
-        );
+        let rt_encoder = Encoder26aaModCnnLstmAttnSum::from_varstore(
+            &var_store,
+            8,
+            128,
+            2,
+            vec!["rt_encoder.mod_nn.nn.weight"],
+            vec!["rt_encoder.input_cnn.cnn_short.weight", "rt_encoder.input_cnn.cnn_medium.weight", "rt_encoder.input_cnn.cnn_long.weight"],
+            vec!["rt_encoder.input_cnn.cnn_short.bias", "rt_encoder.input_cnn.cnn_medium.bias", "rt_encoder.input_cnn.cnn_long.bias"],
+            "rt_encoder.hidden_nn",
+            vec![
+                "rt_encoder.attn_sum.attn.0.weight",
+            ],
+        ).unwrap();
 
-        let cnn_short = Conv1d::new(
-            var_store.get((35, 35, 3), "rt_encoder.input_cnn.cnn_short.weight")?,
-            Some(var_store.get(35, "rt_encoder.input_cnn.cnn_short.bias")?),
-            Conv1dConfig {
-                padding: 1,
-                ..Default::default()
-            },
-        );
-
-        let cnn_medium = Conv1d::new(
-            var_store.get((35, 35, 5), "rt_encoder.input_cnn.cnn_medium.weight")?,
-            Some(var_store.get(35, "rt_encoder.input_cnn.cnn_medium.bias")?),
-            Conv1dConfig {
-                padding: 2,
-                ..Default::default()
-            },
-        );
-
-        let cnn_long = Conv1d::new(
-            var_store.get((35, 35, 7), "rt_encoder.input_cnn.cnn_long.weight")?,
-            Some(var_store.get(35, "rt_encoder.input_cnn.cnn_long.bias")?),
-            Conv1dConfig {
-                padding: 3,
-                ..Default::default()
-            },
-        );
-
-        let bilstm: BidirectionalLSTM = BidirectionalLSTM::new(140, 128, 2, &var_store.pp("rt_encoder.hidden_nn"))?;
-
-        let attn = Linear::new(
-            var_store.get((1, 256), "rt_encoder.attn_sum.attn.0.weight")?,
-            None,
-        );
-
-        // Decoder
-        let decoder = [
-            Linear::new(
-                var_store.get((64, 256), "rt_decoder.nn.0.weight")?,
-                Some(var_store.get(64, "rt_decoder.nn.0.bias")?),
-            ),
-            Linear::new(
-                var_store.get((1, 64), "rt_decoder.nn.2.weight")?,
-                Some(var_store.get(1, "rt_decoder.nn.2.bias")?),
-            ),
-        ];
-
-        let prelu = PReLU::new(var_store.get(1, "rt_decoder.nn.1.weight")?, true);
-
-        let dropout = 0.1;
+        let rt_decoder = DecoderLinear::from_varstore(
+            &var_store,
+            256,
+            1,
+            vec!["rt_decoder.nn.0.weight", "rt_decoder.nn.1.weight", "rt_decoder.nn.2.weight"],
+            vec!["rt_decoder.nn.0.bias", "rt_decoder.nn.2.bias"]
+        ).unwrap();
 
         Ok(Self {
             var_store,
             constants,
             device,
             mod_to_feature,
-            mod_nn,
-            cnn_short,
-            cnn_medium,
-            cnn_long,
-            bilstm,
-            attn,
-            decoder,
-            prelu,
             dropout,
-            // aa_to_index,
-            // mod_to_index,
+            rt_encoder,
+            rt_decoder,
             is_training: true,
         })
     }
@@ -191,10 +149,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         _nce: Option<i32>,
         _intsrument: Option<&str>,
     ) -> Result<Tensor> {
-        // println!("Peptide sequences to encode: {:?}", peptide_sequences);
-
-        let aa_indices = Self::get_aa_indices(peptide_sequences)?;
-        // println!("AA indices: {:?}", aa_indices);
+        let aa_indices = get_aa_indices(peptide_sequences)?;
 
         // Convert ndarray to Tensor and ensure it's F32
         let aa_indices_tensor = Tensor::from_slice(
@@ -206,29 +161,24 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
 
         let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
 
-        // One-hot encode amino acids
-        let aa_one_hot = self.aa_one_hot(&aa_indices_tensor)?;
-        // println!("AA one hot shape: {:?}", aa_one_hot.shape());
+        // unsqueeze aa_indices_tensor to match the shape of mod_x, which is batch_size x seq_len x mod_feature_size
+        let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?;
 
         // Get modification features
-        let mut mod_x = self.get_mod_features(mods, mod_sites, seq_len)?;
-        // println!("Mod features shape: {:?}", mod_x.shape());
-
-        // Preprocess mod_x: keep first 6 features unchanged
-        let mod_x_first_6 = mod_x.narrow(2, 0, 6)?;
-        let mod_x_rest = mod_x.narrow(2, 6, 103)?;
-
-        // Apply mod_nn to the rest of the features
-        let mod_x_processed = mod_x_rest.apply(&self.mod_nn)?;
-
-        // Concatenate the first 6 features with the processed features
-        mod_x = Tensor::cat(&[mod_x_first_6, mod_x_processed], 2)?;
-
-        // println!("Mod features shape post nn: {:?}", mod_x.shape());
+        let mod_x = get_mod_features(
+            mods,
+            mod_sites,
+            seq_len,
+            self.constants.mod_elements.len(),
+            self.mod_to_feature.clone(),
+            self.device.clone(),
+        )?;
 
         // Combine aa_one_hot and mod_x
-        let combined = Tensor::cat(&[aa_one_hot, mod_x], 2)?;
-        // println!("Combined shape: {:?}", combined.shape());
+        let combined = Tensor::cat(
+            &[aa_indices_tensor, mod_x],
+            2,
+        )?;
 
         Ok(combined)
     }
@@ -321,54 +271,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
 
     /// Print the model's weights.
     fn print_weights(&self) {
-        println!("Model weights:");
-
-        // Helper function to print first few values of a tensor
-        fn print_first_few(tensor: &Tensor, name: &str) -> Result<()> {
-            let flattened = tensor.flatten_all()?;
-            let num_elements = flattened.dim(0)?;
-            let num_to_print = 5.min(num_elements);
-            println!("{} shape: {:?}", name, tensor.shape());
-            println!(
-                "{} (first few values): {:?}",
-                name,
-                flattened.narrow(0, 0, num_to_print)?.to_vec1::<f32>()?
-            );
-            Ok(())
-        }
-
-        // Print weights for each layer
-        let _ = print_first_few(self.mod_nn.weight(), "rt_encoder.mod_nn.nn weights");
-        let _ = print_first_few(
-            self.cnn_short.weight(),
-            "rt_encoder.input_cnn.cnn_short weights",
-        );
-        let _ = print_first_few(
-            self.cnn_medium.weight(),
-            "rt_encoder.input_cnn.cnn_medium weights",
-        );
-        let _ = print_first_few(
-            self.cnn_long.weight(),
-            "rt_encoder.input_cnn.cnn_long weights",
-        );
-
-        // Print bilstm weights
-        let _ = self.bilstm.print_weights(&self.var_store);
-
-        // Decoder
-        let _ = print_first_few(self.attn.weight(), "rt_encoder.attn_sum.attn weights");
-        let _ = print_first_few(self.decoder[0].weight(), "rt_decoder.nn.0 weights");
-        // Print prelu weights
-        let _ = println!(
-            "rt_decoder.nn.1 (prelu weights) shape: {:?}",
-            self.prelu.weight().shape()
-        );
-        let _ = println!(
-            "rt_decoder.nn.1 (prelu weights) weights: {:?}",
-            self.prelu.weight().to_vec1::<f32>()
-        );
-
-        let _ = print_first_few(self.decoder[1].weight(), "rt_decoder.nn.2 weights");
+        todo!()
     }
 
     fn save(&self, path: &Path) -> Result<()> {
@@ -680,68 +583,6 @@ impl<'a> RTCNNLSTMModel<'a> {
         Ok(aa_indices_tensor)
     }
 
-    /// One-hot encode amino acid indices.
-    fn aa_one_hot(&self, aa_indices: &Tensor) -> Result<Tensor> {
-        let (batch_size, seq_len) = aa_indices.shape().dims2()?;
-        let num_classes = self.constants.aa_embedding_size.unwrap();
-
-        let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
-
-        // Iterate over the 2D tensor directly
-        for batch_idx in 0..batch_size {
-            for seq_idx in 0..seq_len {
-                let index = aa_indices
-                    .get(batch_idx)?
-                    .get(seq_idx)?
-                    .to_scalar::<f32>()?;
-                let class_idx = index.round() as usize; // Round to nearest integer and convert to usize
-                if class_idx < num_classes {
-                    one_hot_data
-                        [batch_idx * seq_len * num_classes + seq_idx * num_classes + class_idx] =
-                        1.0;
-                }
-            }
-        }
-
-        // Convert the one_hot_data vector directly to a tensor
-        Tensor::from_slice(
-            &one_hot_data,
-            (batch_size, seq_len, num_classes),
-            aa_indices.device(),
-        )
-        .map_err(|e| anyhow!("{}", e))
-    }
-
-    /// Get the modification features for a given set of modifications and modification sites.
-    ///
-    /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L47
-    fn get_mod_features(&self, mods: &str, mod_sites: &str, seq_len: usize) -> Result<Tensor> {
-        let mod_names: Vec<&str> = mods.split(';').filter(|&s| !s.is_empty()).collect();
-        let mod_sites: Vec<usize> = mod_sites
-            .split(';')
-            .filter(|&s| !s.is_empty())
-            .map(|s| s.parse::<usize>().unwrap())
-            .collect();
-
-        let mod_feature_size = self.constants.mod_elements.len();
-
-        let mut mod_x = vec![0.0f32; seq_len * mod_feature_size];
-
-        for (mod_name, &site) in mod_names.iter().zip(mod_sites.iter()) {
-            if let Some(feat) = self.mod_to_feature.get(*mod_name) {
-                for (i, &value) in feat.iter().enumerate() {
-                    if site < seq_len {
-                        mod_x[site * mod_feature_size + i] += value;
-                    }
-                }
-                // println!("Site: {}, feat: {:?}", site, feat);
-            }
-        }
-
-        Tensor::from_slice(&mod_x, (1, seq_len, mod_feature_size), &self.device)
-            .map_err(|e| anyhow!("Failed to create tensor: {}", e))
-    }
-
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         //self.var_store.save(path)
         unimplemented!()
@@ -751,84 +592,20 @@ impl<'a> RTCNNLSTMModel<'a> {
 // Module Trait Implementation
 
 impl<'a> Module for RTCNNLSTMModel<'a> {
-    /// Forward pass for the model.
-    fn forward(&self, x: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = x.shape().dims3()?;
-        // println!("Input shape: {:?}", x.shape());
-        // print_tensor(&x)?;
+    fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
+        let (batch_size, seq_len, _) = xs.shape().dims3()?;
+        
+        // Separate input into aa_indices, mod_x
+        let start_mod_x = 1;
 
-        // Transpose the input tensor to match the CNN layer expectations
-        let x_transposed = x.transpose(1, 2)?;
-        // println!("Input transposed shape: {:?}", x_transposed.shape());
-        // print_tensor(&x_transposed)?;
+        let aa_indices_out = xs.i((.., .., 0))?;
+        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
 
-        // CNN layers
-        let cnn_short = self.cnn_short.forward(&x_transposed)?;
-        let cnn_medium = self.cnn_medium.forward(&x_transposed)?;
-        let cnn_long = self.cnn_long.forward(&x_transposed)?;
+        let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
+        let x = self.dropout.forward(&x, self.is_training)?;
+        let x = self.rt_decoder.forward(&x)?;
 
-        // Concatenate CNN outputs, including the original input (residual connection)
-        let cnn_out = Tensor::cat(&[x_transposed, cnn_short, cnn_medium, cnn_long], 1)?;
-
-        // Transpose back to (batch_size, seq_len, features)
-        let cnn_out_transposed = cnn_out.transpose(1, 2)?;
-
-        // Convert to float32 if necessary (should already be float32)
-        let cnn_out_f32 = cnn_out_transposed.to_dtype(candle_core::DType::F32)?;
-
-        // Ensure LSTM input has the correct shape (140 features)
-        let lstm_input = if cnn_out_f32.dim(2)? > 140 {
-            cnn_out_f32.narrow(2, 0, 140)?
-        } else if cnn_out_f32.dim(2)? < 140 {
-            let padding = Tensor::zeros(
-                (batch_size, seq_len, 140 - cnn_out_f32.dim(2)?),
-                cnn_out_f32.dtype(),
-                cnn_out_f32.device(),
-            )?;
-            Tensor::cat(&[cnn_out_f32, padding], 2)?
-        } else {
-            cnn_out_f32
-        };
-
-        // print_tensor(&lstm_input, 4)?;
-
-        // Pass the correctly shaped input to the LSTM
-        let lstm_out = self.bilstm.forward(&lstm_input)?;
-
-        // print_tensor(&lstm_out, 4, None, Some(3))?;
-
-        // Attention
-        let attn_scores = self.attn.forward(&lstm_out)?;
-
-        // Ensure attn_scores has the correct shape before softmax
-        let attn_scores_reshaped = attn_scores.squeeze(2)?; // Remove last dimension if it's 1
-
-        let attn_weights = ops::softmax(&attn_scores_reshaped, D::Minus1)?; // Apply softmax over the sequence dimension
-
-        // Ensure attn_weights has the correct shape for multiplication
-        let attn_weights_expanded = attn_weights.unsqueeze(2)?;
-
-        // Use broadcasting for multiplication
-        let weighted_lstm_out = lstm_out.broadcast_mul(&attn_weights_expanded)?;
-
-        let context = weighted_lstm_out.sum(1)?; // Sum over the sequence dimension (second dimension)
-
-        // Decoder
-        let mut x = self.decoder[0].forward(&context)?;
-
-        x = self.prelu.forward(&x)?;
-
-        x = self.decoder[1].forward(&x)?;
-
-        // Dropout
-        if self.is_training {
-            x = ops::dropout(&x, self.dropout)?;
-        }
-
-        // Ensure the output has the correct shape (batch_size,)
-        let output = x.squeeze(1)?; // Remove the last dimension which should be 1
-
-        Ok(output)
+        Ok(x.squeeze(1)?)
     }
 }
 
@@ -856,42 +633,6 @@ mod tests {
         assert_eq!(constants.max_instrument_num, 8);
         assert_eq!(constants.mod_elements.len(), 109);
         assert_eq!(constants.nce_factor, Some(0.01));
-    }
-
-    #[test]
-    fn test_aa_one_hot() {
-        let device = Device::Cpu;
-
-        // Create aa_indices similar to how you're doing it in encode_peptides
-        let aa_indices_vec: Vec<i64> = vec![0, 1, 7, 8, 3, 5, 23, 17, 13, 11, 25, 18, 0]
-            .into_iter()
-            .map(|x| x as i64)
-            .collect();
-        let aa_indices_tensor =
-            Tensor::from_slice(&aa_indices_vec, (1, aa_indices_vec.len()), &device).unwrap();
-        let aa_indices_tensor = aa_indices_tensor.to_dtype(DType::F32).unwrap();
-
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-
-        assert!(model_path.exists(), "Test model file does not exist");
-        assert!(
-            constants_path.exists(),
-            "Test constants file does not exist"
-        );
-
-        let model =
-            RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, Device::Cpu).unwrap();
-
-        let aa_one_hot = model.aa_one_hot(&aa_indices_tensor).unwrap();
-
-        // Check the shape
-        let (batch_size, seq_len, num_classes) = aa_one_hot.shape().dims3().unwrap();
-        assert_eq!(
-            (batch_size, seq_len, num_classes),
-            (1, 13, model.constants.aa_embedding_size.unwrap())
-        );
     }
 
     #[test]
@@ -966,7 +707,7 @@ mod tests {
         model.print_summary();
 
         // Print the model's weights
-        model.print_weights();
+        // model.print_weights();
 
         // Test prediction with real peptides
         let peptide = "AGHCEWQMKYR".to_string();

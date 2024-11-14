@@ -676,6 +676,82 @@ impl Module for SeqAttentionSum {
     }
 }
 
+/// Encode AAs (26 AA letters) and modifications by CNN and LSTM layers, then by 'SeqAttentionSum'.
+#[derive(Debug, Clone)]
+pub struct Encoder26aaModCnnLstmAttnSum {
+    mod_nn: ModEmbeddingFixFirstK,
+    input_cnn: SeqCNN,
+    input_lstm: SeqLSTM,
+    attn_sum: SeqAttentionSum,
+}
+
+impl Encoder26aaModCnnLstmAttnSum {
+    fn new() -> Self {
+        unimplemented!();
+    }
+
+    pub fn from_varstore(
+        varstore: &nn::VarBuilder,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        num_layers: usize,
+        names_mod_nn: Vec<&str>,
+        names_input_cnn_weight: Vec<&str>,
+        names_input_cnn_bias: Vec<&str>,
+        lstm_pp: &str,
+        names_attn_sum: Vec<&str>,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::from_varstore(
+                &varstore,
+                MOD_FEATURE_SIZE,
+                mod_hidden_dim,
+                names_mod_nn[0],
+            )?,
+            input_cnn: SeqCNN::from_varstore(
+                varstore.clone(),
+                input_dim,
+                names_input_cnn_weight,
+                names_input_cnn_bias,
+            )?,
+            input_lstm: SeqLSTM::from_varstore(
+                varstore.pp(lstm_pp).clone(),
+                input_dim * 4,
+                hidden_dim,
+                num_layers,
+            )?,
+            attn_sum: SeqAttentionSum::from_varstore(
+                varstore.clone(),
+                hidden_dim * 2,
+                names_attn_sum[0],
+            )?,
+        })
+    }
+
+    pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
+        println!("Encoder26aaModCnnLstmAttnSum forward");
+
+        println!("aa_indices shape: {:?}", aa_indices.shape());
+        println!("mod_x shape: {:?}", mod_x.shape());
+
+        let mod_x = self.mod_nn.forward(mod_x)?;
+        println!("mod_x (post mod_nn) shape: {:?}", mod_x.shape());
+
+        let additional_tensors: Vec<&Tensor> = vec![&mod_x];
+        let x = aa_one_hot(&aa_indices, &additional_tensors)
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        println!("x (aa_one_hot) shape: {:?}", x.shape());
+        let x = self.input_cnn.forward(&x)?;
+        println!("x (post cnn) shape: {:?}", x.shape());
+        let x = self.input_lstm.forward(&x)?;
+        println!("x (post lstm) shape: {:?}", x.shape());
+        let x = self.attn_sum.forward(&x)?;
+        Ok(x)
+    }
+}
+
+/// Encode AAs (26 AA letters), modifications and charge by CNN and LSTM layers, then by 'SeqAttentionSum'.
 #[derive(Debug, Clone)]
 pub struct Encoder26aaModChargeCnnLstmAttnSum {
     mod_nn: ModEmbeddingFixFirstK,

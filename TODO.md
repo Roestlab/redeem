@@ -8,7 +8,6 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 - [ ] Clean up code / remove comments and unneeded debug macros  
 - [ ] implement fine tuning for peptdeep MS2 Bert model  
-- [ ] Refactor peptdeep RT CNN-LSTM model to use refactored codebase  
 
 ### In Progress
 
@@ -18,6 +17,7 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 ### Done ✓
 
+- [x] Refactor peptdeep RT CNN-LSTM model to use refactored codebase  
 - [x] add MS2 class model interface  
 - [x] add CCS class model interface  
 - [x] Implement peptdeep CCS CNN-LSTM model  
