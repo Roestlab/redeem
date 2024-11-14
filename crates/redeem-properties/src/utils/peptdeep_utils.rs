@@ -220,7 +220,6 @@ pub fn extract_masses_and_indices(peptide: &str) -> Vec<(f64, usize)> {
 }
 
 
-
 pub fn get_modification_indices(peptide: &str) -> String {
     let re = Regex::new(r"\[.*?\]").unwrap();
     let mut indices = Vec::new();
@@ -234,6 +233,50 @@ pub fn get_modification_indices(peptide: &str) -> String {
 
     indices.join(";")
 }
+
+
+
+// TODO: Derive from PeptDep constants yaml
+const IM_GAS_MASS: f64 = 28.0; 
+const CCS_IM_COEF: f64 = 1059.62245; 
+
+/// Calculates the reduced mass for CCS and mobility calculation.
+///
+/// This function computes the reduced mass using the formula:
+/// reduced_mass = (precursor_mz * charge * IM_GAS_MASS) / (precursor_mz * charge + IM_GAS_MASS)
+///
+/// # Arguments
+///
+/// * `precursor_mz` - The precursor mass-to-charge ratio (m/z)
+/// * `charge` - The charge of the ion
+///
+/// # Returns
+///
+/// The calculated reduced mass as a f64 value
+pub fn get_reduced_mass(precursor_mz: f64, charge: f64) -> f64 {
+    let reduced_mass = precursor_mz * charge;
+    reduced_mass * IM_GAS_MASS / (reduced_mass + IM_GAS_MASS)
+}
+
+/// Converts CCS (Collision Cross Section) to mobility for Bruker (timsTOF) instruments.
+///
+/// This function calculates the mobility using the formula:
+/// mobility = (ccs_value * sqrt(reduced_mass)) / (charge * CCS_IM_COEF)
+///
+/// # Arguments
+///
+/// * `ccs_value` - The Collision Cross Section value
+/// * `charge` - The charge of the ion
+/// * `precursor_mz` - The precursor mass-to-charge ratio (m/z)
+///
+/// # Returns
+///
+/// The calculated mobility as a f64 value
+pub fn ccs_to_mobility_bruker(ccs_value: f64, charge: f64, precursor_mz: f64) -> f64 {
+    let reduced_mass = get_reduced_mass(precursor_mz, charge);
+    ccs_value * f64::sqrt(reduced_mass) / (charge * CCS_IM_COEF)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -285,6 +328,23 @@ mod tests {
             println!("Peptide: {}, Expected: {:?}, Result: {:?}", peptide, expected, result);
             assert_eq!(result, expected, "Failed for peptide: {}", peptide);
         }
+    }
+
+    #[test]
+    fn test_ccs_to_mobility_bruker() {
+        let ccs_value = 0.032652;
+        let charge = 2.0;
+        let precursor_mz = 762.329553;
+
+        let result = ccs_to_mobility_bruker(ccs_value, charge, precursor_mz);
+        
+        let expected = 8.078969627454307e-05;
+        println!("Rust result: {}", result);
+        println!("Python result: {}", expected);
+        println!("Difference: {}", (result - expected).abs());
+
+        assert_eq!(result, expected, "Failed for ccs_to_mobility_bruker");
+
     }
 
 }
