@@ -15,7 +15,7 @@ The ReDeeM project consists of two primary crates:
     --- | --- | --- | ---
     AlphaPept RT Model | `redeem_properties::RTCNNLSTMModel` | CNN-LSTM | :heavy_check_mark:
     AlphaPept MS2 Model | `redeem_properties::MS2BertModel` | Bert | :heavy_check_mark:
-    AlphaPept IM Model | `redeem_properties::CCSCNNLSTMModel` | CNN-LSTM | WIP
+    AlphaPept IM Model | `redeem_properties::CCSCNNLSTMModel` | CNN-LSTM | :heavy_check_mark:
 
 2. **redeem-classifiers**:
    - This crate is currently a work in progress (WIP) aimed at developing semi-supervised scoring classifier models. The goal is to create models for separating target peptides from decoys.
