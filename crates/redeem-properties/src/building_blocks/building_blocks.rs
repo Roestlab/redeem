@@ -775,7 +775,7 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 
 #[cfg(test)]
 mod tests {
-    use crate::model_interface::ModelInterface;
+    use crate::models::model_interface::ModelInterface;
     use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
     use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;

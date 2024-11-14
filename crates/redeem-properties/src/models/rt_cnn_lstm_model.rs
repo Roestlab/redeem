@@ -12,7 +12,7 @@ use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::model_interface::{ModelInterface, PredictionResult};
+use crate::models::model_interface::{ModelInterface, PredictionResult};
 use crate::utils::peptdeep_utils::{
     extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
     parse_model_constants, remove_mass_shift, ModelConstants, ModificationMap,
@@ -611,7 +611,7 @@ impl<'a> Module for RTCNNLSTMModel<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model_interface::ModelInterface;
+    use crate::models::model_interface::ModelInterface;
     use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
     use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;

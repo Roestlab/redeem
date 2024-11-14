@@ -3,7 +3,7 @@
 use std::path::Path;
 use candle_core::{Device, Tensor};
 use anyhow::{Result, anyhow};
-use crate::model_interface::{ModelInterface,PredictionResult};
+use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;

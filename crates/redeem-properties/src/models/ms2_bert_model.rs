@@ -15,7 +15,7 @@ use crate::building_blocks::building_blocks::{
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
 use crate::{
-    model_interface::{ModelInterface, PredictionResult},
+    models::model_interface::{ModelInterface, PredictionResult},
     utils::peptdeep_utils::{
         load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
     },
@@ -424,7 +424,7 @@ impl<'a> fmt::Debug for MS2BertModel<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_interface::ModelInterface;
+    use crate::models::model_interface::ModelInterface;
     use crate::models::ms2_bert_model::MS2BertModel;
     use candle_core::Device;
     use std::path::PathBuf;
