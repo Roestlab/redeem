@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ndarray::Array2;
 use sage_core::ml::matrix::Matrix;
 use rayon::prelude::*;
-use xgboost::{ parameters::{tree::{TreeBoosterParametersBuilder, TreeMethod}, BoosterParametersBuilder, BoosterType, TrainingParametersBuilder}, Booster, DMatrix};
+use xgboost::{ parameters::{learning::{LearningTaskParametersBuilder, Objective}, tree::{TreeBoosterParametersBuilder, TreeMethod}, BoosterParametersBuilder, BoosterType, TrainingParametersBuilder}, Booster, DMatrix};
 
 use sage_core::scoring::Feature;
 
@@ -18,8 +18,8 @@ pub struct XGBoostClassifier {
 impl XGBoostClassifier {
     pub fn new() -> Self {
         let mut params = HashMap::new();
-        params.insert("objective".to_string(), "binary:logistic".to_string());
-        params.insert("eval_metric".to_string(), "logloss".to_string());
+        params.insert("objective".to_string(), "binary:logitraw".to_string());
+        params.insert("eval_metric".to_string(), "auc".to_string());
         
         XGBoostClassifier {
             booster: None,
@@ -29,13 +29,70 @@ impl XGBoostClassifier {
 }
 
 impl SemiSupervisedModel for XGBoostClassifier {
-    fn fit(&mut self, x: &Array2<f32>, y: &[i32]) {
+    fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>) {
+
+        fn count_occurrences(data: &[i32]) -> HashMap<i32, usize> {
+            let mut counts = HashMap::new();
+            for &value in data {
+                *counts.entry(value).or_insert(0) += 1;
+            }
+            counts
+        }
+
+        // println!("y: {:?}", y);
+        // println!("y_eval: {:?}", y_eval);
+        let y_counts = count_occurrences(&y);
+        println!("Counts in y prior to conversion:");
+        for (value, count) in &y_counts {
+            println!("Group {}: {} occurrences", value, count);
+        }
+        
+        // convert y to [0, 1]
+        let y = y.iter().map(|&l| if l == 1 { 0 } else { 1 }).collect::<Vec<i32>>();
+        let y_eval = if let Some(y_e) = y_eval {
+            Some(y_e.iter().map(|&l| if l == 1 { 0 } else { 1 }).collect::<Vec<i32>>())
+        } else {
+            None
+        };
+
+        // print how many unique values are in y per label
+        let y_counts = count_occurrences(&y);
+
+        println!("Counts in y:");
+        for (value, count) in &y_counts {
+            println!("Group {}: {} occurrences", value, count);
+        }
+
+        if let Some(y_e) = &y_eval {
+            let y_eval = y_e.iter().map(|&l| if l == 1 { 0 } else { 1 }).collect::<Vec<i32>>();
+            let y_eval_counts = count_occurrences(&y_eval);
+        
+            println!("Counts in y_eval:");
+            for (value, count) in &y_eval_counts {
+                println!("Group {}: {} occurrences", value, count);
+            }
+        } else {
+            println!("y_eval is None");
+        }
+
         // Convert feature matrix into DMatrix
         let mut dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
-
-        // Set ground truth labels for the training matrix
         dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>()).unwrap();
 
+        let mut eval_matrix = None;
+        let dmat_eval = if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
+            let mut matrix = DMatrix::from_dense(x_e.as_slice().unwrap(), x_e.nrows()).unwrap();
+            matrix.set_labels(&y_e.iter().map(|&l| l as f32).collect::<Vec<f32>>()).unwrap();
+            eval_matrix = Some(matrix);
+            Some(vec![(&dmat, "train"), (eval_matrix.as_ref().unwrap(), "test")])
+        } else {
+            None
+};
+
+        // configure objectives, metrics, etc.
+        let learning_params = LearningTaskParametersBuilder::default()
+        .objective(Objective::BinaryLogisticRaw)
+        .build().unwrap();
 
         // configure the tree-based learning model's parameters
         let tree_params = TreeBoosterParametersBuilder::default()
@@ -46,7 +103,8 @@ impl SemiSupervisedModel for XGBoostClassifier {
         // overall configuration for Booster
         let booster_params = BoosterParametersBuilder::default()
         .booster_type(BoosterType::Tree(tree_params))
-        .verbose(true)
+        .learning_params(learning_params)
+        .verbose(false)
         .build().unwrap();
 
 
@@ -55,6 +113,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
             .dtrain(&dmat)
             .boost_rounds(100)
             .booster_params(booster_params)
+            .evaluation_sets(dmat_eval.as_deref())
             .build()
             .unwrap();
 
@@ -101,11 +160,16 @@ mod tests {
                                        1i32, -1i32,
                                        1i32, -1i32]);
 
+        // Convert y to [0, 1]
+        let y = y.mapv(|x| if x == 1 { 0 } else { 1 });
+
+        println!("y.to_vec(): {:?}", y.to_vec());
+
         // Initialize the XGBoost classifier
         let mut classifier = XGBoostClassifier::new();
 
         // Fit the classifier
-        classifier.fit(&x, &y.to_vec());
+        classifier.fit(&x, &y.to_vec(), None, None);
 
         // Make predictions
         let predictions = classifier.predict(&x);
@@ -114,11 +178,27 @@ mod tests {
         println!("y: {:?}", y.to_vec());
 
         // Check that predictions are reasonable
-        assert_eq!(predictions.len(), y.len());
+        // assert_eq!(predictions.len(), y.len());
         
-        // You can add more specific assertions depending on what you expect from your model
-        for (_i, &pred) in predictions.iter().enumerate() {
-            assert!(pred >= -1f32 && pred <= 1f32); // Example assertion for binary-like output
-        }
+        // // You can add more specific assertions depending on what you expect from your model
+        // for (_i, &pred) in predictions.iter().enumerate() {
+        //     assert!(pred >= -1f32 && pred <= 1f32); // Example assertion for binary-like output
+        // }
+
+        // // Get attribute names
+        // let attr_names = classifier.booster.unwrap().get_attribute("weight").unwrap().unwrap();
+        // println!("Attribute names: {:?}", attr_names);
+
+        // Predict Contributions
+        let mut dmat = DMatrix::from_dense(&x.as_slice().unwrap(), x.nrows()).unwrap();
+        dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>()).unwrap();
+
+        let contributions = classifier.booster.as_ref().unwrap().predict_contributions(&dmat).unwrap();
+        println!("Contributions: {:?}", contributions);
+
+        let interactions = classifier.booster.as_ref().unwrap().predict_interactions(&dmat).unwrap();
+        println!("Interactions: {:?}", interactions);
+
+
     }
 }

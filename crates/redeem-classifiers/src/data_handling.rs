@@ -4,14 +4,14 @@ use rand::seq::SliceRandom;
 use rand::{thread_rng, SeedableRng};
 
 
-
+#[derive(Debug, Clone)]
 pub struct Experiment {
-    x: Array2<f32>,
-    y: Array1<i32>,
-    is_train: Array1<bool>,
-    is_top_peak: Array1<bool>,
-    tg_num_id: Array1<i32>,
-    d_score: Array1<f32>,
+    pub x: Array2<f32>,
+    pub y: Array1<i32>,
+    pub is_train: Array1<bool>,
+    pub is_top_peak: Array1<bool>,
+    pub tg_num_id: Array1<i32>,
+    pub classifier_score: Array1<f32>,
 }
 
 impl Experiment {
@@ -23,7 +23,7 @@ impl Experiment {
             is_train: Array1::from_elem(n_samples, false),
             is_top_peak: Array1::from_elem(n_samples, false),
             tg_num_id: Array1::from_elem(n_samples, 0),
-            d_score: Array1::from_elem(n_samples, 0.0),
+            classifier_score: Array1::from_elem(n_samples, 0.0),
         }
     }
 
@@ -34,7 +34,7 @@ impl Experiment {
     }
 
     pub fn set_and_rerank(&mut self, scores: Array1<f32>) {
-        self.d_score = scores;
+        self.classifier_score = scores;
         self.rank_by();
     }
 
@@ -83,7 +83,7 @@ impl Experiment {
             is_train: self.is_train.select(Axis(0), &mask.iter().enumerate().filter_map(|(i, &m)| if m { Some(i) } else { None }).collect::<Vec<_>>()),
             is_top_peak: self.is_top_peak.select(Axis(0), &mask.iter().enumerate().filter_map(|(i, &m)| if m { Some(i) } else { None }).collect::<Vec<_>>()),
             tg_num_id: self.tg_num_id.select(Axis(0), &mask.iter().enumerate().filter_map(|(i, &m)| if m { Some(i) } else { None }).collect::<Vec<_>>()),
-            d_score: self.d_score.select(Axis(0), &mask.iter().enumerate().filter_map(|(i, &m)| if m { Some(i) } else { None }).collect::<Vec<_>>()),
+            classifier_score: self.classifier_score.select(Axis(0), &mask.iter().enumerate().filter_map(|(i, &m)| if m { Some(i) } else { None }).collect::<Vec<_>>()),
         }
     }
 
