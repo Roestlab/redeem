@@ -9,14 +9,14 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 - [ ] Clean up code / remove comments and unneeded debug macros  
 - [ ] Implement fine tuning for peptdeep CCS CNN-LSTM model  
 - [ ] implement fine tuning for peptdeep MS2 Bert model  
-- [ ] Batch prediction  
+- [ ] Batch prediction (peptide properties)  
 
 ### In Progress
 
-- [ ] Implement XGBoost classifier PSM scoring  
 
 ### Done ✓
 
+- [x] Implement XGBoost classifier PSM scoring  
 - [x] Implement redeem property prediction into Sage  
 - [x] Refactor peptdeep RT CNN-LSTM model to use refactored codebase  
 - [x] add MS2 class model interface  
