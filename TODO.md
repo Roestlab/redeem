@@ -6,6 +6,8 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 ### Todo
 
+- [ ] xgboost/semi-supervised learning param cleanup  
+- [ ] Open PR for pub bert encoder struct  
 - [ ] Clean up code / remove comments and unneeded debug macros  
 - [ ] Implement fine tuning for peptdeep CCS CNN-LSTM model  
 - [ ] implement fine tuning for peptdeep MS2 Bert model  
