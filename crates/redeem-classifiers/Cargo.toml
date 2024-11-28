@@ -1,0 +1,24 @@
+[package]
+name = "redeem-classifiers"
+version = "0.1.0"
+authors = ["Justin Sing <justincsing@gmail.com>"]
+edition = "2021"
+rust-version = "1.79"
+description = "A repository of deep-learning models for mass spectrometry data"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+log = "0.4.0"
+rand = "0.8"
+statrs = "0.17.1"
+ndarray = "0.16.1"
+ndarray-stats = "0.6.0"
+xgboost = "0.1.4"
+rayon = "1.5"
+sage-core = { git = "https://github.com/lazear/sage", branch = "master" }
+csv = "1.3.1"
+
+[lib]
+name = "redeem_classifiers"
+path = "src/lib.rs"
