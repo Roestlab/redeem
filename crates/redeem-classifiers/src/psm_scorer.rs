@@ -139,12 +139,11 @@ impl SemiSupervisedLearner {
         let folds = self.create_folds(&experiment, self.xeval_num_iter);
         
         for (fold, (mut train_exp, test_exp)) in folds.into_iter().enumerate() {
-            println!("Fold: {}", fold);
+            println!("Learning on Cross-Validation Fold: {}", fold);
             let n_samples = experiment.x.nrows();
             let mut all_predictions = Array1::zeros(n_samples);
 
             self.remove_unlabeled_psms(&mut train_exp);
-            train_exp.log_input_data_summary();
 
             self.model.fit(&train_exp.x, &train_exp.y.to_vec(), None, None);
             let fold_predictions = Array1::from(self.model.predict_proba(&test_exp.x));
