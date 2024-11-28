@@ -18,6 +18,10 @@ The ReDeeM project consists of two primary crates:
     AlphaPept IM Model | `redeem_properties::CCSCNNLSTMModel` | CNN-LSTM | :heavy_check_mark:
 
 2. **redeem-classifiers**:
-   - This crate is currently a work in progress (WIP) aimed at developing semi-supervised scoring classifier models. The goal is to create models for separating target peptides from decoys.
-   - TODO:
-     - Implement XGBoost classifier
+   - This crate is aimed at developing semi-supervised scoring classifier models. The goal is to create models for separating target peptides from decoys.
+  
+   - Current Models
+  
+    Model | Name | Architecture | Implemented
+    --- | --- | --- | ---
+    XGBoost Classifier | `redeem_classifiers::XGBoostClassifier` | XGBoost | :heavy_check_mark:
