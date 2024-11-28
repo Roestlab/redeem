@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use sage_core::ml::matrix::Matrix;
 use rayon::prelude::*;
 use xgboost::{ parameters::{learning::{LearningTaskParametersBuilder, Objective}, tree::{TreeBoosterParametersBuilder, TreeMethod}, BoosterParametersBuilder, BoosterType, TrainingParametersBuilder}, Booster, DMatrix};
@@ -31,49 +31,14 @@ impl XGBoostClassifier {
 impl SemiSupervisedModel for XGBoostClassifier {
     fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>) {
 
-        fn count_occurrences(data: &[i32]) -> HashMap<i32, usize> {
-            let mut counts = HashMap::new();
-            for &value in data {
-                *counts.entry(value).or_insert(0) += 1;
-            }
-            counts
-        }
-
-        // println!("y: {:?}", y);
-        // println!("y_eval: {:?}", y_eval);
-        let y_counts = count_occurrences(&y);
-        println!("Counts in y prior to conversion:");
-        for (value, count) in &y_counts {
-            println!("Group {}: {} occurrences", value, count);
-        }
-        
-        // convert y to [0, 1]
-        let y = y.iter().map(|&l| if l == 1 { 0 } else { 1 }).collect::<Vec<i32>>();
+        // convert y to [0, 1] since xgboost only supports 0 and 1 for binary regression
+        // Note: we set targets (original 1) as 1 and decoys (original -1) as 0, so that the scores are positive for targets and negative for decoys
+        let y = y.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>();
         let y_eval = if let Some(y_e) = y_eval {
-            Some(y_e.iter().map(|&l| if l == 1 { 0 } else { 1 }).collect::<Vec<i32>>())
+            Some(y_e.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>())
         } else {
             None
         };
-
-        // print how many unique values are in y per label
-        let y_counts = count_occurrences(&y);
-
-        println!("Counts in y:");
-        for (value, count) in &y_counts {
-            println!("Group {}: {} occurrences", value, count);
-        }
-
-        if let Some(y_e) = &y_eval {
-            let y_eval = y_e.iter().map(|&l| if l == 1 { 0 } else { 1 }).collect::<Vec<i32>>();
-            let y_eval_counts = count_occurrences(&y_eval);
-        
-            println!("Counts in y_eval:");
-            for (value, count) in &y_eval_counts {
-                println!("Group {}: {} occurrences", value, count);
-            }
-        } else {
-            println!("y_eval is None");
-        }
 
         // Convert feature matrix into DMatrix
         let mut dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
@@ -89,10 +54,16 @@ impl SemiSupervisedModel for XGBoostClassifier {
             None
 };
 
-        // configure objectives, metrics, etc.
+        // configure learning objective to use binary logistic regression
         let learning_params = LearningTaskParametersBuilder::default()
         .objective(Objective::BinaryLogisticRaw)
         .build().unwrap();
+
+        // // configure learning objective to use multiclass softmax with 3 classes
+        // // Note: was thinking of using mutliclass softmax prob for the unlabelled PSM cases. But instead, we just rmeove these from training, which is what is done in Mokapot.
+        // let learning_params = LearningTaskParametersBuilder::default()
+        //     .objective(Objective::MultiSoftprob(3))
+        //     .build().unwrap();
 
         // configure the tree-based learning model's parameters
         let tree_params = TreeBoosterParametersBuilder::default()
@@ -111,7 +82,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
         // Create Training Parameters with evaluation sets if needed
         let training_params = TrainingParametersBuilder::default()
             .dtrain(&dmat)
-            .boost_rounds(100)
+            .boost_rounds(10)
             .booster_params(booster_params)
             .evaluation_sets(dmat_eval.as_deref())
             .build()
