@@ -151,6 +151,38 @@ pub trait ModelInterface: Send + Sync {
 }
 
 
+/// Parameters for the `predict` method of a `ModelInterface` implementation.
+pub struct Parameters {
+    /// The instrument data was acquired on. Refer to list of supported instruments in const yaml file.
+    pub instrument: String,
+    /// The nominal collision energy (NCE) used for data acquisition.
+    pub nce: i32,
+}
+
+impl Parameters {
+    /// Creates a new instance of `Parameters` with the given instrument and NCE.
+    ///
+    /// # Arguments
+    ///
+    /// * `instrument` - The instrument data was acquired on.
+    /// * `nce` - The nominal collision energy (NCE) used for data acquisition.
+    ///
+    /// # Returns
+    ///
+    /// A new `Parameters` instance with the given instrument and NCE.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let params = Parameters::new("QE", 20);
+    /// ```
+    pub fn new(instrument: &str, nce: i32) -> Self {
+        Parameters {
+            instrument: instrument.to_string(),
+            nce,
+        }
+    }
+}
 
 /// Represents a collection of deep learning models for various property prediction tasks.
 ///
@@ -158,6 +190,9 @@ pub trait ModelInterface: Send + Sync {
 /// collision cross-section (CCS), and MS2 intensity predictions. Each model
 /// is wrapped in an Arc<Mutex<>> for thread-safe shared ownership.
 pub struct DLModels {
+    /// Parameters for prediction models.
+    pub params: Option<Parameters>,
+
     /// Optional retention time prediction model.
     pub rt_model: Option<Arc<Mutex<RTModelWrapper>>>,
     
@@ -185,6 +220,7 @@ impl DLModels {
     /// ```
     pub fn new() -> Self {
         DLModels {
+            params: None,
             rt_model: None,
             ccs_model: None,
             ms2_model: None,
