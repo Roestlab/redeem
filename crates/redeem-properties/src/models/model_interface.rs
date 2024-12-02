@@ -156,7 +156,7 @@ pub struct Parameters {
     /// The instrument data was acquired on. Refer to list of supported instruments in const yaml file.
     pub instrument: String,
     /// The nominal collision energy (NCE) used for data acquisition.
-    pub nce: i32,
+    pub nce: f32,
 }
 
 impl Parameters {
@@ -176,7 +176,7 @@ impl Parameters {
     /// ```
     /// let params = Parameters::new("QE", 20);
     /// ```
-    pub fn new(instrument: &str, nce: i32) -> Self {
+    pub fn new(instrument: &str, nce: f32) -> Self {
         Parameters {
             instrument: instrument.to_string(),
             nce,
