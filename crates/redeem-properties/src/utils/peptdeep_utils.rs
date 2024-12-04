@@ -77,7 +77,7 @@ fn ensure_mod_tsv_exists() -> Result<PathBuf, io::Error> {
     }
 
     if !path.exists() {
-        log::info!("Downloading modification.tsv...");
+        info!("Downloading modification.tsv...");
         let mut response = reqwest::blocking::get(MOD_TSV_URL)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         let mut file = File::create(&path)?;
