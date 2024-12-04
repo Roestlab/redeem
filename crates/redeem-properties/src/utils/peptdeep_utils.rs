@@ -1,17 +1,14 @@
 use anyhow::{Context, Result, Error};
-use candle_core::op::Op;
 use std::fs::File;
 use std::path::PathBuf;
 use std::io;
 use std::fs;
-// use std::error::Error;
+use log::info;
 use csv::ReaderBuilder;
 use reqwest;
 use regex::Regex;
-use candle_core::Error as CandleError;
 use std::collections::HashMap;
 use serde::Deserialize;
-// use crate::models::rt_cnn_lstm_model::ModelConstants;
 
 const MOD_TSV_URL: &str = "https://raw.githubusercontent.com/MannLabs/alphabase/main/alphabase/constants/const_files/modification.tsv";
 const MOD_TSV_PATH: &str = "data/modification.tsv";
@@ -80,13 +77,12 @@ fn ensure_mod_tsv_exists() -> Result<PathBuf, io::Error> {
     }
 
     if !path.exists() {
-        println!("Downloading modification.tsv...");
+        log::info!("Downloading modification.tsv...");
         let mut response = reqwest::blocking::get(MOD_TSV_URL)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         let mut file = File::create(&path)?;
         response.copy_to(&mut file)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        println!("Download complete.");
     }
     Ok(path)
 }
