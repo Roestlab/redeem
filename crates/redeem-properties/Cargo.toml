@@ -19,7 +19,6 @@ ndarray = "0.15"
 candle-core = { git = "https://github.com/singjc/candle", branch = "change/bert_encoder_public" }
 candle-nn = { git = "https://github.com/singjc/candle", branch = "change/bert_encoder_public" }
 candle-transformers = { git = "https://github.com/singjc/candle", branch = "change/bert_encoder_public" }
-anyhow = "1.0"
 reqwest = { version = "0.11", features = ["blocking"] }
 csv = "1.1"
 regex = "1.6"
