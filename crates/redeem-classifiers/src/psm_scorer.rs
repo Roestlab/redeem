@@ -1,6 +1,7 @@
 use ndarray::{Array1, Array2};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use serde::{Deserialize, Serialize};
 
 use crate::data_handling::Experiment;
 use crate::models::xgboost::XGBoostClassifier;
