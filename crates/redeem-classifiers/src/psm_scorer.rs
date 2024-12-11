@@ -5,7 +5,7 @@ use rand::thread_rng;
 use crate::data_handling::Experiment;
 use crate::models::xgboost::XGBoostClassifier;
 
-
+#[derive(Deserialize, Serialize, Debug)]
 pub struct ModelParams {
     pub learning_rate: f32,
     // XGBoost-specific parameters
