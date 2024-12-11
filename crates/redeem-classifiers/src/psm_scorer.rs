@@ -1,9 +1,39 @@
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array1, Array2};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
 use crate::data_handling::Experiment;
 use crate::models::xgboost::XGBoostClassifier;
+
+
+pub struct ModelParams {
+    pub learning_rate: f32,
+    // XGBoost-specific parameters
+    /// Maximum depth of a tree. 
+    pub max_depth: u32,
+    /// Number of boosting rounds. 
+    pub num_boost_round: u32,
+}
+
+impl ModelParams {
+    pub fn new(learning_rate: f32, max_depth: u32, num_boost_round: u32) -> Self {
+        Self {
+            learning_rate,
+            max_depth,
+            num_boost_round,
+        }
+    }
+}
+
+impl Default for ModelParams {
+    fn default() -> Self {
+        Self {
+            learning_rate: 0.1,
+            max_depth: 6,
+            num_boost_round: 3,
+        }
+    }
+}
 
 
 pub enum ModelType {
@@ -31,26 +61,42 @@ pub trait SemiSupervisedModel {
 pub struct SemiSupervisedLearner {
     model: Box<dyn SemiSupervisedModel>,
     train_fdr: f32,
-    threshold: f32,
-    ss_num_iter: usize,
     xeval_num_iter: usize,
 }
 
 impl SemiSupervisedLearner {
-    pub fn new(model_type: ModelType, train_fdr: f32, threshold: f32, ss_num_iter: usize, xeval_num_iter: usize) -> Self {
+    /// Create a new SemiSupervisedLearner
+    /// 
+    /// # Arguments
+    /// 
+    /// * `model_type` - The type of model to use
+    /// * `train_fdr` - The FDR threshold to use for training
+    /// * `xeval_num_iter` - The number of iterations to use for cross-validation
+    /// 
+    /// # Returns
+    /// 
+    /// A new SemiSupervisedLearner
+    pub fn new(model_type: ModelType, model_params: Option<ModelParams>, train_fdr: f32, xeval_num_iter: usize) -> Self {
+
         let model: Box<dyn SemiSupervisedModel> = match model_type {
-            ModelType::XGBoost => Box::new(XGBoostClassifier::new()),
+            ModelType::XGBoost => Box::new(XGBoostClassifier::new(model_params.unwrap_or_default())),
         };
 
         SemiSupervisedLearner {
             model,
             train_fdr,
-            threshold,
-            ss_num_iter,
             xeval_num_iter,
         }
     }
 
+    /// Initialize the best feature
+    /// 
+    /// Adapted from MS2Rescore
+    /// 
+    /// # Arguments
+    /// 
+    /// * `experiment` - The experiment to use
+    /// * `eval_fdr` - The FDR threshold to use for evaluation
     pub fn init_best_feature(&mut self, experiment: &Experiment, eval_fdr: f32) -> (usize, usize, Array1<i32>, bool, Array1<f32>) {
         // Helper function to count targets by feature
         let targets_count_by_feature = |desc: bool| -> Vec<usize> {
@@ -96,6 +142,17 @@ impl SemiSupervisedLearner {
         (best_feat, best_positives, new_labels, best_desc, best_feature_scores)
     }
 
+    /// Remove unlabeled PSMs
+    /// 
+    /// This function removes PSMs with a label of 0 from the experiment. These PSMs are not used for training.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `experiment` - The experiment to use
+    /// 
+    /// # Returns
+    /// 
+    /// The experiment with the unlabeled PSMs removed
     fn remove_unlabeled_psms(&self, experiment: &mut Experiment) {
         let indices_to_remove: Vec<usize> = experiment.y
             .iter()
@@ -106,6 +163,16 @@ impl SemiSupervisedLearner {
         experiment.remove_psms(&indices_to_remove);
     }
 
+    /// Create folds for cross-validation
+    /// 
+    /// # Arguments
+    /// 
+    /// * `experiment` - The experiment to use
+    /// * `n_folds` - The number of folds to create
+    /// 
+    /// # Returns
+    /// 
+    /// A vector of tuples containing the training and testing experiments for each fold
     fn create_folds(&self, experiment: &Experiment, n_folds: usize) -> Vec<(Experiment, Experiment)> {
         let n_samples = experiment.x.nrows();
         let mut indices: Vec<usize> = (0..n_samples).collect();
@@ -128,6 +195,16 @@ impl SemiSupervisedLearner {
         }).collect()
     }
 
+    /// Fit the SemiSupervisedLearner
+    /// 
+    /// # Arguments
+    /// 
+    /// * `x` - The features to use, shape (n_samples, n_features)
+    /// * `y` - The labels to use, shape (n_samples,)
+    /// 
+    /// # Returns
+    /// 
+    /// The predictions for the input features
     pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>) -> Array1<f32> {
         let mut experiment = Experiment::new(x.clone(), y.clone());
         experiment.log_input_data_summary();
@@ -238,13 +315,13 @@ mod tests {
         println!("Loaded labels shape: {:?}", y.shape());
 
         // Create and train your SemiSupervisedLearner
-        let mut learner = SemiSupervisedLearner::new(ModelType::XGBoost, 1.0, 0.5, 1, 2);
+        let mut learner = SemiSupervisedLearner::new(ModelType::XGBoost, Some(ModelParams::new(0.01, 10, 100)), 1.0, 2);
         let predictions = learner.fit(x, y.clone());
 
         println!("Labels: {:?}", y);
 
         // Evaluate the predictions
         println!("Predictions: {:?}", predictions);
-        save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
+        // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
     }
 }
