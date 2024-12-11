@@ -40,6 +40,7 @@ impl Experiment {
     /// This method is used during model training to define positive examples,
     /// which are traditionally the target PSMs that fall within a specified
     /// FDR threshold.
+    /// This method is adapted from MS2Rescore
     ///
     /// # Arguments
     ///
