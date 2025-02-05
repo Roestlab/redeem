@@ -14,16 +14,30 @@ log = "0.4.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 ndarray = "0.15"
-# candle-core = { path = "/home/singjc/Documents/github/candle/candle-core" }
-# candle-nn = { path = "/home/singjc/Documents/github/candle/candle-nn" }
-# candle-transformers = { path = "/home/singjc/Documents/github/candle/candle-transformers" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.8.2", features = ["cuda"] }
-candle-nn = { git = "https://github.com/huggingface/candle.git" }
-candle-transformers = { git = "https://github.com/huggingface/candle.git" }
 reqwest = { version = "0.11", features = ["blocking"] }
 csv = "1.1"
 regex = "1.6"
-#linfa-svm = "0.7.0"
+
+[dependencies.candle-core]
+git = "https://github.com/huggingface/candle.git"
+version = "0.8.2"
+default-features = false
+features = []
+
+[dependencies.candle-nn]
+git = "https://github.com/huggingface/candle.git"
+default-features = false
+features = []
+
+[dependencies.candle-transformers]
+git = "https://github.com/huggingface/candle.git"
+default-features = false
+features = []
+
+[features]
+default = []
+cuda = ["candle-core/cuda"]
+
 
 [lib]
 name = "redeem_properties"
