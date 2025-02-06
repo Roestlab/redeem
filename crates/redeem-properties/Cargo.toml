@@ -19,6 +19,7 @@ csv = "1.1"
 regex = "1.6"
 tqdm = "0.7.0"
 rayon = "1.5"
+sysinfo = "0.33.1"
 
 [dependencies.candle-core]
 git = "https://github.com/huggingface/candle.git"
