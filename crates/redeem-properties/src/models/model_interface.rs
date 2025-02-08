@@ -2,6 +2,7 @@
 use crate::utils::peptdeep_utils::ModificationMap;
 use anyhow::Result;
 use candle_core::{Device, Tensor};
+use candle_nn::{VarMap, VarBuilder};
 use std::collections::HashMap;
 use std::path::Path;
 use std::ops::{Index, IndexMut};

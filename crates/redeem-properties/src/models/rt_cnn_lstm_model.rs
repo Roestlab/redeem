@@ -5,6 +5,7 @@ use ndarray::Array2;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
+use log::info;
 
 // use crate::models::rt_model::RTModel;
 use crate::building_blocks::bilstm::BidirectionalLSTM;
@@ -17,6 +18,7 @@ use crate::utils::peptdeep_utils::{
     extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
     parse_model_constants, remove_mass_shift, ModelConstants, ModificationMap,
 };
+use crate::utils::logging::Progress;
 
 // Main Model Struct
 
@@ -24,6 +26,7 @@ use crate::utils::peptdeep_utils::{
 /// Represents an AlphaPeptDeep CNN-LSTM Retention Time model.
 pub struct RTCNNLSTMModel<'a> {
     var_store: VarBuilder<'a>,
+    varmap: VarMap,
     constants: ModelConstants,
     device: Device,
     mod_to_feature: HashMap<String, Vec<f32>>,
@@ -36,6 +39,219 @@ pub struct RTCNNLSTMModel<'a> {
 // Automatically implement Send and Sync if all fields are Send and Sync
 unsafe impl<'a> Send for RTCNNLSTMModel<'a> {}
 unsafe impl<'a> Sync for RTCNNLSTMModel<'a> {}
+
+// Method to create VarMap from loaded weights
+pub fn create_var_map(var_map: &mut VarMap, vb: &VarBuilder) -> Result<()> {
+    // let mut var_map = VarMap::new();
+
+    // Lock the internal data of VarMap for thread-safe access
+    {
+        let mut ws = var_map.data().lock().unwrap();
+
+        // Populate VarMap with encoder parameters
+        ws.insert(
+            "rt_encoder.mod_nn.nn.weight".to_string(),
+            Var::from_tensor(
+                &vb.get((2, 103), "rt_encoder.mod_nn.nn.weight")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.input_cnn.cnn_short.weight".to_string(),
+            Var::from_tensor(
+                &vb.get((35, 35, 3), "rt_encoder.input_cnn.cnn_short.weight")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.input_cnn.cnn_short.bias".to_string(),
+            Var::from_tensor(
+                &vb.get(35, "rt_encoder.input_cnn.cnn_short.bias")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.input_cnn.cnn_medium.weight".to_string(),
+            Var::from_tensor(
+                &vb.get((35, 35, 5), "rt_encoder.input_cnn.cnn_medium.weight")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.input_cnn.cnn_medium.bias".to_string(),
+            Var::from_tensor(
+                &vb.get(35, "rt_encoder.input_cnn.cnn_medium.bias")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.input_cnn.cnn_long.weight".to_string(),
+            Var::from_tensor(
+                &vb.get((35, 35, 7), "rt_encoder.input_cnn.cnn_long.weight")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.input_cnn.cnn_long.bias".to_string(),
+            Var::from_tensor(
+                &vb.get(35, "rt_encoder.input_cnn.cnn_long.bias")?,
+            )?,
+        );
+
+        // Add Bidirectional LSTM parameters
+        let num_layers = 2; // Number of layers
+        let hidden_size = 128; // Hidden size
+
+        // Initial hidden and cell states
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn_h0".to_string(),
+            Var::from_tensor(&vb.get(
+                (num_layers * 2, 1, hidden_size),
+                "rt_encoder.hidden_nn.rnn_h0",
+            )?)?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn_c0".to_string(),
+            Var::from_tensor(&vb.get(
+                (num_layers * 2, 1, hidden_size),
+                "rt_encoder.hidden_nn.rnn_c0",
+            )?)?,
+        );
+
+        // LSTM layer weights and biases for both layers and directions (hardcoded)
+
+        // Layer 0 (Forward)
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_ih_l0".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 140), "rt_encoder.hidden_nn.rnn.weight_ih_l0")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_hh_l0".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l0")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_ih_l0".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l0")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_hh_l0".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l0")?,
+            )?,
+        );
+
+        // Layer 0 (Backward)
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_ih_l0_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 140), "rt_encoder.hidden_nn.rnn.weight_ih_l0_reverse")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_hh_l0_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l0_reverse")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_ih_l0_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l0_reverse")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_hh_l0_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l0_reverse")?,
+            )?,
+        );
+
+        // Layer 1 (Forward)
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_ih_l1".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 256), "rt_encoder.hidden_nn.rnn.weight_ih_l1")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_hh_l1".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l1")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_ih_l1".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l1")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_hh_l1".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l1")?,
+            )?,
+        );
+
+        // Layer 1 (Backward)
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_ih_l1_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 256), "rt_encoder.hidden_nn.rnn.weight_ih_l1_reverse")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.weight_hh_l1_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l1_reverse")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_ih_l1_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l1_reverse")?,
+            )?,
+        );
+        ws.insert(
+            "rt_encoder.hidden_nn.rnn.bias_hh_l1_reverse".to_string(),
+            Var::from_tensor(
+                &vb.get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l1_reverse")?,
+            )?,
+        );
+
+        // Add attention parameters
+        ws.insert(
+            "rt_encoder.attn_sum.attn.0.weight".to_string(),
+            Var::from_tensor(
+                &vb.get((1, 256), "rt_encoder.attn_sum.attn.0.weight")?,
+            )?,
+        );
+
+        // Add decoder parameters
+        ws.insert(
+            "rt_decoder.nn.0.weight".to_string(),
+            Var::from_tensor(&vb.get((64, 256), "rt_decoder.nn.0.weight")?)?,
+        );
+        ws.insert(
+            "rt_decoder.nn.0.bias".to_string(),
+            Var::from_tensor(&vb.get(64, "rt_decoder.nn.0.bias")?)?,
+        );
+        ws.insert(
+            "rt_decoder.nn.1.weight".to_string(),
+            Var::from_tensor(&vb.get(1, "rt_decoder.nn.1.weight")?)?,
+        );
+        ws.insert(
+            "rt_decoder.nn.2.weight".to_string(),
+            Var::from_tensor(&vb.get((1, 64), "rt_decoder.nn.2.weight")?)?,
+        );
+        ws.insert(
+            "rt_decoder.nn.2.bias".to_string(),
+            Var::from_tensor(&vb.get(1, "rt_decoder.nn.2.bias")?)?,
+        );
+    }
+
+    // Ok(var_map)
+    Ok(())
+}
 
 // Core Model Implementation
 
@@ -50,7 +266,11 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         _mask_modloss: bool,
         device: Device,
     ) -> Result<Self> {
-        let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
+        let vb = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
+ 
+        let mut varmap = candle_nn::VarMap::new();
+        create_var_map(&mut varmap, &vb)?;
+        let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let constants: ModelConstants =
             parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
@@ -85,6 +305,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
 
         Ok(Self {
             var_store,
+            varmap,
             constants,
             device,
             mod_to_feature,
@@ -183,10 +404,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         Ok(combined)
     }
 
-    // fn fine_tune(&mut self, training_data: &[(String, f32)], modifications: HashMap <(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {
-    //     unimplemented!()
-    // }
-
+    /// Fine-tune the model on a dataset of peptide sequences and retention times.
     fn fine_tune(
         &mut self,
         training_data: &[(String, f32)],
@@ -194,14 +412,17 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-        let var_map = self.create_var_map()?;
+
+        info!("Fine-tuning model with {} epochs and learning rate {}", epochs, learning_rate);
+
         let params = candle_nn::ParamsAdamW {
             lr: learning_rate,
             ..Default::default()
         };
-        let mut opt = candle_nn::AdamW::new(var_map.all_vars(), params)?;
+        let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
 
         for epoch in 0..epochs {
+            let progress = Progress::new(training_data.len(), &format!("[fine-tuning] Epoch {}: ", epoch));
             let mut total_loss = 0.0;
             for (peptide, target_rt) in training_data {
                 let naked_peptide = remove_mass_shift(&peptide.to_string());
@@ -248,13 +469,14 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
                 opt.backward_step(&loss)?;
 
                 total_loss += loss.to_vec0::<f32>()?;
+
+                progress.inc();
+                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
             }
-            println!(
-                "Epoch {}: Avg Loss: {}",
-                epoch,
-                total_loss / training_data.len() as f32
-            );
+            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Loss: {}", epoch, total_loss / training_data.len() as f32));
+            progress.finish();
         }
+        
         Ok(())
     }
 
@@ -271,7 +493,85 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
 
     /// Print the model's weights.
     fn print_weights(&self) {
-        todo!()
+        println!("RTModel Weights:");
+    
+        // Helper function to print the first 5 values of a tensor
+        fn print_first_5_values(tensor: &Tensor, name: &str) {
+            let shape = tensor.shape();
+            if shape.dims().len() == 2 {
+                // Extract the first row
+                if let Ok(row) = tensor.i((0, ..)) {
+                    match row.to_vec1::<f32>() {
+                        Ok(values) => println!("{} (first 5 values of first row): {:?}", name, &values[..5.min(values.len())]),
+                        Err(e) => eprintln!("Error printing {}: {:?}", name, e),
+                    }
+                } else {
+                    eprintln!("Error extracting first row for {}", name);
+                }
+            } else {
+                match tensor.to_vec1::<f32>() {
+                    Ok(values) => println!("{} (first 5 values): {:?}", name, &values[..5.min(values.len())]),
+                    Err(e) => eprintln!("Error printing {}: {:?}", name, e),
+                }
+            }
+        }
+        
+    
+        // Print the first 5 values of each weight tensor
+        if let Ok(tensor) = self.var_store.get((2, 103), "rt_encoder.mod_nn.nn.weight") {
+            print_first_5_values(&tensor, "rt_encoder.mod_nn.nn.weight");
+        }
+        // if let Ok(tensor) = self.var_store.get((35, 35, 3), "rt_encoder.input_cnn.cnn_short.weight") {
+        //     print_first_5_values(&tensor, "rt_encoder.input_cnn.cnn_short.weight");
+        // }
+        // if let Ok(tensor) = self.var_store.get((35, 35, 5), "rt_encoder.input_cnn.cnn_medium.weight") {
+        //     print_first_5_values(&tensor, "rt_encoder.input_cnn.cnn_medium.weight");
+        // }
+        // if let Ok(tensor) = self.var_store.get((35, 35, 7), "rt_encoder.input_cnn.cnn_long.weight") {
+        //     print_first_5_values(&tensor, "rt_encoder.input_cnn.cnn_long.weight");
+        // }
+        // if let Ok(tensor) = self.var_store.get((4, 1, 128), "rt_encoder.hidden_nn.rnn_h0") {
+        //     print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn_h0");
+        // }
+        // if let Ok(tensor) = self.var_store.get((4, 1, 128), "rt_encoder.hidden_nn.rnn_c0") {
+        //     print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn_c0");
+        // }
+        if let Ok(tensor) = self.var_store.get((512, 140), "rt_encoder.hidden_nn.rnn.weight_ih_l0") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_ih_l0");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l0") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_hh_l0");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 140), "rt_encoder.hidden_nn.rnn.weight_ih_l0_reverse") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_ih_l0_reverse");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l0_reverse") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_hh_l0_reverse");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 256), "rt_encoder.hidden_nn.rnn.weight_ih_l1") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_ih_l1");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l1") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_hh_l1");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 256), "rt_encoder.hidden_nn.rnn.weight_ih_l1_reverse") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_ih_l1_reverse");
+        }
+        if let Ok(tensor) = self.var_store.get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l1_reverse") {
+            print_first_5_values(&tensor, "rt_encoder.hidden_nn.rnn.weight_hh_l1_reverse");
+        }
+        if let Ok(tensor) = self.var_store.get((1, 256), "rt_encoder.attn_sum.attn.0.weight") {
+            print_first_5_values(&tensor, "rt_encoder.attn_sum.attn.0.weight");
+        }
+        if let Ok(tensor) = self.var_store.get((256, 256), "rt_decoder.nn.0.weight") {
+            print_first_5_values(&tensor, "rt_decoder.nn.0.weight");
+        }
+        if let Ok(tensor) = self.var_store.get((256, 256), "rt_decoder.nn.1.weight") {
+            print_first_5_values(&tensor, "rt_decoder.nn.1.weight");
+        }
+        if let Ok(tensor) = self.var_store.get((1, 256), "rt_decoder.nn.2.weight") {
+            print_first_5_values(&tensor, "rt_decoder.nn.2.weight");
+        }
     }
 
     fn save(&self, path: &Path) -> Result<()> {
@@ -283,266 +583,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
 // Helper Methods
 
 impl<'a> RTCNNLSTMModel<'a> {
-    // Method to create VarMap from loaded weights
-    pub fn create_var_map(&self) -> Result<VarMap> {
-        let mut var_map = VarMap::new();
-
-        // Lock the internal data of VarMap for thread-safe access
-        {
-            let mut ws = var_map.data().lock().unwrap();
-
-            // Populate VarMap with encoder parameters
-            ws.insert(
-                "rt_encoder.mod_nn.nn.weight".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((2, 103), "rt_encoder.mod_nn.nn.weight")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.input_cnn.cnn_short.weight".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((35, 35, 3), "rt_encoder.input_cnn.cnn_short.weight")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.input_cnn.cnn_short.bias".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(35, "rt_encoder.input_cnn.cnn_short.bias")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.input_cnn.cnn_medium.weight".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((35, 35, 5), "rt_encoder.input_cnn.cnn_medium.weight")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.input_cnn.cnn_medium.bias".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(35, "rt_encoder.input_cnn.cnn_medium.bias")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.input_cnn.cnn_long.weight".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((35, 35, 7), "rt_encoder.input_cnn.cnn_long.weight")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.input_cnn.cnn_long.bias".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(35, "rt_encoder.input_cnn.cnn_long.bias")?,
-                )?,
-            );
-
-            // Add Bidirectional LSTM parameters
-            let num_layers = 2; // Number of layers
-            let hidden_size = 128; // Hidden size
-
-            // Initial hidden and cell states
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn_h0".to_string(),
-                Var::from_tensor(&self.var_store.get(
-                    (num_layers * 2, 1, hidden_size),
-                    "rt_encoder.hidden_nn.rnn_h0",
-                )?)?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn_c0".to_string(),
-                Var::from_tensor(&self.var_store.get(
-                    (num_layers * 2, 1, hidden_size),
-                    "rt_encoder.hidden_nn.rnn_c0",
-                )?)?,
-            );
-
-            // LSTM layer weights and biases for both layers and directions (hardcoded)
-
-            // Layer 0 (Forward)
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_ih_l0".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 140), "rt_encoder.hidden_nn.rnn.weight_ih_l0")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_hh_l0".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l0")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_ih_l0".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l0")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_hh_l0".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l0")?,
-                )?,
-            );
-
-            // Layer 0 (Backward)
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_ih_l0_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 140), "rt_encoder.hidden_nn.rnn.weight_ih_l0_reverse")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_hh_l0_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l0_reverse")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_ih_l0_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l0_reverse")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_hh_l0_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l0_reverse")?,
-                )?,
-            );
-
-            // Layer 1 (Forward)
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_ih_l1".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 256), "rt_encoder.hidden_nn.rnn.weight_ih_l1")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_hh_l1".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l1")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_ih_l1".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l1")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_hh_l1".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l1")?,
-                )?,
-            );
-
-            // Layer 1 (Backward)
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_ih_l1_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 256), "rt_encoder.hidden_nn.rnn.weight_ih_l1_reverse")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.weight_hh_l1_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((512, 128), "rt_encoder.hidden_nn.rnn.weight_hh_l1_reverse")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_ih_l1_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_ih_l1_reverse")?,
-                )?,
-            );
-            ws.insert(
-                "rt_encoder.hidden_nn.rnn.bias_hh_l1_reverse".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get(512, "rt_encoder.hidden_nn.rnn.bias_hh_l1_reverse")?,
-                )?,
-            );
-
-            // Add attention parameters
-            ws.insert(
-                "rt_encoder.attn_sum.attn.0.weight".to_string(),
-                Var::from_tensor(
-                    &self
-                        .var_store
-                        .get((1, 256), "rt_encoder.attn_sum.attn.0.weight")?,
-                )?,
-            );
-
-            // Add decoder parameters
-            ws.insert(
-                "rt_decoder.nn.0.weight".to_string(),
-                Var::from_tensor(&self.var_store.get((64, 256), "rt_decoder.nn.0.weight")?)?,
-            );
-            ws.insert(
-                "rt_decoder.nn.0.bias".to_string(),
-                Var::from_tensor(&self.var_store.get(64, "rt_decoder.nn.0.bias")?)?,
-            );
-            ws.insert(
-                "rt_decoder.nn.1.weight".to_string(),
-                Var::from_tensor(&self.var_store.get(1, "rt_decoder.nn.1.weight")?)?,
-            );
-            ws.insert(
-                "rt_decoder.nn.2.weight".to_string(),
-                Var::from_tensor(&self.var_store.get((1, 64), "rt_decoder.nn.2.weight")?)?,
-            );
-            ws.insert(
-                "rt_decoder.nn.2.bias".to_string(),
-                Var::from_tensor(&self.var_store.get(1, "rt_decoder.nn.2.bias")?)?,
-            );
-        }
-
-        Ok(var_map)
-    }
-
+    
     /// Convert peptide sequences into AA ID array.
     ///
     /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L88
@@ -633,33 +674,6 @@ mod tests {
         assert_eq!(constants.max_instrument_num, 8);
         assert_eq!(constants.mod_elements.len(), 109);
         assert_eq!(constants.nce_factor, Some(0.01));
-    }
-
-    #[test]
-    fn test_variable_map_creation() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-
-        assert!(model_path.exists(), "Test model file does not exist");
-        assert!(
-            constants_path.exists(),
-            "Test constants file does not exist"
-        );
-
-        let model =
-            RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, Device::Cpu).unwrap();
-
-        let var_map = match model.create_var_map() {
-            Ok(vars) => vars,
-            Err(e) => {
-                panic!("Failed to create var map: {:?}", e);
-            }
-        };
-
-        println!("VarMap created successfully");
-        // // Check that the VarMap contains the expected number of variables
-        // assert_eq!(var_map.len(), 21);
     }
 
     #[test]
@@ -832,28 +846,6 @@ mod tests {
             ("TFLALINQVFPAEEDSKK".to_string(), 0.8345350),
         ];
 
-        // Fine-tune the model
-        let modifications = match load_modifications() {
-            Ok(mods) => mods,
-            Err(e) => {
-                panic!("Failed to load modifications: {:?}", e);
-            }
-        };
-        let learning_rate = 0.001;
-        let epochs = 5;
-        println!(
-            "Fine-tuning model with {} peptides and {} epochs with learning rate: {}",
-            training_data.len(),
-            epochs,
-            learning_rate
-        );
-        let result = model.fine_tune(&training_data, modifications, learning_rate, epochs);
-        assert!(
-            result.is_ok(),
-            "Failed to fine-tune model: {:?}",
-            result.err()
-        );
-
         // Test prediction with a few peptides after fine-tuning
         let test_peptides = vec![
             ("QPYAVSELAGHQTSAESWGTGR", "", "", 0.4328955),
@@ -899,25 +891,27 @@ mod tests {
             ("LLPDFLLER", "", "", 0.7852863),
         ];
 
+        // Predictions prior to fine-tuning
         model.set_evaluation_mode();
-
+        // model.print_weights();
+        
         let mut total_error = 0.0;
         let mut count = 0;
 
-        for (peptide, mods, mod_sites, observed_rt) in test_peptides {
-            let start = Instant::now();
+        for (peptide, mods, mod_sites, observed_rt) in &test_peptides {
+            // let start = Instant::now();
             match model.predict(&[peptide.to_string()], mods, mod_sites, None, None, None) {
                 Ok(predictions) => {
-                    let io_time = Instant::now() - start;
+                    // let io_time = Instant::now() - start;
                     assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
                     let predicted_rt = predictions[0];
                     let error = (predicted_rt - observed_rt).abs();
                     total_error += error;
                     count += 1;
-                    println!(
-                        "Peptide: {} (Mods: {}, Sites: {}), Predicted RT: {:.6}, Observed RT: {:.6}, Error: {:.6}, Time: {:8} ms",
-                        peptide, mods, mod_sites, predicted_rt, observed_rt, error, io_time.as_millis()
-                    );
+                    // println!(
+                    //     "Peptide: {} (Mods: {}, Sites: {}), Predicted RT: {:.6}, Observed RT: {:.6}, Error: {:.6}, Time: {:8} ms",
+                    //     peptide, mods, mod_sites, predicted_rt, observed_rt, error, io_time.as_millis()
+                    // );
                 }
                 Err(e) => {
                     println!("Error during prediction for {}: {:?}", peptide, e);
@@ -926,7 +920,59 @@ mod tests {
         }
 
         let mean_absolute_error = total_error / count as f32;
-        println!("Mean Absolute Error: {:.6}", mean_absolute_error);
+        println!("Mean Absolute Error prior to fine-tuning: {:.6}", mean_absolute_error);
+
+        // Fine-tune the model
+        let modifications = match load_modifications() {
+            Ok(mods) => mods,
+            Err(e) => {
+                panic!("Failed to load modifications: {:?}", e);
+            }
+        };
+        let learning_rate = 0.001;
+        let epochs = 5;
+        // println!(
+        //     "Fine-tuning model with {} peptides and {} epochs with learning rate: {}",
+        //     training_data.len(),
+        //     epochs,
+        //     learning_rate
+        // );
+        let result = model.fine_tune(&training_data, modifications, learning_rate, epochs);
+        assert!(
+            result.is_ok(),
+            "Failed to fine-tune model: {:?}",
+            result.err()
+        );
+
+        model.set_evaluation_mode();
+
+        let mut total_error = 0.0;
+        let mut count = 0;
+
+        for (peptide, mods, mod_sites, observed_rt) in test_peptides {
+            // let start = Instant::now();
+            match model.predict(&[peptide.to_string()], mods, mod_sites, None, None, None) {
+                Ok(predictions) => {
+                    // let io_time = Instant::now() - start;
+                    assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
+                    let predicted_rt = predictions[0];
+                    let error = (predicted_rt - observed_rt).abs();
+                    total_error += error;
+                    count += 1;
+                    // println!(
+                    //     "Peptide: {} (Mods: {}, Sites: {}), Predicted RT: {:.6}, Observed RT: {:.6}, Error: {:.6}, Time: {:8} ms",
+                    //     peptide, mods, mod_sites, predicted_rt, observed_rt, error, io_time.as_millis()
+                    // );
+                }
+                Err(e) => {
+                    println!("Error during prediction for {}: {:?}", peptide, e);
+                }
+            }
+        }
+
+        let mean_absolute_error = total_error / count as f32;
+        println!("Mean Absolute Error post fine-tuning: {:.6}", mean_absolute_error);
+        // model.print_weights();
 
         // // Optionally, save the fine-tuned model
         // let save_path = PathBuf::from("data/models/alphapeptdeep/generic/rt_fine_tuned.pth");
