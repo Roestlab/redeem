@@ -93,6 +93,12 @@ impl Progress {
         let _ = self.sender.send(1); // Always send 1 instead of new_count
     }
 
+    /// Updates the progress bar's description.
+    pub fn update_description(&self, new_desc: &str) {
+        let mut progress = self.progress.lock().unwrap();
+        progress.set_desc(Some(new_desc)); // Update the description dynamically
+    }
+
     /// Finalizes the progress bar by ensuring all updates are completed.
     ///
     /// This function drops the sender to close the channel and waits for the background thread
@@ -198,6 +204,7 @@ pub fn print_tensor(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
     use rayon::prelude::*;
     use super::*;
 
@@ -209,8 +216,9 @@ mod tests {
         let mapped: Vec<i32> = v
             .into_par_iter()
             .enumerate()
-            .map(|(_i, x)| {
+            .map(|(i, x)| {
                 pbar.inc();
+                pbar.update_description(&format!("Processing item {}", i));
                 x * 100
             })
             .collect();
