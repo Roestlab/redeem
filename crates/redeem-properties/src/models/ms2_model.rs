@@ -3,6 +3,7 @@ use candle_core::{Device, Tensor};
 use anyhow::{Result, anyhow};
 use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::ms2_bert_model::MS2BertModel;
+use crate::utils::data_handling::PeptideData;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
 
@@ -39,7 +40,7 @@ impl MS2ModelWrapper {
         self.model.encode_peptides(peptide_sequences, mods, mod_sites, Some(charge), Some(nce), Some(intsrument))
     }
 
-    pub fn fine_tune(&mut self, training_data: &[(String, f32)], modifications: HashMap<(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {
+    pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {
         self.model.fine_tune(training_data, modifications, learning_rate, epochs)
     }
 

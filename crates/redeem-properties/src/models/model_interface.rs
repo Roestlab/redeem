@@ -1,7 +1,8 @@
+use crate::utils::data_handling::PeptideData;
 // In model_interface.rs
 use crate::utils::peptdeep_utils::ModificationMap;
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 use candle_nn::{VarMap, VarBuilder};
 use std::collections::HashMap;
 use std::path::Path;
@@ -69,6 +70,17 @@ impl PredictionResult {
     }
 }
 
+/// Creates a new `VarMap` and populates it with the given tensor data.
+pub fn create_var_map(var_map: &mut VarMap, tensor_data: Vec<(String, Tensor)>) -> Result<()> {
+    let mut ws = var_map.data().lock().unwrap();
+
+    for (name, tensor) in tensor_data {
+        ws.insert(name, Var::from_tensor(&tensor)?); 
+    }
+
+    Ok(())
+}
+
 
 pub trait ModelInterface: Send + Sync {
     fn new<P: AsRef<Path>>(
@@ -82,6 +94,7 @@ pub trait ModelInterface: Send + Sync {
     ) -> Result<Self>
     where
         Self: Sized;
+    
     fn predict(
         &self,
         peptide_sequence: &[String],
@@ -101,9 +114,10 @@ pub trait ModelInterface: Send + Sync {
         nce: Option<i32>,
         intsrument: Option<&str>,
     ) -> Result<Tensor>;
+
     fn fine_tune(
         &mut self,
-        training_data: &[(String, f32)],
+        training_data: &Vec<PeptideData>,
         modifications: HashMap<(String, Option<char>), ModificationMap>,
         learning_rate: f64,
         epochs: usize,

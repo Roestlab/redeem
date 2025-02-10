@@ -14,8 +14,9 @@ use crate::building_blocks::building_blocks::{
     ModLossNN, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
+use crate::utils::data_handling::PeptideData;
 use crate::{
-    models::model_interface::{ModelInterface, PredictionResult},
+    models::model_interface::{ModelInterface, PredictionResult, create_var_map},
     utils::peptdeep_utils::{
         load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
     },
@@ -30,6 +31,7 @@ const NCE_FACTOR: f64 = 0.01;
 /// Represents an AlphaPeptDeep MS2BERT model.
 pub struct MS2BertModel<'a> {
     var_store: VarBuilder<'a>,
+    varmap: VarMap,
     constants: ModelConstants,
     mod_to_feature: HashMap<String, Vec<f32>>,
     fixed_sequence_len: usize,
@@ -65,7 +67,13 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         mask_modloss: bool,
         device: Device,
     ) -> Result<Self> {
-        let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
+        // let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
+        let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
+
+        let mut varmap = VarMap::new();
+        create_var_map(&mut varmap, tensor_data)?;
+
+        let var_store = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let constants: ModelConstants =
             parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
@@ -140,6 +148,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
 
         Ok(Self {
             var_store: var_store,
+            varmap: varmap,
             constants: constants,
             mod_to_feature: mod_to_feature,
             fixed_sequence_len: fixed_sequence_len,
@@ -247,7 +256,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
 
     fn fine_tune(
         &mut self,
-        training_data: &[(String, f32)],
+        training_data: &Vec<PeptideData>,
         modifications: HashMap<
             (String, Option<char>),
             crate::utils::peptdeep_utils::ModificationMap,
@@ -517,6 +526,8 @@ mod tests {
         let instrument = Some("QE");
 
         let result = model.predict(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+        // Result is a PredictionResult of Vec<Vec<f32>>
+        // ordered as b_z1	b_z2	y_z1	y_z2	b_modloss_z1	b_modloss_z2	y_modloss_z1	y_modloss_z2
         println!("{:?}", result);
     }
 }

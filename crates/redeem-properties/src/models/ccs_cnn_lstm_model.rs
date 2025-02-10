@@ -3,19 +3,23 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
 use candle_nn::{
     ops, Dropout, Module, Optimizer, VarBuilder, VarMap,
 };
+use log::info;
 use ndarray::Array2;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Output;
-use std::{fmt, vec};
+use std::{char, fmt, vec};
 use std::path::Path;
 
 use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModChargeCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
+use crate::utils::logging::Progress;
+use crate::utils::data_handling::PeptideData;
+use crate::utils::peptdeep_utils::{extract_masses_and_indices, get_modification_indices, remove_mass_shift};
 use crate::{
-    models::model_interface::{ModelInterface, PredictionResult},
+    models::model_interface::{ModelInterface, PredictionResult,create_var_map},
     utils::peptdeep_utils::{
         load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
     },
@@ -30,6 +34,7 @@ const NCE_FACTOR: f64 = 0.01;
 /// Represents an AlphaPeptDeep MS2BERT model.
 pub struct CCSCNNLSTMModel<'a> {
     var_store: VarBuilder<'a>,
+    varmap: VarMap,
     constants: ModelConstants,
     mod_to_feature: HashMap<String, Vec<f32>>,
     fixed_sequence_len: usize,
@@ -61,7 +66,12 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         mask_modloss: bool,
         device: Device,
     ) -> Result<Self> {
-        let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
+        let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
+
+        let mut varmap = candle_nn::VarMap::new();
+        create_var_map(&mut varmap, tensor_data)?;
+
+        let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let constants: ModelConstants =
             parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
@@ -108,6 +118,7 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
 
         Ok(CCSCNNLSTMModel {
             var_store,
+            varmap,
             constants,
             mod_to_feature,
             fixed_sequence_len,
@@ -191,12 +202,77 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
     
     fn fine_tune(
         &mut self,
-        training_data: &[(String, f32)],
+        training_data: &Vec<PeptideData>,
         modifications: HashMap<(String, Option<char>), crate::utils::peptdeep_utils::ModificationMap>,
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-        todo!()
+        info!("Fine-tuning model with {} epochs and learning rate {}", epochs, learning_rate);
+
+        let params = candle_nn::ParamsAdamW {
+            lr: learning_rate,
+            ..Default::default()
+        };
+        let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
+
+        for epoch in 0..epochs {
+            let progress = Progress::new(training_data.len(), &format!("[fine-tuning] Epoch {}: ", epoch));
+            let mut total_loss = 0.0;
+            for peptide in training_data {
+                let naked_peptide = remove_mass_shift(&peptide.sequence.to_string());
+
+                // Collect indices of non-zero modifications
+                let modified_indices = get_modification_indices(&peptide.sequence);
+
+                // Extract masses and indices
+                let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence.to_string());
+
+                let mut found_modifications = Vec::new();
+
+                // Map modifications based on extracted masses and indices
+                for (mass, index) in extracted_masses_and_indices {
+                    let amino_acid = peptide.sequence.to_string().chars().nth(index).unwrap_or('\0');
+                    if let Some(modification) =
+                        modifications.get(&(format!("{:.4}", mass), Some(amino_acid)))
+                    {
+                        found_modifications.push(modification.name.clone());
+                    } else if let Some(modification) =
+                        modifications.get(&(format!("{:.4}", mass), None))
+                    {
+                        found_modifications.push(modification.name.clone());
+                    }
+                }
+
+                // Prepare strings for prediction
+                let peptides_str = &vec![naked_peptide.to_string()];
+                let mod_str = &found_modifications.join("; ");
+                let mod_site_str = &modified_indices;
+                let charge = Some(peptide.charge.unwrap());
+
+                // Forward pass
+                let input =
+                    self.encode_peptides(peptides_str, mod_str, mod_site_str, charge, None, None)?;
+                let predicted = self.forward(&input)?;
+
+                // Compute loss
+                let loss = candle_nn::loss::mse(
+                    &predicted,
+                    &Tensor::new(&[peptide.ion_mobility.unwrap()], &self.device)?,
+                )?;
+
+                // Backward pass
+                opt.backward_step(&loss)?;
+
+                total_loss += loss.to_vec0::<f32>()?;
+
+                progress.inc();
+                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+            }
+            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Loss: {}", epoch, total_loss / training_data.len() as f32));
+            progress.finish();
+        }
+        
+        Ok(())
     }
     
     fn set_evaluation_mode(&mut self) {
@@ -310,6 +386,8 @@ mod tests {
     use super::*;
     use crate::models::model_interface::ModelInterface;
     use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
+    use crate::utils::peptdeep_utils::load_modifications;
+    use crate::utils::data_handling::PeptideData;
     use candle_core::Device;
     use std::path::PathBuf;
 
@@ -364,6 +442,104 @@ mod tests {
 
         let result = model.predict(&peptide_sequences, mods, mod_sites, charge, None, None);
         println!("{:?}", result);
+    }
+
+    #[test]
+    fn test_fine_tuning(){
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let mut model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+
+        let training_data = vec![
+            PeptideData::new("EHVIIQAEFYLNPDQ", Some(2), None, None, None, Some(1.10)),
+            PeptideData::new("KTLTGKTITLEVEPS", Some(2), None, None, None, Some(1.04)),
+            PeptideData::new("SLLAQNTSWLL", Some(1), None, None, None, Some(1.67)),
+            PeptideData::new("SLQEVAM[+15.9949]FL", Some(1), None, None, None, Some(1.53)),
+            PeptideData::new("VLADQVWTL", Some(2), None, None, None, Some(0.839)),
+            PeptideData::new("LLMEPGAMRFL", Some(2), None, None, None, Some(0.949)),
+            PeptideData::new("SGEIKIAYTYSVS", Some(2), None, None, None, Some(0.974)),
+            PeptideData::new("HTEIVFARTSPQQKL", Some(2), None, None, None, Some(1.13)),
+            PeptideData::new("SM[+15.9949]ADIPLGFGV", Some(1), None, None, None, Some(1.59)),
+            PeptideData::new("KLIDHQGLYL", Some(2), None, None, None, Some(0.937)),
+        ];
+
+
+        let test_peptides = vec![
+            ("SKEEETSIDVAGKP", "", "", 2, 0.998),
+            ("LPILVPSAKKAIYM", "", "", 2, 1.12),
+            ("RTPKIQVYSRHPAE", "", "", 3, 0.838),
+            ("EEVQIDILDTAGQE", "", "", 2, 1.02),
+            ("GAPLVKPLPVNPTDPA", "", "", 2, 1.01),
+            ("FEDENFILK", "", "", 2, 0.897),
+            ("YPSLPAQQV", "", "", 1, 1.45),
+            ("YLPPATQVV", "", "", 2, 0.846),
+            ("YISPDQLADLYK", "", "", 2, 0.979),
+            ("PSIVRLLQCDPSSAGQF", "", "", 2, 1.10),
+        ];
+
+
+        // model.set_evaluation_mode();
+
+        let mut total_error = 0.0;
+        let mut count = 0;
+        for (peptide, mods, mod_sites, charge, observed) in &test_peptides {
+            match model.predict(&[peptide.to_string()], mods, mod_sites, Some(*charge), None, None) {
+                Ok(predictions) => {
+                    assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
+                    let predicted = predictions[0];
+                    let error = (predicted - observed).abs();
+                    total_error += error;
+                    count += 1;
+                }
+                Err(e) => {
+                    println!("Error during prediction for {}: {:?}", peptide, e);
+                }
+            }
+        }
+
+        let mean_absolute_error = total_error / count as f32;
+        println!("Mean Absolute Error prior to fine-tuning: {:.6}", mean_absolute_error);
+
+        // Fine-tune the model
+        let modifications = match load_modifications() {
+            Ok(mods) => mods,
+            Err(e) => {
+                panic!("Failed to load modifications: {:?}", e);
+            }
+        };
+        let learning_rate = 0.001;
+        let epochs = 5;
+
+        let result = model.fine_tune(&training_data, modifications, learning_rate, epochs);
+        assert!(
+            result.is_ok(),
+            "Failed to fine-tune model: {:?}",
+            result.err()
+        );
+
+        // model.set_evaluation_mode();
+
+        let mut total_error = 0.0;
+        let mut count = 0;
+        for (peptide, mods, mod_sites, charge, observed) in &test_peptides {
+            match model.predict(&[peptide.to_string()], mods, mod_sites, Some(*charge), None, None) {
+                Ok(predictions) => {
+                    assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
+                    let predicted = predictions[0];
+                    let error = (predicted - observed).abs();
+                    total_error += error;
+                    count += 1;
+                }
+                Err(e) => {
+                    println!("Error during prediction for {}: {:?}", peptide, e);
+                }
+            }
+        }
+
+        let mean_absolute_error = total_error / count as f32;
+        println!("Mean Absolute Error post fine-tuning: {:.6}", mean_absolute_error);
     }
 
 }
