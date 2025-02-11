@@ -246,12 +246,12 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
                 // Forward pass
                 let input =
                     self.encode_peptides(peptides_str, mod_str, mod_site_str, None, None, None)?;
-                let predicted_rt = self.forward(&input)?;
+                let predicted = self.forward(&input)?;
 
                 // Compute loss
                 let loss = candle_nn::loss::mse(
-                    &predicted_rt,
-                    &Tensor::new(&[peptide.retention_time.unwrap()], &self.device)?,
+                    &predicted,
+                    &Tensor::new(peptide.ms2_intensities.clone().unwrap(), &self.device)?,
                 )?;
 
                 // Backward pass
@@ -571,16 +571,16 @@ mod tests {
 
         // Define training data
         let training_data: Vec<PeptideData> = vec![
-            PeptideData::new("AKPLMELIER", None, None, None, Some(0.4231399), None),
-            PeptideData::new("TEM[+15.9949]VTISDASQR", None, None, None, Some(0.2192762), None),
-            PeptideData::new("AGKFPSLLTHNENMVAK", None, None, None, Some(0.3343900), None),
-            PeptideData::new("LSELDDRADALQAGASQFETSAAK", None, None, None, Some(0.5286755), None),
-            PeptideData::new("FLLQDTVELR", None, None, None, Some(0.6522490), None),
-            PeptideData::new("SVTEQGAELSNEER", None, None, None, Some(0.2388270), None),
-            PeptideData::new("EHALLAYTLGVK", None, None, None, Some(0.5360210), None),
-            PeptideData::new("TVQSLEIDLDSM[+15.9949]R", None, None, None, Some(0.5787880), None),
-            PeptideData::new("VVSQYSSLLSPMSVNAVM[+15.9949]K", None, None, None, Some(0.6726230), None),
-            PeptideData::new("TFLALINQVFPAEEDSKK", None, None, None, Some(0.8345350), None),
+            PeptideData::new("AKPLMELIER", None, None, None, Some(0.4231399), None, None),
+            PeptideData::new("TEM[+15.9949]VTISDASQR", None, None, None, Some(0.2192762), None, None),
+            PeptideData::new("AGKFPSLLTHNENMVAK", None, None, None, Some(0.3343900), None, None),
+            PeptideData::new("LSELDDRADALQAGASQFETSAAK", None, None, None, Some(0.5286755), None, None),
+            PeptideData::new("FLLQDTVELR", None, None, None, Some(0.6522490), None, None),
+            PeptideData::new("SVTEQGAELSNEER", None, None, None, Some(0.2388270), None, None),
+            PeptideData::new("EHALLAYTLGVK", None, None, None, Some(0.5360210), None, None),
+            PeptideData::new("TVQSLEIDLDSM[+15.9949]R", None, None, None, Some(0.5787880), None, None),
+            PeptideData::new("VVSQYSSLLSPMSVNAVM[+15.9949]K", None, None, None, Some(0.6726230), None, None),
+            PeptideData::new("TFLALINQVFPAEEDSKK", None, None, None, Some(0.8345350), None, None),
         ];
 
 

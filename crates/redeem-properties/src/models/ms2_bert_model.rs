@@ -3,6 +3,7 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
 use candle_nn::{
     ops, Conv1d, Conv1dConfig, Dropout, Linear, Module, Optimizer, PReLU, VarBuilder, VarMap,
 };
+use log::info;
 use ndarray::Array2;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -15,6 +16,8 @@ use crate::building_blocks::building_blocks::{
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
 use crate::utils::data_handling::PeptideData;
+use crate::utils::logging::Progress;
+use crate::utils::peptdeep_utils::{extract_masses_and_indices, get_modification_indices, remove_mass_shift};
 use crate::{
     models::model_interface::{ModelInterface, PredictionResult, create_var_map},
     utils::peptdeep_utils::{
@@ -264,7 +267,79 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-        todo!()
+        info!("Fine-tuning model with {} epochs and learning rate {}", epochs, learning_rate);
+
+        let params = candle_nn::ParamsAdamW {
+            lr: learning_rate,
+            ..Default::default()
+        };
+        let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
+
+        for epoch in 0..epochs {
+            let progress = Progress::new(training_data.len(), &format!("[fine-tuning] Epoch {}: ", epoch));
+            let mut total_loss = 0.0;
+            for peptide in training_data {
+                let naked_peptide = remove_mass_shift(&peptide.sequence.to_string());
+
+                // Collect indices of non-zero modifications
+                let modified_indices = get_modification_indices(&peptide.sequence);
+
+                // Extract masses and indices
+                let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence.to_string());
+
+                let mut found_modifications = Vec::new();
+
+                // Map modifications based on extracted masses and indices
+                for (mass, index) in extracted_masses_and_indices {
+                    let amino_acid = peptide.sequence.to_string().chars().nth(index).unwrap_or('\0');
+                    if let Some(modification) =
+                        modifications.get(&(format!("{:.4}", mass), Some(amino_acid)))
+                    {
+                        found_modifications.push(modification.name.clone());
+                    } else if let Some(modification) =
+                        modifications.get(&(format!("{:.4}", mass), None))
+                    {
+                        found_modifications.push(modification.name.clone());
+                    }
+                }
+
+                // Prepare strings for prediction
+                let peptides_str = &vec![naked_peptide.to_string()];
+                let mod_str = &found_modifications.join("; ");
+                let mod_site_str = &modified_indices;
+                let charge = Some(peptide.charge.unwrap());
+                let nce = Some(peptide.nce.unwrap());
+                let instrument = &peptide.instrument.as_deref();
+
+                // Forward pass
+                let input =
+                    self.encode_peptides(peptides_str, mod_str, mod_site_str, charge, nce, *instrument)?;
+                let predicted = self.forward(&input)?;
+
+                let target = Tensor::new(peptide.ms2_intensities.clone().unwrap(), &self.device)?;
+
+                // Unsqueeze target for batch dimension
+                let target = target.unsqueeze(0)?;
+
+                // Compute loss
+                let loss = candle_nn::loss::mse(
+                    &predicted,
+                    &target,
+                )?;
+
+                // Backward pass
+                opt.backward_step(&loss)?;
+
+                total_loss += loss.to_vec0::<f32>()?;
+
+                progress.inc();
+                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+            }
+            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Loss: {}", epoch, total_loss / training_data.len() as f32));
+            progress.finish();
+        }
+        
+        Ok(())
     }
 
     fn set_evaluation_mode(&mut self) {
@@ -435,8 +510,12 @@ mod tests {
     use super::*;
     use crate::models::model_interface::ModelInterface;
     use crate::models::ms2_bert_model::MS2BertModel;
+    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
     use std::path::PathBuf;
+    use csv::Reader;
+    use std::collections::HashMap;
+    use std::fs::File;
 
     #[test]
     fn test_parse_model_constants() {
@@ -529,5 +608,162 @@ mod tests {
         // Result is a PredictionResult of Vec<Vec<f32>>
         // ordered as b_z1	b_z2	y_z1	y_z2	b_modloss_z1	b_modloss_z2	y_modloss_z1	y_modloss_z2
         println!("{:?}", result);
+        println!("Length peptide_sequences: {:?}", peptide_sequences[0].len());
+        println!("Length of result: {:?}", result.unwrap().len());
     }
+
+    #[test]
+    fn test_fine_tuning(){
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let mut model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+
+
+        // Open the CSV file
+        let file_path = "/home/singjc/Documents/github/sage_bruker/predicted_fragment_intensities.csv";
+        let file = File::open(file_path).unwrap();
+
+        // Create a CSV reader
+        let mut rdr = Reader::from_reader(file);
+
+        // Group fragment intensities by peptide sequence
+        let mut peptide_data_map: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
+        let mut peptide_charges: HashMap<String, i32> = HashMap::new();
+
+        for result in rdr.records() {
+            let record = result.unwrap();
+            let peptide_sequence = &record[0];
+            let precursor_charge: i32 = record[1].parse().unwrap();
+            let fragment_type = &record[2];
+            let fragment_ordinal: usize = record[3].parse().unwrap();
+            let fragment_charge: i32 = record[4].parse().unwrap();
+            let experimental_intensity: f32 = record[6].parse().unwrap();
+
+            // Get naked peptide sequence
+            let naked_peptide = remove_mass_shift(peptide_sequence);
+
+            // Get length of the peptide sequence
+            let peptide_len = naked_peptide.len() - 1;
+
+            // Initialize the peptide's intensity matrix if it doesn't exist
+            peptide_data_map
+                .entry(peptide_sequence.to_string())
+                .or_insert_with(|| vec![vec![0.0; 8]; peptide_len]); // Initialize with enough rows
+
+            // Update the peptide's charge
+            peptide_charges.insert(peptide_sequence.to_string(), precursor_charge);
+
+            // Determine the column index based on fragment type and charge
+            let col = match (fragment_type, fragment_charge) {
+                ("B", 1) => 0, // b_z1
+                ("B", 2) => 1, // b_z2
+                ("Y", 1) => 2, // y_z1
+                ("Y", 2) => 3, // y_z2
+                _ => continue, // Skip unsupported fragment types or charges
+            };
+
+            // Update the MS2 intensities matrix
+            let row = peptide_len - 1; // Convert to zero-based index
+            peptide_data_map
+                .get_mut(peptide_sequence)
+                .unwrap()
+                .resize(row + 1, vec![0.0; 8]); // Ensure the matrix has enough rows
+            peptide_data_map.get_mut(peptide_sequence).unwrap()[row][col] = experimental_intensity;
+        }
+
+        // Create PeptideData instances for each peptide
+        let mut training_data: Vec<PeptideData> = Vec::new();
+
+        for (sequence, ms2_intensities) in peptide_data_map {
+            let charge = peptide_charges.get(&sequence).copied();
+            let peptide_data = PeptideData::new(
+                &sequence,
+                charge,
+                Some(20), // Example NCE
+                Some("QE"), // Example instrument
+                None, // Retention time
+                None, // Ion mobility
+                Some(ms2_intensities), // MS2 intensities
+            );
+            training_data.push(peptide_data);
+        }
+
+
+        // let test_peptides = vec![
+        //     ("SKEEETSIDVAGKP", "", "", 2, 0.998),
+        //     ("LPILVPSAKKAIYM", "", "", 2, 1.12),
+        //     ("RTPKIQVYSRHPAE", "", "", 3, 0.838),
+        //     ("EEVQIDILDTAGQE", "", "", 2, 1.02),
+        //     ("GAPLVKPLPVNPTDPA", "", "", 2, 1.01),
+        //     ("FEDENFILK", "", "", 2, 0.897),
+        //     ("YPSLPAQQV", "", "", 1, 1.45),
+        //     ("YLPPATQVV", "", "", 2, 0.846),
+        //     ("YISPDQLADLYK", "", "", 2, 0.979),
+        //     ("PSIVRLLQCDPSSAGQF", "", "", 2, 1.10),
+        // ];
+
+
+        // // model.set_evaluation_mode();
+
+        // let mut total_error = 0.0;
+        // let mut count = 0;
+        // for (peptide, mods, mod_sites, charge, observed) in &test_peptides {
+        //     match model.predict(&[peptide.to_string()], mods, mod_sites, Some(*charge), Some(20), Some("QE")) {
+        //         Ok(predictions) => {
+        //             let predicted = predictions;
+        //             let error = (predicted - observed).abs();
+        //             total_error += error;
+        //             count += 1;
+        //         }
+        //         Err(e) => {
+        //             println!("Error during prediction for {}: {:?}", peptide, e);
+        //         }
+        //     }
+        // }
+
+        // let mean_absolute_error = total_error / count as f32;
+        // println!("Mean Absolute Error prior to fine-tuning: {:.6}", mean_absolute_error);
+
+        // Fine-tune the model
+        let modifications = match load_modifications() {
+            Ok(mods) => mods,
+            Err(e) => {
+                panic!("Failed to load modifications: {:?}", e);
+            }
+        };
+        let learning_rate = 0.001;
+        let epochs = 5;
+
+        let result = model.fine_tune(&training_data, modifications, learning_rate, epochs);
+        assert!(
+            result.is_ok(),
+            "Failed to fine-tune model: {:?}",
+            result.err()
+        );
+
+        // model.set_evaluation_mode();
+
+        // let mut total_error = 0.0;
+        // let mut count = 0;
+        // for (peptide, mods, mod_sites, charge, observed) in &test_peptides {
+        //     match model.predict(&[peptide.to_string()], mods, mod_sites, Some(*charge), None, None) {
+        //         Ok(predictions) => {
+        //             assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
+        //             let predicted = predictions[0];
+        //             let error = (predicted - observed).abs();
+        //             total_error += error;
+        //             count += 1;
+        //         }
+        //         Err(e) => {
+        //             println!("Error during prediction for {}: {:?}", peptide, e);
+        //         }
+        //     }
+        // }
+
+        // let mean_absolute_error = total_error / count as f32;
+        // println!("Mean Absolute Error post fine-tuning: {:.6}", mean_absolute_error);
+    }
+
 }

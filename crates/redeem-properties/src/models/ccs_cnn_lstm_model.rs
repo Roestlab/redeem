@@ -453,16 +453,16 @@ mod tests {
         let mut model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
         let training_data = vec![
-            PeptideData::new("EHVIIQAEFYLNPDQ", Some(2), None, None, None, Some(1.10)),
-            PeptideData::new("KTLTGKTITLEVEPS", Some(2), None, None, None, Some(1.04)),
-            PeptideData::new("SLLAQNTSWLL", Some(1), None, None, None, Some(1.67)),
-            PeptideData::new("SLQEVAM[+15.9949]FL", Some(1), None, None, None, Some(1.53)),
-            PeptideData::new("VLADQVWTL", Some(2), None, None, None, Some(0.839)),
-            PeptideData::new("LLMEPGAMRFL", Some(2), None, None, None, Some(0.949)),
-            PeptideData::new("SGEIKIAYTYSVS", Some(2), None, None, None, Some(0.974)),
-            PeptideData::new("HTEIVFARTSPQQKL", Some(2), None, None, None, Some(1.13)),
-            PeptideData::new("SM[+15.9949]ADIPLGFGV", Some(1), None, None, None, Some(1.59)),
-            PeptideData::new("KLIDHQGLYL", Some(2), None, None, None, Some(0.937)),
+            PeptideData::new("EHVIIQAEFYLNPDQ", Some(2), None, None, None, Some(1.10), None),
+            PeptideData::new("KTLTGKTITLEVEPS", Some(2), None, None, None, Some(1.04), None),
+            PeptideData::new("SLLAQNTSWLL", Some(1), None, None, None, Some(1.67), None),
+            PeptideData::new("SLQEVAM[+15.9949]FL", Some(1), None, None, None, Some(1.53), None),
+            PeptideData::new("VLADQVWTL", Some(2), None, None, None, Some(0.839), None),
+            PeptideData::new("LLMEPGAMRFL", Some(2), None, None, None, Some(0.949), None),
+            PeptideData::new("SGEIKIAYTYSVS", Some(2), None, None, None, Some(0.974), None),
+            PeptideData::new("HTEIVFARTSPQQKL", Some(2), None, None, None, Some(1.13), None),
+            PeptideData::new("SM[+15.9949]ADIPLGFGV", Some(1), None, None, None, Some(1.59), None),
+            PeptideData::new("KLIDHQGLYL", Some(2), None, None, None, Some(0.937), None),
         ];
 
 
