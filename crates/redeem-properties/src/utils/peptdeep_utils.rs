@@ -9,9 +9,15 @@ use reqwest;
 use regex::Regex;
 use std::collections::HashMap;
 use serde::Deserialize;
+use zip::ZipArchive;
 
 const MOD_TSV_URL: &str = "https://raw.githubusercontent.com/MannLabs/alphabase/main/alphabase/constants/const_files/modification.tsv";
 const MOD_TSV_PATH: &str = "data/modification.tsv";
+
+const PRETRAINED_MODELS_URL: &str = "https://github.com/singjc/redeem/releases/download/v0.1.0-alpha/peptdeep_generic_pretrained_models.zip";
+const PRETRAINED_MODELS_ZIP: &str = "data/peptdeep_generic_pretrained_models.zip";
+const PRETRAINED_MODELS_PATH: &str = "data/peptdeep_generic_pretrained_models";
+
 
 // Constants and Utility Structs
 
@@ -26,6 +32,52 @@ const INSTRUMENT_DICT: &[(&str, usize)] = &[
 const MAX_INSTRUMENT_NUM: usize = 8;
 
 const UNKNOWN_INSTRUMENT_NUM: usize = MAX_INSTRUMENT_NUM - 1;
+
+
+fn ensure_pretrained_models_exist() -> Result<PathBuf, io::Error> {
+    let zip_path = PathBuf::from(PRETRAINED_MODELS_ZIP);
+    let extract_dir = PathBuf::from(PRETRAINED_MODELS_PATH);
+
+    // Ensure the parent directory exists
+    if let Some(parent) = zip_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Download the zip file if it doesn't exist
+    if !zip_path.exists() {
+        info!("Downloading pretrained models...");
+        let mut response = reqwest::blocking::get(PRETRAINED_MODELS_URL)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut file = File::create(&zip_path)?;
+        io::copy(&mut response, &mut file)?;
+    }
+
+    // Unzip the file if the target directory doesn't exist
+    if !extract_dir.exists() {
+        info!("Unzipping pretrained models...");
+        let file = File::open(&zip_path)?;
+        let mut archive = ZipArchive::new(file)?;
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let outpath = extract_dir.join(file.mangled_name());
+
+            if file.name().ends_with('/') {
+                // Create directory
+                fs::create_dir_all(&outpath)?;
+            } else {
+                // Write file
+                if let Some(parent) = outpath.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut outfile = File::create(&outpath)?;
+                io::copy(&mut file, &mut outfile)?;
+            }
+        }
+    }
+
+    Ok(extract_dir)
+}
 
 pub fn parse_instrument_index(instrument: &str) -> usize {
     let upper_instrument = instrument.to_uppercase();
@@ -278,6 +330,12 @@ pub fn ccs_to_mobility_bruker(ccs_value: f64, charge: f64, precursor_mz: f64) ->
 mod tests {
     use super::*;
     use regex::Regex;
+
+    #[test]
+    fn test_ensure_pretrained_models_exist() {
+        let result = ensure_pretrained_models_exist();
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn test_get_modification_indices() {
