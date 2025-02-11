@@ -34,7 +34,7 @@ const MAX_INSTRUMENT_NUM: usize = 8;
 const UNKNOWN_INSTRUMENT_NUM: usize = MAX_INSTRUMENT_NUM - 1;
 
 
-fn ensure_pretrained_models_exist() -> Result<PathBuf, io::Error> {
+pub fn download_pretrained_models_exist() -> Result<PathBuf, io::Error> {
     let zip_path = PathBuf::from(PRETRAINED_MODELS_ZIP);
     let extract_dir = PathBuf::from(PRETRAINED_MODELS_PATH);
 
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_ensure_pretrained_models_exist() {
-        let result = ensure_pretrained_models_exist();
+        let result = download_pretrained_models_exist();
         assert!(result.is_ok());
     }
 
