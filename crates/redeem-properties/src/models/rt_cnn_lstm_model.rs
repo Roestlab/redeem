@@ -251,7 +251,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
                 // Compute loss
                 let loss = candle_nn::loss::mse(
                     &predicted,
-                    &Tensor::new(peptide.ms2_intensities.clone().unwrap(), &self.device)?,
+                    &Tensor::new(peptide.retention_time.clone().unwrap(), &self.device)?,
                 )?;
 
                 // Backward pass
