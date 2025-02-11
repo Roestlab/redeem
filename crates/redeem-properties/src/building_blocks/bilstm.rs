@@ -24,8 +24,8 @@ impl BidirectionalLSTM {
         vb: &VarBuilder,
     ) -> Result<Self> {
 
-        let h0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_h0")?;
-        let c0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_c0")?;
+        let h0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_h0")?.to_device(&vb.device())?;
+        let c0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_c0")?.to_device(&vb.device())?;
 
         let lstm_config = rnn::LSTMConfig {
             layer_idx: 0,
