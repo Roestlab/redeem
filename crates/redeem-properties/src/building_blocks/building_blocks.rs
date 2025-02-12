@@ -767,8 +767,9 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         let x = self.input_cnn.forward(&x)?;
-        let x = self.input_lstm.forward(&x)?;
-        let x = self.attn_sum.forward(&x)?;
+        // NOTE: temporary hack-fix for LSTM weights, which use sigmoid, which currently throws an error on CUDA: `no cuda implementation for sigmoid`
+        let x = self.input_lstm.forward(&x.to_device(&Device::Cpu)?)?;
+        let x = self.attn_sum.forward(&x.to_device(&mod_x.device())?)?;
         Ok(x)
     }
 }
