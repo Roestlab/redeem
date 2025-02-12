@@ -42,8 +42,8 @@ impl RTModelWrapper {
         self.model.encode_peptides(peptide_sequences, mods, mod_sites, None, None, None)
     }
 
-    pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, learning_rate: f64, epochs: usize) -> Result<()> {
-        self.model.fine_tune(training_data, modifications, learning_rate, epochs)
+    pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size:usize, learning_rate: f64, epochs: usize) -> Result<()> {
+        self.model.fine_tune(training_data, modifications, batch_size, learning_rate, epochs)
     }
 
     pub fn set_evaluation_mode(&mut self) {

@@ -204,6 +204,7 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         &mut self,
         training_data: &Vec<PeptideData>,
         modifications: HashMap<(String, Option<char>), crate::utils::peptdeep_utils::ModificationMap>,
+        batch_size: usize,
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
@@ -512,7 +513,7 @@ mod tests {
         let learning_rate = 0.001;
         let epochs = 5;
 
-        let result = model.fine_tune(&training_data, modifications, learning_rate, epochs);
+        let result = model.fine_tune(&training_data, modifications, 10, learning_rate, epochs);
         assert!(
             result.is_ok(),
             "Failed to fine-tune model: {:?}",

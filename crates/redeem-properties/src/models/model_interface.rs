@@ -125,6 +125,7 @@ pub trait ModelInterface: Send + Sync {
         &mut self,
         training_data: &Vec<PeptideData>,
         modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()>;

@@ -198,33 +198,32 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         &mut self,
         training_data: &Vec<PeptideData>,
         modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-
         info!("Fine-tuning model with {} epochs and learning rate {}", epochs, learning_rate);
-
+    
+        let num_batches = (training_data.len() as f64 / batch_size as f64).ceil() as usize;
+    
         let params = candle_nn::ParamsAdamW {
             lr: learning_rate,
             ..Default::default()
         };
         let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
-
+    
         for epoch in 0..epochs {
-            let progress = Progress::new(training_data.len(), &format!("[fine-tuning] Epoch {}: ", epoch));
+            let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
             let mut total_loss = 0.0;
-            for peptide in training_data {
+            let mut batch_inputs = Vec::new();
+            let mut batch_targets = Vec::new();
+    
+            for (i, peptide) in training_data.iter().enumerate() {
                 let naked_peptide = remove_mass_shift(&peptide.sequence.to_string());
-
-                // Collect indices of non-zero modifications
                 let modified_indices = get_modification_indices(&peptide.sequence.to_string());
-
-                // Extract masses and indices
                 let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence.to_string());
-
+    
                 let mut found_modifications = Vec::new();
-
-                // Map modifications based on extracted masses and indices
                 for (mass, index) in extracted_masses_and_indices {
                     let amino_acid = peptide.sequence.to_string().chars().nth(index).unwrap_or('\0');
                     if let Some(modification) =
@@ -237,35 +236,68 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
                         found_modifications.push(modification.name.clone());
                     }
                 }
-
-                // Prepare strings for prediction
+    
                 let peptides_str = &vec![naked_peptide.to_string()];
                 let mod_str = &found_modifications.join("; ");
                 let mod_site_str = &modified_indices;
+    
+                let input = self.encode_peptides(peptides_str, mod_str, mod_site_str, None, None, None)?;
+                batch_inputs.push(input);
+                batch_targets.push(peptide.retention_time.clone().unwrap());
+    
+                // Process the batch when it reaches the desired size
+                if batch_inputs.len() == batch_size || i == training_data.len() - 1 {
+                    // Determine the maximum sequence length in the batch
+                    let max_seq_len = batch_inputs.iter().map(|t| t.shape().dims3().unwrap().1).max().unwrap();
+    
+                    // Pad all sequences to the maximum length
+                    let padded_inputs: Result<Vec<_>> = batch_inputs
+                    .iter()
+                    .map(|t| {
+                        let (batch_size, seq_len, feature_size) = t.shape().dims3()?;
+                        if seq_len < max_seq_len {
+                            // Calculate the required padding on the right side
+                            let padding_right = max_seq_len - seq_len;
+                            // Pad the sequence with zeros on the right side
+                            t.pad_with_zeros(1, 0, padding_right)
+                        } else {
+                            Ok(t.clone())
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>() 
+                    .map_err(Into::into); 
 
-                // Forward pass
-                let input =
-                    self.encode_peptides(peptides_str, mod_str, mod_site_str, None, None, None)?;
-                let predicted = self.forward(&input)?;
+                    let padded_inputs = padded_inputs?;
 
-                // Compute loss
-                let loss = candle_nn::loss::mse(
-                    &predicted,
-                    &Tensor::new(&[peptide.retention_time.clone().unwrap()], &self.device)?,
-                )?;
+                    // Concatenate the padded inputs
+                    let input_batch = Tensor::cat(&padded_inputs, 0)?;
+    
+                    // Create the target batch tensor
+                    let target_batch = Tensor::new(batch_targets.as_slice(), &self.device)?;
 
-                // Backward pass
-                opt.backward_step(&loss)?;
-
-                total_loss += loss.to_vec0::<f32>()?;
-
-                progress.inc();
-                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+                    // Forward pass
+                    let predicted = self.forward(&input_batch)?;
+    
+                    // Compute loss
+                    let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
+    
+                    // Backward pass
+                    opt.backward_step(&loss)?;
+    
+                    total_loss += loss.to_vec0::<f32>()?;
+    
+                    // Clear the batch
+                    batch_inputs.clear();
+                    batch_targets.clear();
+    
+                    progress.inc();
+                    progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+                }
             }
-            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Loss: {}", epoch, total_loss / training_data.len() as f32));
+            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Batch Loss: {}", epoch, total_loss / training_data.len() as f32));
             progress.finish();
         }
-        
+    
         Ok(())
     }
 
@@ -680,7 +712,7 @@ mod tests {
         //     epochs,
         //     learning_rate
         // );
-        let result = model.fine_tune(&training_data, modifications, learning_rate, epochs);
+        let result = model.fine_tune(&training_data, modifications, 10, learning_rate, epochs);
         assert!(
             result.is_ok(),
             "Failed to fine-tune model: {:?}",
