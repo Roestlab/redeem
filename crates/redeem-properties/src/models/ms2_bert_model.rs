@@ -74,7 +74,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
 
         let mut varmap = VarMap::new();
-        create_var_map(&mut varmap, tensor_data)?;
+        create_var_map(&mut varmap, tensor_data, &device)?;
 
         let var_store = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 

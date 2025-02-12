@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor, DType};
+use candle_core::{cuda::DeviceId, DType, Device, Result, Tensor};
 use candle_nn::{rnn, Module, VarBuilder, RNN};
 // use crate::utils::logging::print_tensor;
 
@@ -24,8 +24,8 @@ impl BidirectionalLSTM {
         vb: &VarBuilder,
     ) -> Result<Self> {
 
-        let h0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_h0")?.to_device(&vb.device())?;
-        let c0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_c0")?.to_device(&vb.device())?;
+        let h0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_h0")?;
+        let c0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_c0")?;
 
         let lstm_config = rnn::LSTMConfig {
             layer_idx: 0,
@@ -95,7 +95,7 @@ impl BidirectionalLSTM {
         let (batch_size, seq_len, input_size) = input.dims3()?;
     
         // println!("Layer {}:", layer_idx);
-    
+        
         // Print first and last 5 values of the original input
         let input_vec = input.to_vec3::<f32>()?;
     
@@ -112,7 +112,7 @@ impl BidirectionalLSTM {
 
         // println!("      input shape: {:?}", input.shape());
         // println!("      h0 first 5 values: {:?}", h0_forward.to_vec2::<f32>()?[0].iter().take(5).collect::<Vec<_>>());
-        
+
         let output_forward_states: Vec<rnn::LSTMState> = lstm_forward.seq_init(&input, &state_forward)?;
         let output_forward = Tensor::stack(&output_forward_states.iter().map(|state| state.h().clone()).collect::<Vec<_>>(), 1)?;
         let last_forward_state = output_forward_states.last().unwrap().h().clone();

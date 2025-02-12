@@ -50,13 +50,13 @@ impl DecoderLinear {
         names_bias: Vec<&str>
     ) -> Result<Self> {
         let linear1 = nn::Linear::new(
-            varstore.get((64, in_features), names[0]).unwrap().to_device(varstore.device())?,
-            Some(varstore.get(64, names_bias[0]).unwrap().to_device(varstore.device())?),
+            varstore.get((64, in_features), names[0]).unwrap(),
+            Some(varstore.get(64, names_bias[0]).unwrap()),
         );
         let prelu = nn::PReLU::new(varstore.get(1, names[1]).unwrap(), true);
         let linear2 = nn::Linear::new(
-            varstore.get((out_features, 64), names[2]).unwrap().to_device(varstore.device())?,
-            Some(varstore.get(out_features, names_bias[1]).unwrap().to_device(varstore.device())?),
+            varstore.get((out_features, 64), names[2]).unwrap(),
+            Some(varstore.get(out_features, names_bias[1]).unwrap()),
         );
 
         let mut nn = seq();
@@ -100,7 +100,7 @@ impl AAEmbedding {
 
     fn from_varstore(varstore: &nn::VarBuilder, hidden_size: usize, name: &str) -> Result<Self> {
         let weight = varstore.get((AA_EMBEDDING_SIZE, hidden_size), name);
-        let embeddings = nn::Embedding::new(weight.unwrap().to_device(varstore.device())?, hidden_size);
+        let embeddings = nn::Embedding::new(weight.unwrap(), hidden_size);
         Ok(Self { embeddings })
     }
 }
@@ -163,7 +163,7 @@ impl PositionalEncoding {
         name: &str
     ) -> Result<Self> {
         let pe = varstore.get((1, max_len, out_features), name);
-        Ok(Self { pe: pe.unwrap().to_device(varstore.device())? })
+        Ok(Self { pe: pe.unwrap() })
     }
 }
 
@@ -198,7 +198,7 @@ impl ModEmbeddingFixFirstK {
     ) -> Result<Self> {
         let k = 6;
         let weight = varstore.get((out_features - k, MOD_FEATURE_SIZE - k), name);
-        let nn = nn::Linear::new(weight.unwrap().to_device(varstore.device())?, None);
+        let nn = nn::Linear::new(weight.unwrap(), None);
         Ok(Self { k, nn })
     }
 }
@@ -212,7 +212,7 @@ impl Module for ModEmbeddingFixFirstK {
         let rest = mod_x.narrow(D::Minus1, self.k, mod_x.dim(D::Minus1)? - self.k)?;
 
         // Apply the linear transformation to the rest
-        let transformed = self.nn.forward(&rest)?;
+        let transformed = self.nn.forward(&rest.contiguous()?)?;
 
         // Concatenate the results
         Tensor::cat(&[&first_k, &transformed], D::Minus1)
@@ -298,7 +298,7 @@ impl MetaEmbedding {
     ) -> Result<Self> {
         let weight = varstore.get((out_features - 1, MAX_INSTRUMENT_NUM + 1), name[0]);
         let bias = varstore.get(out_features - 1, name[1]);
-        let nn = nn::Linear::new(weight.unwrap().to_device(varstore.device())?, Some(bias.unwrap().to_device(varstore.device())?));
+        let nn = nn::Linear::new(weight.unwrap(), Some(bias.unwrap()));
         Ok(Self { nn })
     }
 
@@ -524,8 +524,8 @@ impl SeqCNN {
         let cnn_short = nn::Conv1d::new(
             varstore
                 .get((embedding_hidden, embedding_hidden, 3), names_weight[0])
-                .unwrap().to_device(varstore.device())?,
-            Some(varstore.get(embedding_hidden, names_bias[0]).unwrap().to_device(varstore.device())?),
+                .unwrap(),
+            Some(varstore.get(embedding_hidden, names_bias[0]).unwrap()),
             nn::Conv1dConfig {
                 padding: 1,
                 ..Default::default()
@@ -535,8 +535,8 @@ impl SeqCNN {
         let cnn_medium = nn::Conv1d::new(
             varstore
                 .get((embedding_hidden, embedding_hidden, 5), names_weight[1])
-                .unwrap().to_device(varstore.device())?,
-            Some(varstore.get(embedding_hidden, names_bias[1]).unwrap().to_device(varstore.device())?),
+                .unwrap(),
+            Some(varstore.get(embedding_hidden, names_bias[1]).unwrap()),
             nn::Conv1dConfig {
                 padding: 2,
                 ..Default::default()
@@ -546,8 +546,8 @@ impl SeqCNN {
         let cnn_long = nn::Conv1d::new(
             varstore
                 .get((embedding_hidden, embedding_hidden, 7), names_weight[2])
-                .unwrap().to_device(varstore.device())?,
-            Some(varstore.get(embedding_hidden, names_bias[2]).unwrap().to_device(varstore.device())?),
+                .unwrap(),
+            Some(varstore.get(embedding_hidden, names_bias[2]).unwrap()),
             nn::Conv1dConfig {
                 padding: 3,
                 ..Default::default()
@@ -611,7 +611,7 @@ struct SeqAttentionSum {
 
 impl SeqAttentionSum {
     pub fn from_varstore(varstore: nn::VarBuilder, hidden_dim: usize, name: &str) -> Result<Self> {
-        let attention = nn::Linear::new(varstore.get((1, hidden_dim), name).unwrap().to_device(varstore.device())?, None);
+        let attention = nn::Linear::new(varstore.get((1, hidden_dim), name).unwrap(), None);
         Ok(Self { attention })
     }
 }
@@ -698,8 +698,9 @@ impl Encoder26aaModCnnLstmAttnSum {
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         let x = self.input_cnn.forward(&x)?;
-        let x = self.input_lstm.forward(&x)?;
-        let x = self.attn_sum.forward(&x)?;
+        // NOTE: temporary hack-fix for LSTM weights, which use sigmoid, which currently throws an error on CUDA: `no cuda implementation for sigmoid`
+        let x = self.input_lstm.forward(&x.to_device(&Device::Cpu)?)?;
+        let x = self.attn_sum.forward(&x.to_device(&mod_x.device())?)?;
         Ok(x)
     }
 }

@@ -58,7 +58,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
  
         let mut varmap = candle_nn::VarMap::new();
-        create_var_map(&mut varmap, tensor_data)?;
+        create_var_map(&mut varmap, tensor_data, &device)?;
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let constants: ModelConstants =
@@ -564,8 +564,13 @@ mod tests {
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
 
         // Assert model and constants files exist (your existing assertions)
+        
+        // let device use cuda if available otherwise use cpu
+        let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
 
-        let result = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, Device::Cpu);
+        println!("Device: {:?}", device);
+
+        let result = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device);
         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
         let mut model = result.unwrap();
 

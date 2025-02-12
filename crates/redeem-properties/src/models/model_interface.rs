@@ -2,6 +2,7 @@ use crate::utils::data_handling::PeptideData;
 // In model_interface.rs
 use crate::utils::peptdeep_utils::ModificationMap;
 use anyhow::Result;
+use candle_core::cuda::DeviceId;
 use candle_core::{Device, Tensor, Var};
 use candle_nn::{VarMap, VarBuilder};
 use std::collections::HashMap;
@@ -71,11 +72,16 @@ impl PredictionResult {
 }
 
 /// Creates a new `VarMap` and populates it with the given tensor data.
-pub fn create_var_map(var_map: &mut VarMap, tensor_data: Vec<(String, Tensor)>) -> Result<()> {
+pub fn create_var_map(var_map: &mut VarMap, tensor_data: Vec<(String, Tensor)>, device: &Device) -> Result<()> {
     let mut ws = var_map.data().lock().unwrap();
 
     for (name, tensor) in tensor_data {
-        ws.insert(name, Var::from_tensor(&tensor)?); 
+        // NOTE: This is a temporary hack-fix for LSTM weights, which use sigmoid, which currently throws an error on CUDA: `no cuda implementation for sigmoid`
+        if name.contains("hidden") {
+            ws.insert(name, Var::from_tensor(&tensor.to_device(&Device::Cpu)?)?);
+        } else {
+            ws.insert(name, Var::from_tensor(&tensor.to_device(device)?)?); 
+        }
     }
 
     Ok(())

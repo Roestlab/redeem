@@ -69,7 +69,7 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
 
         let mut varmap = candle_nn::VarMap::new();
-        create_var_map(&mut varmap, tensor_data)?;
+        create_var_map(&mut varmap, tensor_data, &device)?;
 
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
