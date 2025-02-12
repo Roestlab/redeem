@@ -170,8 +170,12 @@ impl PositionalEncoding {
 impl Module for PositionalEncoding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let seq_len = x.dim(1)?;
+        let batch_size = x.dim(0)?;
+
         let pe_slice = self.pe.narrow(1, 0, seq_len)?;
-        x.add(&pe_slice)
+        let pe_expanded = pe_slice.expand(&[batch_size, seq_len, 248])?; // Match batch size
+
+        x.add(&pe_expanded)
     }
 }
 
