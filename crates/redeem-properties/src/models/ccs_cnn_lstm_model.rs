@@ -208,71 +208,82 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-        info!("Fine-tuning model with {} epochs and learning rate {}", epochs, learning_rate);
-
+        let num_batches = (training_data.len() as f64 / batch_size as f64).ceil() as usize;
+        info!(
+            "Fine-tuning model on {} batches with batch size {} and learning rate {} for {} epochs",
+            num_batches, batch_size, learning_rate, epochs
+        );
+    
         let params = candle_nn::ParamsAdamW {
             lr: learning_rate,
             ..Default::default()
         };
         let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
-
+    
         for epoch in 0..epochs {
-            let progress = Progress::new(training_data.len(), &format!("[fine-tuning] Epoch {}: ", epoch));
+            let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
             let mut total_loss = 0.0;
-            for peptide in training_data {
-                let naked_peptide = remove_mass_shift(&peptide.sequence.to_string());
-
-                // Collect indices of non-zero modifications
+            let mut batch_inputs = Vec::new();
+            let mut batch_targets = Vec::new();
+    
+            for (i, peptide) in training_data.iter().enumerate() {
+                let naked_peptide = remove_mass_shift(&peptide.sequence);
                 let modified_indices = get_modification_indices(&peptide.sequence);
-
-                // Extract masses and indices
-                let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence.to_string());
-
+                let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence);
+    
                 let mut found_modifications = Vec::new();
-
-                // Map modifications based on extracted masses and indices
                 for (mass, index) in extracted_masses_and_indices {
-                    let amino_acid = peptide.sequence.to_string().chars().nth(index).unwrap_or('\0');
-                    if let Some(modification) =
-                        modifications.get(&(format!("{:.4}", mass), Some(amino_acid)))
-                    {
+                    let amino_acid = peptide.sequence.chars().nth(index).unwrap_or('\0');
+                    if let Some(modification) = modifications.get(&(format!("{:.4}", mass), Some(amino_acid))) {
                         found_modifications.push(modification.name.clone());
-                    } else if let Some(modification) =
-                        modifications.get(&(format!("{:.4}", mass), None))
-                    {
+                    } else if let Some(modification) = modifications.get(&(format!("{:.4}", mass), None)) {
                         found_modifications.push(modification.name.clone());
                     }
                 }
-
-                // Prepare strings for prediction
+    
                 let peptides_str = &vec![naked_peptide.to_string()];
                 let mod_str = &found_modifications.join("; ");
                 let mod_site_str = &modified_indices;
                 let charge = Some(peptide.charge.unwrap());
-
-                // Forward pass
-                let input =
-                    self.encode_peptides(peptides_str, mod_str, mod_site_str, charge, None, None)?;
-                let predicted = self.forward(&input)?;
-
-                // Compute loss
-                let loss = candle_nn::loss::mse(
-                    &predicted,
-                    &Tensor::new(&[peptide.ion_mobility.unwrap()], &self.device)?,
-                )?;
-
-                // Backward pass
-                opt.backward_step(&loss)?;
-
-                total_loss += loss.to_vec0::<f32>()?;
-
-                progress.inc();
-                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+                
+                let input = self.encode_peptides(peptides_str, mod_str, mod_site_str, charge, None, None)?;
+                batch_inputs.push(input);
+                batch_targets.push(peptide.ion_mobility.unwrap());
+    
+                if batch_inputs.len() == batch_size || i == training_data.len() - 1 {
+                    let max_seq_len = batch_inputs.iter().map(|t| t.shape().dims3().unwrap().1).max().unwrap();
+                    let padded_inputs: Result<Vec<_>> = batch_inputs
+                        .iter()
+                        .map(|t| {
+                            let (_, seq_len, _) = t.shape().dims3()?;
+                            if seq_len < max_seq_len {
+                                t.pad_with_zeros(1, 0, max_seq_len - seq_len)
+                            } else {
+                                Ok(t.clone())
+                            }
+                        })
+                        .collect::<Result<Vec<_>, _>>() 
+                        .map_err(Into::into);
+                    
+                    let padded_inputs = padded_inputs?;
+                    let input_batch = Tensor::cat(&padded_inputs, 0)?;
+                    let target_batch = Tensor::new(batch_targets.as_slice(), &self.device)?;
+    
+                    let predicted = self.forward(&input_batch)?;
+                    let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
+                    opt.backward_step(&loss)?;
+    
+                    total_loss += loss.to_vec0::<f32>()?;
+                    batch_inputs.clear();
+                    batch_targets.clear();
+    
+                    progress.inc();
+                    progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+                }
             }
-            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Loss: {}", epoch, total_loss / training_data.len() as f32));
+            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Batch Loss: {}", epoch, total_loss / num_batches as f32));
             progress.finish();
         }
-        
         Ok(())
     }
     
@@ -450,7 +461,7 @@ mod tests {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
-        let device = Device::Cpu;
+        let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
         let mut model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
         let training_data = vec![

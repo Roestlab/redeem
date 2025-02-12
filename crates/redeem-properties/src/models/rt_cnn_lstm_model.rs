@@ -201,10 +201,9 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         batch_size: usize,
         learning_rate: f64,
         epochs: usize,
-    ) -> Result<()> {
-        info!("Fine-tuning model with {} epochs and learning rate {}", epochs, learning_rate);
-    
+    ) -> Result<()> {   
         let num_batches = (training_data.len() as f64 / batch_size as f64).ceil() as usize;
+        info!("Fine-tuning model on {} batches with batch size {} and learning rate {} for {} epochs", num_batches, batch_size, learning_rate, epochs);
     
         let params = candle_nn::ParamsAdamW {
             lr: learning_rate,
