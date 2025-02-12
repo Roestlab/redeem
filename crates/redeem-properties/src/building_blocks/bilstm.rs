@@ -94,8 +94,6 @@ impl BidirectionalLSTM {
     fn apply_bidirectional_layer(&self, input: &Tensor, lstm_forward: &rnn::LSTM, lstm_backward: &rnn::LSTM, h0: &Tensor, c0: &Tensor, layer_idx: &i32) -> Result<(Tensor, (Tensor, Tensor))> {
         let (batch_size, seq_len, input_size) = input.dims3()?;
     
-        // println!("Layer {}:", layer_idx);
-        
         // Print first and last 5 values of the original input
         let input_vec = input.to_vec3::<f32>()?;
     
@@ -104,29 +102,16 @@ impl BidirectionalLSTM {
         let c0_forward = c0.narrow(0, 0, 1)?.reshape((batch_size, c0.dim(2)?))?;
         
         let state_forward = rnn::LSTMState{ h: h0_forward.clone(), c: c0_forward.clone() };
-    
-        // println!("  Forward direction:");
-
-        // println!("Forward input full values:");
-        // let _ = print_tensor(&input, 4, None, Some(3));
-
-        // println!("      input shape: {:?}", input.shape());
-        // println!("      h0 first 5 values: {:?}", h0_forward.to_vec2::<f32>()?[0].iter().take(5).collect::<Vec<_>>());
 
         let output_forward_states: Vec<rnn::LSTMState> = lstm_forward.seq_init(&input, &state_forward)?;
         let output_forward = Tensor::stack(&output_forward_states.iter().map(|state| state.h().clone()).collect::<Vec<_>>(), 1)?;
         let last_forward_state = output_forward_states.last().unwrap().h().clone();
-        
-        // println!("    hn shape: {:?}", last_forward_state.shape());
-        // println!("    hn: {:?}", last_forward_state.to_vec2::<f32>()?[0].iter().take(5).collect::<Vec<_>>());
     
         // Backward pass
         let h0_backward = h0.narrow(0, 1, 1)?.reshape((batch_size, h0.dim(2)?))?;
         let c0_backward = c0.narrow(0, 1, 1)?.reshape((batch_size, c0.dim(2)?))?;
 
         let state_backward = rnn::LSTMState{ h: h0_backward.clone(), c: c0_backward.clone() };
-    
-        // println!("  Backward direction:");
     
         // Correctly reverse the input sequence
         let mut reversed_input = vec![vec![vec![0.0; input_size]; seq_len]; batch_size];
@@ -143,13 +128,7 @@ impl BidirectionalLSTM {
 
         // Print first and last 5 values of the reversed input
         let reversed_input_vec = input_reversed.to_vec3::<f32>()?;
-    
-        // Print the entire reversed input for debugging
-        // println!("Reversed input full values:");
-        // let _ = print_tensor(&input_reversed, 4, None, Some(3));
-    
-        // println!("      input_reversed shape: {:?}", input_reversed.shape());
-        // println!("      h0 first 5 values: {:?}", h0_backward.to_vec2::<f32>()?[0].iter().take(5).collect::<Vec<_>>());
+
     
         let output_backward_states = lstm_backward.seq_init(&input_reversed, &state_backward)?;
         let output_backward = Tensor::stack(&output_backward_states.iter().map(|state| state.h().clone()).collect::<Vec<_>>(), 1)?;
@@ -157,17 +136,9 @@ impl BidirectionalLSTM {
         // Use the last state of the backward LSTM (which corresponds to the first element of the original sequence)
         let last_backward_state = output_backward_states.last().unwrap().h().clone();
     
-        // println!("    hn shape: {:?}", last_backward_state.shape());
-        // println!("    hn: {:?}", last_backward_state.to_vec2::<f32>()?[0].iter().take(5).collect::<Vec<_>>());
-
-        // println!("     hn full values:");
-        // let _ = print_tensor(&output_backward, 4, None, Some(3));
-    
         // Combine the forward and backward hidden states for hn
         let hn = Tensor::cat(&[last_forward_state.unsqueeze(0)?, last_backward_state.unsqueeze(0)?], 0)?; // Shape: [2, 1, 128]
         let hn_concat = Tensor::cat(&[last_forward_state, last_backward_state], 1)?; // Shape: [1, 256]
-    
-        // println!("  Concatenated hn shape: {:?}", hn_concat.shape());
 
         // Combine the forward and backwards cell states for cn
         let cn = Tensor::cat(&[output_forward_states.last().unwrap().c().clone(), output_backward_states.last().unwrap().c().clone()], 0)?; // Shape: [2, 1, 128]
@@ -182,16 +153,9 @@ impl BidirectionalLSTM {
     // New method that returns output and states
     pub fn forward_with_state(&self, xs: &Tensor) -> Result<(Tensor, (Tensor, Tensor))> {
         let (batch_size, seq_len, input_size) = xs.dims3()?;
-        // println!("Input shape: {:?}", xs.shape());
 
-        let h0 = &self.h0;
-        let c0 = &self.c0;
-        // println!("h0 shape: {:?}", h0.shape());
-        // println!("c0 shape: {:?}", c0.shape());
-
-        // println!("     h0 full values:");
-        // let _ = print_tensor(&h0, 4, None, Some(3));
-
+        let h0 = &self.h0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
+        let c0 = &self.c0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
 
         let h0_1 = h0.narrow(0, 0, 2)?;
         let h0_2 = h0.narrow(0, 2, 2)?;
