@@ -420,7 +420,7 @@ impl HiddenHfaceTransformer {
         };
 
         // Forward pass through BERT encoder
-        self.bert.forward(x, &mask)
+        self.bert.forward(&x.contiguous()?, &mask)
     }
 }
 
