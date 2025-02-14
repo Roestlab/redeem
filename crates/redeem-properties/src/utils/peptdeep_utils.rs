@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, Error};
 use std::fs::File;
+use std::ops::Index;
 use std::path::PathBuf;
 use std::io;
 use std::fs;
@@ -271,15 +272,45 @@ pub fn extract_masses_and_indices(peptide: &str) -> Vec<(f64, usize)> {
 pub fn get_modification_indices(peptide: &str) -> String {
     let re = Regex::new(r"\[.*?\]").unwrap();
     let mut indices = Vec::new();
-    let mut offset = 0;
+    let mut offset = 1; // Offset by 1 for 0-based index
 
     for mat in re.find_iter(peptide) {
-        let index = mat.start() - offset;
+        let index = mat.start().saturating_sub(offset);
         indices.push(index.to_string());
         offset += mat.end() - mat.start();
     }
 
     indices.join(";")
+}
+
+pub fn get_modification_string(
+    peptide: &str,
+    modification_map: &HashMap<(String, Option<char>), ModificationMap>,
+) -> String {
+    let naked_peptide = remove_mass_shift(peptide);
+
+    let extracted_masses_and_indices = extract_masses_and_indices(&peptide.to_string());
+
+    let mut found_modifications = Vec::new();
+
+    // Map modifications based on extracted masses and indices
+    for (mass, index) in extracted_masses_and_indices {
+        // Subtract 1 from index to get 0-based index, ensure it's within bounds
+        let index = index.saturating_sub(1);
+        let amino_acid = naked_peptide.chars().nth(index).unwrap_or('\0');
+
+        if let Some(modification) = modification_map
+            .get(&(format!("{:.4}", mass), Some(amino_acid)))
+        {
+            found_modifications.push(modification.name.clone());
+        } else if let Some(modification) =
+            modification_map.get(&(format!("{:.4}", mass), None))
+        {
+            found_modifications.push(modification.name.clone());
+        }
+    }
+
+    found_modifications.join(";")
 }
 
 
@@ -345,13 +376,13 @@ mod tests {
         // Test cases
         let test_cases = vec![
             ("PEPTIDE", ""),
-            ("PEPT[+15.9949]IDE", "4"),
-            ("P[+15.9949]EPT[+79.99]IDE", "1;4"),
-            ("TVQSLEIDLDSM[+15.9949]R", "12"),
-            ("TVQS[+79.99]LEIDLDSM[+15.9949]R", "4;12"),
+            ("PEPT[+15.9949]IDE", "3"),
+            ("P[+15.9949]EPT[+79.99]IDE", "0;3"),
+            ("TVQSLEIDLDSM[+15.9949]R", "11"),
+            ("TVQS[+79.99]LEIDLDSM[+15.9949]R", "3;11"),
             ("[+42.0106]PEPTIDE", "0"),
-            ("PEPTIDE[+42.0106]", "7"),
-            ("P[+15.9949]EP[+79.99]T[+15.9949]IDE", "1;3;4"),
+            ("PEPTIDE[+42.0106]", "6"),
+            ("P[+15.9949]EP[+79.99]T[+15.9949]IDE", "0;2;3"),
         ];
 
         for (peptide, expected) in test_cases {
@@ -382,6 +413,30 @@ mod tests {
             println!("Peptide: {}, Expected: {:?}, Result: {:?}", peptide, expected, result);
             assert_eq!(result, expected, "Failed for peptide: {}", peptide);
         }
+    }
+
+    #[test]
+    fn test_get_modification_string() {
+        let modification_map = load_modifications().unwrap();
+
+        let test_cases = vec![
+            ("PEPTIDE", ""),
+            ("PEPT[+15.9949]IDE", "Oxidation@T"),
+            ("P[+15.9949]EPT[+79.9663]IDE", "Oxidation@P;Phospho@T"),
+            ("TVQSLEIDLDSM[+15.9949]R", "Oxidation@M"),
+            ("TVQS[+79.9663]LEIDLDSM[+15.9949]R", "Phospho@S;Oxidation@M"),
+            ("[+42.0106]PEPTIDE", "Acetyl@Protein_N-term"),
+            ("PEPTIDE[+42.0106]", ""),
+            ("P[+15.9949]EP[+79.9663]T[+15.9949]IDE", "Oxidation@P;Oxidation@T"),
+        ];
+
+
+        for (peptide, expected) in test_cases {
+            let result = get_modification_string(peptide, &modification_map);
+            println!("Peptide: {}, Expected: {}, Result: {}", peptide, expected, result);
+            assert_eq!(result, expected, "Failed for peptide: {}", peptide);
+        }
+
     }
 
     #[test]
