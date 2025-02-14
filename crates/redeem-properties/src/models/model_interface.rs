@@ -350,7 +350,19 @@ pub trait ModelInterface: Send + Sync {
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-        let num_batches = (training_data.len() as f64 / batch_size as f64).ceil() as usize;
+        let num_batches = if training_data.len() < batch_size {
+            1 // Ensure at least one batch if batch_size is larger than total length
+        } else {
+            let full_batches = training_data.len() / batch_size;
+            let remainder = training_data.len() % batch_size;
+        
+            if remainder > 0 {
+                full_batches + 1 
+            } else {
+                full_batches 
+            }
+        };
+
         info!(
             "Fine-tuning {} model on {} batches with batch size {} and learning rate {} for {} epochs",
             self.get_model_arch(), num_batches, batch_size, learning_rate, epochs
