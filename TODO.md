@@ -6,12 +6,9 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 ### Todo
 
+- [ ] freeze certain layers for fine-tuning?  
 - [ ] xgboost/semi-supervised learning param cleanup  
-- [ ] Open PR for pub bert encoder struct  
 - [ ] Clean up code / remove comments and unneeded debug macros  
-- [ ] Implement fine tuning for peptdeep CCS CNN-LSTM model  
-- [ ] implement fine tuning for peptdeep MS2 Bert model  
-- [ ] Batch prediction (peptide properties)  
 
 ### In Progress
 
@@ -27,4 +24,8 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 - [x] Implement peptdeep MS2 Bert model  
 - [x] Implement fine tuning for peptdeep RT CNN-LSTM model  
 - [x] implement peptideep RT CNN-LSTM model  
+- [x] implement fine tuning for peptdeep MS2 Bert model  
+- [x] Implement fine tuning for peptdeep CCS CNN-LSTM model  
+- [x] Batch prediction (peptide properties)  
+- [x] Open PR for pub bert encoder struct  
 
