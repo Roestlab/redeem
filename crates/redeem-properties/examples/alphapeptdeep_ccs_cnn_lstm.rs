@@ -5,7 +5,7 @@ use redeem_properties::{
         model_interface::{ModelInterface, PredictionResult},
         ccs_cnn_lstm_model::CCSCNNLSTMModel,
     },
-    utils::{data_handling::PeptideData, peptdeep_utils::{load_modifications, ccs_to_mobility_bruker}},
+    utils::{data_handling::PeptideData, peptdeep_utils::{load_modifications, ccs_to_mobility_bruker, ion_mobility_to_ccs_bruker}},
 };
 use std::path::PathBuf;
 
@@ -108,18 +108,29 @@ fn main() -> Result<()> {
         PeptideData::new("KLIDHQGLYL", Some(2), None, None, None, Some(0.937), None),
     ];
 
+    // Sequence	Monoisotopic Mass (Da)	Charge	m/z
+    // SKEEETSIDVAGKP	1488.7308	2	745.3727
+    // LPILVPSAKKAIYM	1542.9208	2	772.4677
+    // RTPKIQVYSRHPAE	1680.906	3	561.3093
+    // EEVQIDILDTAGQE	1558.7362	2	780.3754
+    // GAPLVKPLPVNPTDPA	1584.8875	2	793.4511
+    // FEDENFILK	1153.5655	2	577.7901
+    // YPSLPAQQV	1001.5182	1	1002.5255
+    // YLPPATQVV	986.5437	2	494.2792
+    // YISPDQLADLYK	1424.7187	2	713.3667
+    // PSIVRLLQCDPSSAGQF	1816.9142	2	909.4644
 
     let test_peptides = vec![
-        ("SKEEETSIDVAGKP", "", "", 2, 0.998),
-        ("LPILVPSAKKAIYM", "", "", 2, 1.12),
-        ("RTPKIQVYSRHPAE", "", "", 3, 0.838),
-        ("EEVQIDILDTAGQE", "", "", 2, 1.02),
-        ("GAPLVKPLPVNPTDPA", "", "", 2, 1.01),
-        ("FEDENFILK", "", "", 2, 0.897),
-        ("YPSLPAQQV", "", "", 1, 1.45),
-        ("YLPPATQVV", "", "", 2, 0.846),
-        ("YISPDQLADLYK", "", "", 2, 0.979),
-        ("PSIVRLLQCDPSSAGQF", "", "", 2, 1.10),
+        ("SKEEETSIDVAGKP", "", "", 2, ion_mobility_to_ccs_bruker(0.998, 2, 745.3727)),
+        ("LPILVPSAKKAIYM", "", "", 2, ion_mobility_to_ccs_bruker(1.12, 2, 772.4677)),
+        ("RTPKIQVYSRHPAE", "", "", 3, ion_mobility_to_ccs_bruker(0.838, 3, 561.3093)),
+        ("EEVQIDILDTAGQE", "", "", 2, ion_mobility_to_ccs_bruker(1.02, 2, 780.3754)),
+        ("GAPLVKPLPVNPTDPA", "", "", 2, ion_mobility_to_ccs_bruker(1.01, 2, 793.4511)),
+        ("FEDENFILK", "", "", 2, ion_mobility_to_ccs_bruker(0.897, 2, 577.7901)),
+        ("YPSLPAQQV", "", "", 1, ion_mobility_to_ccs_bruker(1.45, 1, 1002.5255)),
+        ("YLPPATQVV", "", "", 2, ion_mobility_to_ccs_bruker(0.846, 2, 494.2792)),
+        ("YISPDQLADLYK", "", "", 2, ion_mobility_to_ccs_bruker(0.979, 2, 713.3667)),
+        ("PSIVRLLQCDPSSAGQF", "", "", 2, ion_mobility_to_ccs_bruker(1.10, 2, 909.4644)),
     ];
 
     let prediction_context = PredictionContext::new(&test_peptides);

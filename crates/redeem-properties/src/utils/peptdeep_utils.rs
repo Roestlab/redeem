@@ -357,6 +357,26 @@ pub fn ccs_to_mobility_bruker(ccs_value: f64, charge: f64, precursor_mz: f64) ->
 }
 
 
+/// Converts mobility to CCS (Collision Cross Section) for Bruker (timsTOF) instruments.
+/// 
+/// This function calculates the CCS using the formula:
+/// ccs_value = (mobility * charge * CCS_IM_COEF) / sqrt(reduced_mass)
+/// 
+/// # Arguments
+/// 
+/// * `mobility` - The mobility value
+/// * `charge` - The charge of the ion
+/// * `precursor_mz` - The precursor mass-to-charge ratio (m/z)
+/// 
+/// # Returns
+/// 
+/// The calculated CCS value as a f64
+pub fn ion_mobility_to_ccs_bruker(mobility: f64, charge: i32, precursor_mz: f64) -> f32 {
+    let reduced_mass = get_reduced_mass(precursor_mz, charge as f64);
+    ((mobility * (charge as f64) * CCS_IM_COEF) / f64::sqrt(reduced_mass)) as f32
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +473,23 @@ mod tests {
         println!("Difference: {}", (result - expected).abs());
 
         assert_eq!(result, expected, "Failed for ccs_to_mobility_bruker");
+
+    }
+
+    #[test]
+    fn test_ion_mobility_to_ccs_bruker() {
+        let mobility = 8.078969627454307e-05;
+        let charge = 2.0;
+        let precursor_mz = 762.329553;
+
+        let result = ion_mobility_to_ccs_bruker(mobility, charge, precursor_mz);
+        
+        let expected = 0.032652;
+        println!("Rust result: {}", result);
+        println!("Python result: {}", expected);
+        println!("Difference: {}", (result - expected).abs());
+
+        assert_eq!(result, expected, "Failed for ion_mobility_to_ccs_bruker");
 
     }
 
