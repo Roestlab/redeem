@@ -1,4 +1,4 @@
-use candle_core::{cuda::DeviceId, DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{rnn, Module, VarBuilder, RNN};
 // use crate::utils::logging::print_tensor;
 
