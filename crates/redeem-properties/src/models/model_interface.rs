@@ -43,7 +43,46 @@ impl PropertyType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
+pub enum PredictionValue {
+    Single(f32),
+    Matrix(Vec<Vec<f32>>),
+}
+
+impl PredictionValue {
+    // Returns a reference to the element at position (i, j) if it exists
+    pub fn get(&self, i: usize, j: usize) -> Option<&f32> {
+        match self {
+            PredictionValue::Single(_) => None,  
+            PredictionValue::Matrix(vec) => vec.get(i).and_then(|row| row.get(j)),
+        }
+    }
+
+}
+
+impl Index<usize> for PredictionValue {
+    type Output = f32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        match self {
+            PredictionValue::Single(val) => val,
+            PredictionValue::Matrix(matrix) => &matrix[index][0], // Single index for Matrix (first element of each row)
+        }
+    }
+}
+
+impl Index<(usize, usize)> for PredictionValue {
+    type Output = f32;
+
+    fn index(&self, index: (usize, usize)) -> &Self::Output {
+        match self {
+            PredictionValue::Single(val) => val, // Single variant does not support multi-indexing
+            PredictionValue::Matrix(matrix) => &matrix[index.0][index.1], // Multi-index for Matrix
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum PredictionResult {
     RTResult(Vec<f32>),
     IMResult(Vec<f32>),
@@ -59,45 +98,11 @@ impl PredictionResult {
         }
     }
 
-    pub fn get(&self, i: usize, j: usize) -> Option<&f32> {
+    pub fn get_prediction_entry(&self, index: usize) -> PredictionValue {
         match self {
-            PredictionResult::RTResult(_) => None,
-            PredictionResult::IMResult(_) => None,
-            PredictionResult::MS2Result(vec) => vec
-                .get(i)
-                .and_then(|row| row.get(j).and_then(|inner| inner.get(0))),
-        }
-    }
-
-    pub fn get_mut(&mut self, i: usize, j: usize) -> Option<&mut f32> {
-        match self {
-            PredictionResult::RTResult(_) => None,
-            PredictionResult::IMResult(_) => None,
-            PredictionResult::MS2Result(vec) => vec
-                .get_mut(i)
-                .and_then(|row| row.get_mut(j).and_then(|inner| inner.get_mut(0))),
-        }
-    }
-}
-
-impl Index<usize> for PredictionResult {
-    type Output = f32;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        match self {
-            PredictionResult::RTResult(vec) => &vec[index],
-            PredictionResult::IMResult(vec) => &vec[index],
-            PredictionResult::MS2Result(vec) => &vec[index][0][0], // Access the first element of the innermost vector
-        }
-    }
-}
-
-impl IndexMut<usize> for PredictionResult {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        match self {
-            PredictionResult::RTResult(vec) => &mut vec[index],
-            PredictionResult::IMResult(vec) => &mut vec[index],
-            PredictionResult::MS2Result(vec) => &mut vec[index][0][0], // Access the first element of the innermost vector
+            PredictionResult::RTResult(vec) => PredictionValue::Single(vec[index].clone()),
+            PredictionResult::IMResult(vec) => PredictionValue::Single(vec[index].clone()),
+            PredictionResult::MS2Result(vec) => PredictionValue::Matrix(vec[index].clone()), 
         }
     }
 }
@@ -145,9 +150,12 @@ pub trait ModelInterface: Send + Sync {
     /// Predict the retention times for a peptide sequence.
     ///
     /// # Arguments
-    ///   * `peptide_sequence` - A vector of peptide sequences to predict retention times for.
-    ///   * `mods` - A string representing the modifications for each peptide.
-    ///   * `mod_sites` - A string representing the modification sites for each peptide.
+    ///   * `peptide_sequences` - A vector of peptide sequences.
+    ///   * `mods` - A vector of strings representing the modifications for each peptide.
+    ///   * `mod_sites` - A vector of strings representing the modification sites for each peptide.
+    ///  * `charge` - An optional vector of charge states for each peptide.
+    ///  * `nce` - An optional vector of nominal collision energies for each peptide.
+    ///  * `instrument` - An optional vector of instrument names for each peptide.
     ///
     /// # Returns
     ///    A vector of predicted retention times.
