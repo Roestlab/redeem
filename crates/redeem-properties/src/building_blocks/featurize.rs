@@ -1,27 +1,44 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, ops::Deref};
 use ndarray::Array2;
-use candle_core::{Tensor, Device};
+use candle_core::{cuda::cudarc::runtime::result::device, Device, Tensor};
 
 use crate::building_blocks::building_blocks::AA_EMBEDDING_SIZE;
 
 /// Convert peptide sequences into AA ID array.
 /// 
 /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L88
-pub fn get_aa_indices(seq_array: &[String]) -> Result<Array2<i64>> {
-    let seq_len = seq_array[0].len();
-    let mut result = Array2::<i64>::zeros((seq_array.len(), seq_len + 2));
+pub fn get_aa_indices(seq: &str) -> Result<Array2<i64>> {
+    let seq_len = seq.len();
+    let mut result = Array2::<i64>::zeros((1, seq_len + 2));
 
-    for (i, seq) in seq_array.iter().enumerate() {
-        for (j, c) in seq.chars().enumerate() {
-            let aa_index = (c as i64) - ('A' as i64) + 1;
-            result[[i, j + 1]] = aa_index;
-        }
+    for (j, c) in seq.chars().enumerate() {
+        let aa_index = (c as i64) - ('A' as i64) + 1;
+        result[[0, j + 1]] = aa_index;
     }
-    
+
     Ok(result)
 }
 
+/// Convert peptide sequences into ASCII code array.
+///
+/// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L115
+pub fn get_ascii_indices(peptide_sequences: &[String], device: Device) -> Result<Tensor> {
+    // println!("Peptide sequences to encode: {:?}", peptide_sequences);
+    let max_len = peptide_sequences.iter().map(|s| s.len()).max().unwrap_or(0) + 2; // +2 for padding
+    let batch_size = peptide_sequences.len();
+
+    let mut aa_indices = vec![0u32; batch_size * max_len];
+
+    for (i, peptide) in peptide_sequences.iter().enumerate() {
+        for (j, c) in peptide.chars().enumerate() {
+            aa_indices[i * max_len + j + 1] = c as u32; // +1 to skip the first padding
+        }
+    }
+    let aa_indices_tensor =
+        Tensor::from_slice(&aa_indices, (batch_size, max_len), &device)?;
+    Ok(aa_indices_tensor)
+}
 
 /// One-hot encode amino acid indices and concatenate additional tensors.
 pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor> {
