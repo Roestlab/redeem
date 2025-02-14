@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, ops::Deref};
 use ndarray::Array2;
-use candle_core::{cuda::cudarc::runtime::result::device, Device, Tensor};
+use candle_core::{Device, Tensor};
 
 use crate::building_blocks::building_blocks::AA_EMBEDDING_SIZE;
 
