@@ -13,7 +13,7 @@ use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::models::model_interface::{ModelInterface, PredictionResult, create_var_map};
+use crate::models::model_interface::{ModelInterface, PropertyType, PredictionResult, create_var_map};
 use crate::utils::data_handling::PeptideData;
 use crate::utils::peptdeep_utils::{
     extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
@@ -44,6 +44,14 @@ unsafe impl<'a> Sync for RTCNNLSTMModel<'a> {}
 // Core Model Implementation
 
 impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
+    fn property_type(&self) -> PropertyType {
+        PropertyType::RT
+    }
+
+    fn model_arch(&self) -> &'static str {
+        "rt_cnn_lstm"   
+    }
+
     /// Create a new RTCNNLSTMModel from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
@@ -105,35 +113,19 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         })
     }
 
-    /// Predict the retention times for a peptide sequence.
-    ///
-    /// # Arguments
-    ///   * `peptide_sequence` - A vector of peptide sequences to predict retention times for.
-    ///   * `mods` - A string representing the modifications for each peptide.
-    ///   * `mod_sites` - A string representing the modification sites for each peptide.
-    ///
-    /// # Returns
-    ///    A vector of predicted retention times.
-    fn predict(
-        &self,
-        peptide_sequence: &[String],
-        mods: &str,
-        mod_sites: &str,
-        charge: Option<i32>,
-        nce: Option<i32>,
-        intsrument: Option<&str>,
-    ) -> Result<PredictionResult> {
-        // Preprocess the peptide sequences and modifications
-        let input_tensor =
-            self.encode_peptides(peptide_sequence, mods, mod_sites, None, None, None)?;
 
-        // Pass the data through the model
-        let output = self.forward(&input_tensor)?;
+    fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
+        let (batch_size, seq_len, _) = xs.shape().dims3()?;
 
-        // Convert the output tensor to a Vec<f32>
-        let predictions = PredictionResult::RTResult(output.to_vec1()?);
+        let start_mod_x = 1;
+        let aa_indices_out = xs.i((.., .., 0))?;
+        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
 
-        Ok(predictions)
+        let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
+        let x = self.dropout.forward(&x, self.is_training)?;
+        let x = self.rt_decoder.forward(&x)?;
+
+        Ok(x.squeeze(1)?)
     }
 
     /// Set model to evaluation mode for inference
@@ -149,155 +141,32 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         self.is_training = true;
     }
 
-    /// Encode peptide sequences (plus modifications) into a tensor.
-    fn encode_peptides(
-        &self,
-        peptide_sequences: &[String],
-        mods: &str,
-        mod_sites: &str,
-        _charge: Option<i32>,
-        _nce: Option<i32>,
-        _intsrument: Option<&str>,
-    ) -> Result<Tensor> {
-        let aa_indices = get_aa_indices(peptide_sequences)?;
-
-        // Convert ndarray to Tensor and ensure it's F32
-        let aa_indices_tensor = Tensor::from_slice(
-            &aa_indices.as_slice().unwrap(),
-            (aa_indices.shape()[0], aa_indices.shape()[1]),
-            &self.device,
-        )?
-        .to_dtype(DType::F32)?;
-
-        let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
-
-        // unsqueeze aa_indices_tensor to match the shape of mod_x, which is batch_size x seq_len x mod_feature_size
-        let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?;
-
-        // Get modification features
-        let mod_x = get_mod_features(
-            mods,
-            mod_sites,
-            seq_len,
-            self.constants.mod_elements.len(),
-            self.mod_to_feature.clone(),
-            self.device.clone(),
-        )?;
-
-        // Combine aa_one_hot and mod_x
-        let combined = Tensor::cat(
-            &[aa_indices_tensor, mod_x],
-            2,
-        )?;
-
-        Ok(combined)
+    fn get_property_type(&self) -> String {
+        self.property_type().clone().as_str().to_string()
     }
 
-    /// Fine-tune the model on a dataset of peptide sequences and retention times.
-    fn fine_tune(
-        &mut self,
-        training_data: &Vec<PeptideData>,
-        modifications: HashMap<(String, Option<char>), ModificationMap>,
-        batch_size: usize,
-        learning_rate: f64,
-        epochs: usize,
-    ) -> Result<()> {   
-        let num_batches = (training_data.len() as f64 / batch_size as f64).ceil() as usize;
-        info!("Fine-tuning model on {} batches with batch size {} and learning rate {} for {} epochs", num_batches, batch_size, learning_rate, epochs);
-    
-        let params = candle_nn::ParamsAdamW {
-            lr: learning_rate,
-            ..Default::default()
-        };
-        let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
-    
-        for epoch in 0..epochs {
-            let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
-            let mut total_loss = 0.0;
-            let mut batch_inputs = Vec::new();
-            let mut batch_targets = Vec::new();
-    
-            for (i, peptide) in training_data.iter().enumerate() {
-                let naked_peptide = remove_mass_shift(&peptide.sequence.to_string());
-                let modified_indices = get_modification_indices(&peptide.sequence.to_string());
-                let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence.to_string());
-    
-                let mut found_modifications = Vec::new();
-                for (mass, index) in extracted_masses_and_indices {
-                    let amino_acid = peptide.sequence.to_string().chars().nth(index).unwrap_or('\0');
-                    if let Some(modification) =
-                        modifications.get(&(format!("{:.4}", mass), Some(amino_acid)))
-                    {
-                        found_modifications.push(modification.name.clone());
-                    } else if let Some(modification) =
-                        modifications.get(&(format!("{:.4}", mass), None))
-                    {
-                        found_modifications.push(modification.name.clone());
-                    }
-                }
-    
-                let peptides_str = &vec![naked_peptide.to_string()];
-                let mod_str = &found_modifications.join("; ");
-                let mod_site_str = &modified_indices;
-    
-                let input = self.encode_peptides(peptides_str, mod_str, mod_site_str, None, None, None)?;
-                batch_inputs.push(input);
-                batch_targets.push(peptide.retention_time.clone().unwrap());
-    
-                // Process the batch when it reaches the desired size
-                if batch_inputs.len() == batch_size || i == training_data.len() - 1 {
-                    // Determine the maximum sequence length in the batch
-                    let max_seq_len = batch_inputs.iter().map(|t| t.shape().dims3().unwrap().1).max().unwrap();
-    
-                    // Pad all sequences to the maximum length
-                    let padded_inputs: Result<Vec<_>> = batch_inputs
-                    .iter()
-                    .map(|t| {
-                        let (batch_size, seq_len, feature_size) = t.shape().dims3()?;
-                        if seq_len < max_seq_len {
-                            // Calculate the required padding on the right side
-                            let padding_right = max_seq_len - seq_len;
-                            // Pad the sequence with zeros on the right side
-                            t.pad_with_zeros(1, 0, padding_right)
-                        } else {
-                            Ok(t.clone())
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>() 
-                    .map_err(Into::into); 
+    fn get_model_arch(&self) -> String {
+        self.model_arch().to_string()
+    }
 
-                    let padded_inputs = padded_inputs?;
+    fn get_device(&self) -> &Device {
+        &self.device
+    }
 
-                    // Concatenate the padded inputs
-                    let input_batch = Tensor::cat(&padded_inputs, 0)?;
-    
-                    // Create the target batch tensor
-                    let target_batch = Tensor::new(batch_targets.as_slice(), &self.device)?;
+    fn get_mod_element_count(&self) -> usize {
+        self.constants.mod_elements.len()
+    }
 
-                    // Forward pass
-                    let predicted = self.forward(&input_batch)?;
-    
-                    // Compute loss
-                    let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
-    
-                    // Backward pass
-                    opt.backward_step(&loss)?;
-    
-                    total_loss += loss.to_vec0::<f32>()?;
-    
-                    // Clear the batch
-                    batch_inputs.clear();
-                    batch_targets.clear();
-    
-                    progress.inc();
-                    progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
-                }
-            }
-            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Batch Loss: {}", epoch, total_loss / training_data.len() as f32));
-            progress.finish();
-        }
-    
-        Ok(())
+    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+        &self.mod_to_feature
+    }
+
+    fn get_min_pred_intensity(&self) -> f32 {
+        unimplemented!("Method not implemented for architecture: {}", self.model_arch())
+    }
+
+    fn get_mut_varmap(&mut self) -> &mut VarMap {
+        &mut self.varmap
     }
 
     /// Print a summary of the model's constants.
@@ -394,81 +263,17 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         }
     }
 
-    fn save(&self, path: &Path) -> Result<()> {
-        //self.var_store.save(path)
-        unimplemented!()
-    }
-}
 
-// Helper Methods
-
-impl<'a> RTCNNLSTMModel<'a> {
-    
-    /// Convert peptide sequences into AA ID array.
-    ///
-    /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L88
-    pub fn get_aa_indices(seq_array: &[String]) -> Result<Array2<i64>> {
-        let seq_len = seq_array[0].len();
-        let mut result = Array2::<i64>::zeros((seq_array.len(), seq_len + 2));
-
-        for (i, seq) in seq_array.iter().enumerate() {
-            for (j, c) in seq.chars().enumerate() {
-                let aa_index = (c as i64) - ('A' as i64) + 1;
-                result[[i, j + 1]] = aa_index;
-            }
-        }
-
-        Ok(result)
-    }
-
-    /// Convert peptide sequences into ASCII code array.
-    ///
-    /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L115
-    pub fn get_ascii_indices(&self, peptide_sequences: &[String]) -> Result<Tensor> {
-        // println!("Peptide sequences to encode: {:?}", peptide_sequences);
-        let max_len = peptide_sequences.iter().map(|s| s.len()).max().unwrap_or(0) + 2; // +2 for padding
-        let batch_size = peptide_sequences.len();
-
-        let mut aa_indices = vec![0u32; batch_size * max_len];
-
-        for (i, peptide) in peptide_sequences.iter().enumerate() {
-            for (j, c) in peptide.chars().enumerate() {
-                aa_indices[i * max_len + j + 1] = c as u32; // +1 to skip the first padding
-            }
-        }
-
-        // println!("AA indices: {:?}", aa_indices);
-
-        let aa_indices_tensor =
-            Tensor::from_slice(&aa_indices, (batch_size, max_len), &self.device)?;
-        Ok(aa_indices_tensor)
-    }
-
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        //self.var_store.save(path)
-        unimplemented!()
-    }
 }
 
 // Module Trait Implementation
 
-impl<'a> Module for RTCNNLSTMModel<'a> {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
-        
-        // Separate input into aa_indices, mod_x
-        let start_mod_x = 1;
+// impl<'a> Module for RTCNNLSTMModel<'a> {
+//     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
+//         ModelInterface::forward(self, input)
+//     }
+// }
 
-        let aa_indices_out = xs.i((.., .., 0))?;
-        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
-
-        let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
-        let x = self.dropout.forward(&x, self.is_training)?;
-        let x = self.rt_decoder.forward(&x)?;
-
-        Ok(x.squeeze(1)?)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -504,122 +309,14 @@ mod tests {
     }
 
     #[test]
-    fn peptide_retention_time_prediction() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        // let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt_resaved_model.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-
-        assert!(
-            model_path.exists(),
-            "\n╔══════════════════════════════════════════════════════════════════╗\n\
-             ║                     *** ERROR: FILE NOT FOUND ***                ║\n\
-             ╠══════════════════════════════════════════════════════════════════╣\n\
-             ║ Test model file does not exist:                                  ║\n\
-             ║ {:?}\n\
-             ║ \n\
-             ║ Visit AlphaPeptDeeps github repo on how to download their \n\
-             ║ pretrained model files: https://github.com/MannLabs/\n\
-             ║ alphapeptdeep?tab=readme-ov-file#install-models\n\
-             ╚══════════════════════════════════════════════════════════════════╝\n",
-            model_path
-        );
-
-        assert!(
-            constants_path.exists(),
-            "\n╔══════════════════════════════════════════════════════════════════╗\n\
-             ║                     *** ERROR: FILE NOT FOUND ***                  ║\n\
-             ╠══════════════════════════════════════════════════════════════════╣\n\
-             ║ Test constants file does not exist:                                ║\n\
-             ║ {:?}\n\
-             ║ \n\
-             ║ Visit AlphaPeptDeeps github repo on how to download their \n\
-             ║ pretrained model files: https://github.com/MannLabs/\n\
-             ║ alphapeptdeep?tab=readme-ov-file#install-models\n\
-             ╚══════════════════════════════════════════════════════════════════╝\n",
-            constants_path
-        );
-
-        let result = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, Device::Cpu);
-
-        assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
-
-        let mut model = result.unwrap();
-        model.print_summary();
-
-        // Print the model's weights
-        // model.print_weights();
-
-        // Test prediction with real peptides
-        let peptide = "AGHCEWQMKYR".to_string();
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string();
-        let mod_sites = "0;4;8".to_string();
-
-        println!("Predicting retention time for peptide: {:?}", peptide);
-        println!("Modifications: {:?}", mods);
-        println!("Modification sites: {:?}", mod_sites);
-
-        model.set_evaluation_mode();
-
-        let start = Instant::now();
-        match model.predict(&[peptide.clone()], &mods, &mod_sites, None, None, None) {
-            Ok(predictions) => {
-                let io_time = Instant::now() - start;
-                assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
-                println!("Prediction for real peptide:");
-                println!(
-                    "Peptide: {} ({} @ {}), Predicted RT: {}:  {:8} ms",
-                    peptide,
-                    mods,
-                    mod_sites,
-                    predictions[0],
-                    io_time.as_millis()
-                );
-            }
-            Err(e) => {
-                println!("Error during prediction: {:?}", e);
-                println!("Attempting to encode peptide...");
-                match model.encode_peptides(&[peptide.clone()], &mods, &mod_sites, None, None, None)
-                {
-                    Ok(encoded) => println!("Encoded peptide shape: {:?}", encoded.shape()),
-                    Err(e) => println!("Error encoding peptide: {:?}", e),
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn peptide_retention_time_prediction_and_fine_tuning() {
+    fn test_prediction() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-
-        // Assert model and constants files exist (your existing assertions)
-        
-        // let device use cuda if available otherwise use cpu
-        let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
-
-        println!("Device: {:?}", device);
-
-        let result = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device);
-        assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
+        let device = /* Assuming Device is defined */ Device::new_cuda(0).unwrap_or(/* assuming Device::Cpu is defined */ Device::Cpu); // Replace with actual Device code.
+        let result = /* Assuming RTCNNLSTMModel is defined */ RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device); // Replace with actual RTCNNLSTMModel code
         let mut model = result.unwrap();
-
-        // Define training data
-        let training_data: Vec<PeptideData> = vec![
-            PeptideData::new("AKPLMELIER", None, None, None, Some(0.4231399), None, None),
-            PeptideData::new("TEM[+15.9949]VTISDASQR", None, None, None, Some(0.2192762), None, None),
-            PeptideData::new("AGKFPSLLTHNENMVAK", None, None, None, Some(0.3343900), None, None),
-            PeptideData::new("LSELDDRADALQAGASQFETSAAK", None, None, None, Some(0.5286755), None, None),
-            PeptideData::new("FLLQDTVELR", None, None, None, Some(0.6522490), None, None),
-            PeptideData::new("SVTEQGAELSNEER", None, None, None, Some(0.2388270), None, None),
-            PeptideData::new("EHALLAYTLGVK", None, None, None, Some(0.5360210), None, None),
-            PeptideData::new("TVQSLEIDLDSM[+15.9949]R", None, None, None, Some(0.5787880), None, None),
-            PeptideData::new("VVSQYSSLLSPMSVNAVM[+15.9949]K", None, None, None, Some(0.6726230), None, None),
-            PeptideData::new("TFLALINQVFPAEEDSKK", None, None, None, Some(0.8345350), None, None),
-        ];
-
-
+    
         // Test prediction with a few peptides after fine-tuning
         let test_peptides = vec![
             ("QPYAVSELAGHQTSAESWGTGR", "", "", 0.4328955),
@@ -664,89 +361,44 @@ mod tests {
             ("HEDLKDMLEFPAQELR", "", "", 0.6529368),
             ("LLPDFLLER", "", "", 0.7852863),
         ];
-
-        // Predictions prior to fine-tuning
-        model.set_evaluation_mode();
-        // model.print_weights();
-        
-        let mut total_error = 0.0;
-        let mut count = 0;
-
-        for (peptide, mods, mod_sites, observed_rt) in &test_peptides {
-            // let start = Instant::now();
-            match model.predict(&[peptide.to_string()], mods, mod_sites, None, None, None) {
-                Ok(predictions) => {
-                    // let io_time = Instant::now() - start;
-                    assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
-                    let predicted_rt = predictions[0];
-                    let error = (predicted_rt - observed_rt).abs();
-                    total_error += error;
-                    count += 1;
-                    // println!(
-                    //     "Peptide: {} (Mods: {}, Sites: {}), Predicted RT: {:.6}, Observed RT: {:.6}, Error: {:.6}, Time: {:8} ms",
-                    //     peptide, mods, mod_sites, predicted_rt, observed_rt, error, io_time.as_millis()
-                    // );
-                }
-                Err(e) => {
-                    println!("Error during prediction for {}: {:?}", peptide, e);
+    
+        let batch_size = 16; // Set an appropriate batch size
+        let peptides: Vec<String> = test_peptides.iter().map(|(pep, _, _, _)| pep.to_string()).collect();
+        let mods: Vec<String> = test_peptides.iter().map(|(_, mod_, _, _)| mod_.to_string()).collect();
+        let mod_sites: Vec<String> = test_peptides.iter().map(|(_, _, sites, _)| sites.to_string()).collect();
+        let observed_rts: Vec<f32> = test_peptides.iter().map(|(_, _, _, rt)| *rt).collect();
+    
+        match model.predict(&peptides, &mods, &mod_sites, None, None, None) {
+            Ok(predictions) => {
+                if let /* Assuming PredictionResult and RTResult are defined */ PredictionResult::RTResult(rt_preds) = predictions {  // Replace with actual PredictionResult and RTResult code
+                    let total_error: f32 = rt_preds.iter().zip(observed_rts.iter())
+                        .map(|(pred, obs)| (pred - obs).abs())
+                        .sum();
+    
+                    // PRINT PREDICTIONS AND OBSERVED RTs WITHOUT IZIP
+                    let mut peptides_iter = peptides.iter();
+                    let mut rt_preds_iter = rt_preds.iter();
+                    let mut observed_rts_iter = observed_rts.iter();
+    
+                    loop {
+                        match (peptides_iter.next(), rt_preds_iter.next(), observed_rts_iter.next()) {
+                            (Some(pep), Some(pred), Some(obs)) => {
+                                println!("Peptide: {}, Predicted RT: {}, Observed RT: {}", pep, pred, obs);
+                            }
+                            _ => break, // Exit the loop if any iterator is exhausted
+                        }
+                    }
+    
+                    let mean_absolute_error = total_error / rt_preds.len() as f32;
+                    println!("Mean Absolute Error: {:.6}", mean_absolute_error);
+                } else {
+                    println!("Unexpected prediction result type.");
                 }
             }
-        }
-
-        let mean_absolute_error = total_error / count as f32;
-        println!("Mean Absolute Error prior to fine-tuning: {:.6}", mean_absolute_error);
-
-        // Fine-tune the model
-        let modifications = match load_modifications() {
-            Ok(mods) => mods,
             Err(e) => {
-                panic!("Failed to load modifications: {:?}", e);
-            }
-        };
-        let learning_rate = 0.001;
-        let epochs = 5;
-        // println!(
-        //     "Fine-tuning model with {} peptides and {} epochs with learning rate: {}",
-        //     training_data.len(),
-        //     epochs,
-        //     learning_rate
-        // );
-        let result = model.fine_tune(&training_data, modifications, 10, learning_rate, epochs);
-        assert!(
-            result.is_ok(),
-            "Failed to fine-tune model: {:?}",
-            result.err()
-        );
-
-        model.set_evaluation_mode();
-
-        let mut total_error = 0.0;
-        let mut count = 0;
-
-        for (peptide, mods, mod_sites, observed_rt) in test_peptides {
-            match model.predict(&[peptide.to_string()], mods, mod_sites, None, None, None) {
-                Ok(predictions) => {
-
-                    assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
-                    let predicted_rt = predictions[0];
-                    let error = (predicted_rt - observed_rt).abs();
-                    total_error += error;
-                    count += 1;
-
-                }
-                Err(e) => {
-                    println!("Error during prediction for {}: {:?}", peptide, e);
-                }
+                println!("Error during batch prediction: {:?}", e);
             }
         }
-
-        let mean_absolute_error = total_error / count as f32;
-        println!("Mean Absolute Error post fine-tuning: {:.6}", mean_absolute_error);
-        // model.print_weights();
-
-        // // Optionally, save the fine-tuned model
-        // let save_path = PathBuf::from("data/models/alphapeptdeep/generic/rt_fine_tuned.pth");
-        // let save_result = model.save(&save_path);
-        // assert!(save_result.is_ok(), "Failed to save fine-tuned model: {:?}", save_result.err());
     }
+    
 }

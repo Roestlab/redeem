@@ -10,18 +10,22 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::building_blocks::building_blocks::{
-    DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
-    ModLossNN, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
-};
-use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::utils::data_handling::PeptideData;
-use crate::utils::logging::Progress;
-use crate::utils::peptdeep_utils::{extract_masses_and_indices, get_modification_indices, remove_mass_shift};
 use crate::{
-    models::model_interface::{ModelInterface, PredictionResult, create_var_map},
-    utils::peptdeep_utils::{
-        load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
+    building_blocks::{
+        building_blocks::{
+            DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
+            ModLossNN, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
+        },
+        featurize::{aa_one_hot, get_aa_indices, get_mod_features},
+    },
+    models::model_interface::{create_var_map, ModelInterface, PropertyType},
+    utils::{
+        data_handling::PeptideData,
+        logging::Progress,
+        peptdeep_utils::{
+            get_modification_indices, get_modification_string, load_mod_to_feature,
+            parse_model_constants, remove_mass_shift, ModelConstants,
+        },
     },
 };
 
@@ -46,6 +50,7 @@ pub struct MS2BertModel<'a> {
     mask_modloss: bool,
     min_inten: f32,
     device: Device,
+    is_training: bool,
     dropout: Dropout,
     input_nn: Input26aaModPositionalEncoding,
     meta_nn: MetaEmbedding,
@@ -60,6 +65,14 @@ unsafe impl<'a> Sync for MS2BertModel<'a> {}
 
 // Code Model Implementation
 impl<'a> ModelInterface for MS2BertModel<'a> {
+    fn property_type(&self) -> PropertyType {
+        PropertyType::MS2
+    }
+
+    fn model_arch(&self) -> &'static str {
+        "ms2_bert"
+    }
+
     /// Create a new MS2BERT model from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
@@ -160,6 +173,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
             mask_modloss: mask_modloss,
             min_inten: 1e-4,
             device,
+            is_training: false,
             dropout: dropout,
             input_nn: input_nn,
             meta_nn: meta_nn,
@@ -169,224 +183,6 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         })
     }
 
-    fn predict(
-        &self,
-        peptide_sequence: &[String],
-        mods: &str,
-        mod_sites: &str,
-        charge: Option<i32>,
-        nce: Option<i32>,
-        intsrument: Option<&str>,
-    ) -> Result<PredictionResult> {
-        let input_tensor =
-            self.encode_peptides(peptide_sequence, mods, mod_sites, charge, nce, intsrument)?;
-        let output = self.forward(&input_tensor)?;
-
-        let out = self.process_predictions(&output, self.min_inten)?;
-
-        let predictions = PredictionResult::MS2Result(out.squeeze(0)?.to_vec2()?);
-
-
-        Ok(predictions)
-    }
-
-    fn encode_peptides(
-        &self,
-        peptide_sequences: &[String],
-        mods: &str,
-        mod_sites: &str,
-        charge: Option<i32>,
-        nce: Option<i32>,
-        intsrument: Option<&str>,
-    ) -> Result<Tensor> {
-        let aa_indices = get_aa_indices(peptide_sequences)?;
-
-        // Convert ndarray to Tensor and ensure it's F32
-        let aa_indices_tensor = Tensor::from_slice(
-            &aa_indices.as_slice().unwrap(),
-            (aa_indices.shape()[0], aa_indices.shape()[1]),
-            &self.device,
-        )?
-        .to_dtype(DType::F32)?;
-
-        let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
-
-        // unsqueeze aa_indices_tensor to match the shape of mod_x, which is batch_size x seq_len x mod_feature_size
-        let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?;
-
-        // Get modification features
-        let mod_x = get_mod_features(
-            mods,
-            mod_sites,
-            seq_len,
-            self.constants.mod_elements.len(),
-            self.mod_to_feature.clone(),
-            self.device.clone(),
-        )?;
-
-        // Charges
-        let charge = Tensor::from_slice(
-            &vec![charge.unwrap() as f64 * CHARGE_FACTOR; seq_len],
-            &[batch_size, seq_len, 1],
-            &self.device,
-        )?
-        .to_dtype(DType::F32)?;
-
-        // NCE
-        let nce = Tensor::from_slice(
-            &vec![nce.unwrap() as f64 * NCE_FACTOR; seq_len],
-            &[batch_size, seq_len, 1],
-            &self.device,
-        )?
-        .to_dtype(DType::F32)?;
-
-        // Instrument
-        let instrument_indices = Tensor::from_slice(
-            &vec![parse_instrument_index(intsrument.unwrap()) as u32; seq_len],
-            &[batch_size, seq_len, 1],
-            &self.device,
-        )?
-        .to_dtype(DType::F32)?;
-
-        // Combine aa_one_hot, mod_x, charge, nce, and instrument
-        let combined = Tensor::cat(
-            &[aa_indices_tensor, mod_x, charge, nce, instrument_indices],
-            2,
-        )?;
-
-        Ok(combined)
-    }
-
-    fn fine_tune(
-        &mut self,
-        training_data: &Vec<PeptideData>,
-        modifications: HashMap<(String, Option<char>), crate::utils::peptdeep_utils::ModificationMap>,
-        batch_size: usize,
-        learning_rate: f64,
-        epochs: usize,
-    ) -> Result<()> {
-        let num_batches = (training_data.len() as f64 / batch_size as f64).ceil() as usize;
-        info!(
-            "Fine-tuning model on {} batches with batch size {} and learning rate {} for {} epochs",
-            num_batches, batch_size, learning_rate, epochs
-        );
-    
-        let params = candle_nn::ParamsAdamW {
-            lr: learning_rate,
-            ..Default::default()
-        };
-        let mut opt = candle_nn::AdamW::new(self.varmap.all_vars(), params)?;
-        
-        for epoch in 0..epochs {
-            let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
-            let mut total_loss = 0.0;
-            let mut batch_inputs = Vec::new();
-            let mut batch_targets = Vec::new();
-    
-            for (i, peptide) in training_data.iter().enumerate() {
-                let naked_peptide = remove_mass_shift(&peptide.sequence);
-                let modified_indices = get_modification_indices(&peptide.sequence);
-                let extracted_masses_and_indices = extract_masses_and_indices(&peptide.sequence);
-    
-                let mut found_modifications = Vec::new();
-                for (mass, index) in extracted_masses_and_indices {
-                    let amino_acid = peptide.sequence.chars().nth(index).unwrap_or('\0');
-                    if let Some(modification) = modifications.get(&(format!("{:.4}", mass), Some(amino_acid))) {
-                        found_modifications.push(modification.name.clone());
-                    } else if let Some(modification) = modifications.get(&(format!("{:.4}", mass), None)) {
-                        found_modifications.push(modification.name.clone());
-                    }
-                }
-    
-                let peptides_str = &vec![naked_peptide.to_string()];
-                let mod_str = &found_modifications.join("; ");
-                let mod_site_str = &modified_indices;
-                let charge = Some(peptide.charge.unwrap());
-                let nce = Some(peptide.nce.unwrap());
-                let instrument = &peptide.instrument.as_deref();
-    
-                let input = self.encode_peptides(peptides_str, mod_str, mod_site_str, charge, nce, *instrument)?;
-
-                batch_inputs.push(input);
-                batch_targets.push(peptide.ms2_intensities.clone().unwrap());
-    
-                if batch_inputs.len() == batch_size || i == training_data.len() - 1 {
-
-                    // 
-                    let max_seq_len = batch_inputs.iter().map(|t| t.shape().dims3().unwrap().1).max().unwrap();
-                    let padded_inputs: Result<Vec<_>> = batch_inputs
-                        .iter()
-                        .map(|t| {
-                            let (_, seq_len, _) = t.shape().dims3()?;
-                            if seq_len < max_seq_len {
-                                t.pad_with_zeros(1, 0, max_seq_len - seq_len)
-                            } else {
-                                Ok(t.clone())
-                            }
-                        })
-                        .collect::<Result<Vec<_>, _>>() 
-                        .map_err(Into::into);
-                    
-                    let padded_inputs = padded_inputs?;
-                    let input_batch = Tensor::cat(&padded_inputs, 0)?;
-
-                    // Pad targets
-                    let max_target_len = batch_targets.iter().map(|t| t.len()).max().unwrap();
-                    let padded_targets: Vec<Vec<Vec<f32>>> = batch_targets
-                        .iter()
-                        .map(|t| {
-                            let feature_dim = t.first().map(|v| v.len()).unwrap_or(0); // Get feature vector length
-                            let mut padded = t.clone();
-                            padded.resize(max_target_len, vec![0.0; feature_dim]); // Pad with zero vectors
-                            padded
-                        })
-                        .collect();
-
-                    let target_batch = Tensor::new(padded_targets.concat(), &self.device)?;
-
-                    let target_batch = target_batch.unsqueeze(0)?.reshape((batch_inputs.len(), max_target_len, 8))?;
-    
-                    let predicted = self.forward(&input_batch)?;
-
-                    let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
-                    opt.backward_step(&loss)?;
-    
-                    total_loss += loss.to_vec0::<f32>()?;
-                    batch_inputs.clear();
-                    batch_targets.clear();
-                    progress.inc();
-                    progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
-                }
-            }
-            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Batch Loss: {}", epoch, total_loss / num_batches as f32));
-            progress.finish();
-        }
-        Ok(())
-    }
-
-    fn set_evaluation_mode(&mut self) {
-        todo!()
-    }
-
-    fn set_training_mode(&mut self) {
-        todo!()
-    }
-
-    fn print_summary(&self) {
-        todo!()
-    }
-
-    fn print_weights(&self) {
-        todo!()
-    }
-
-    fn save(&self, path: &Path) -> Result<()> {
-        todo!()
-    }
-}
-
-// Module Trait Implementation
-impl<'a> Module for MS2BertModel<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
         let (batch_size, seq_len, _) = xs.shape().dims3()?;
 
@@ -428,7 +224,9 @@ impl<'a> Module for MS2BertModel<'a> {
 
         // Forward pass through hidden_nn
         // NOTE: temporary hack-fix for BERT weights, which use LayerNorm, which currently throws an error on CUDA: ` Some(no cuda implementation for layer-norm`
-        let hidden_x = self.hidden_nn.forward(&combined_input.clone().to_device(&Device::Cpu)?, None)?;
+        let hidden_x = self
+            .hidden_nn
+            .forward(&combined_input.clone().to_device(&Device::Cpu)?, None)?;
 
         // // Handle attentions if needed (similar to PyTorch)
         // if self.output_attentions {
@@ -448,7 +246,11 @@ impl<'a> Module for MS2BertModel<'a> {
         if self.num_modloss_types > 0 {
             if self.mask_modloss {
                 // Create a tensor of zeros with the appropriate shape
-                let zeros_shape = (out_x.shape().dims()[0], out_x.shape().dims()[1], self.num_modloss_types);
+                let zeros_shape = (
+                    out_x.shape().dims()[0],
+                    out_x.shape().dims()[1],
+                    self.num_modloss_types,
+                );
                 let zeros_tensor = Tensor::zeros(zeros_shape, DType::F32, &self.device)?; // Adjust device as necessary
 
                 // Concatenate along the last dimension
@@ -476,7 +278,64 @@ impl<'a> Module for MS2BertModel<'a> {
 
         Ok(out_x.i((.., 3.., ..))?)
     }
+
+    /// Set model to evaluation mode for inference
+    /// This disables dropout and other training-specific layers.
+    fn set_evaluation_mode(&mut self) {
+        // println!("Setting evaluation mode");
+        self.is_training = false;
+    }
+
+    /// Set model to training mode for training
+    /// This enables dropout and other training-specific layers.
+    fn set_training_mode(&mut self) {
+        self.is_training = true;
+    }
+
+    fn get_property_type(&self) -> String {
+        self.property_type().clone().as_str().to_string()
+    }
+
+    fn get_model_arch(&self) -> String {
+        self.model_arch().to_string()
+    }
+
+    fn get_device(&self) -> &Device {
+        &self.device
+    }
+
+    fn get_mod_element_count(&self) -> usize {
+        self.constants.mod_elements.len()
+    }
+
+    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+        &self.mod_to_feature
+    }
+
+    fn get_min_pred_intensity(&self) -> f32 {
+        self.min_inten
+    }
+
+    fn get_mut_varmap(&mut self) -> &mut VarMap {
+        &mut self.varmap
+    }
+
+    fn print_summary(&self) {
+        todo!()
+    }
+
+    fn print_weights(&self) {
+        todo!()
+    }
+
 }
+
+// // Module Trait Implementation
+// impl<'a> Module for MS2BertModel<'a> {
+//     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
+//         ModelInterface::forward(self, input)
+//     }
+// }
 
 impl<'a> fmt::Debug for MS2BertModel<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -535,10 +394,11 @@ mod tests {
     use crate::models::ms2_bert_model::MS2BertModel;
     use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
-    use std::path::PathBuf;
     use csv::Reader;
+    use rayon::vec;
     use std::collections::HashMap;
     use std::fs::File;
+    use std::path::PathBuf;
 
     #[test]
     fn test_parse_model_constants() {
@@ -573,7 +433,7 @@ mod tests {
         let device = Device::Cpu;
         let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
+        let peptide_sequences = "AGHCEWQMKYR";
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
         let mod_sites = "0;4;8";
         let charge = Some(2);
@@ -581,7 +441,7 @@ mod tests {
         let instrument = Some("QE");
 
         let result =
-            model.encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+            model.encode_peptide(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
 
         println!("{:?}", result);
 
@@ -598,195 +458,31 @@ mod tests {
         let device = Device::Cpu;
         let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
-        let charge = Some(2);
-        let nce = Some(20);
-        let instrument = Some("QE");
+        let peptide_sequences = vec!["AGHCEWQMKYR".to_string(), "AGHCEWQMKYR".to_string()];
+        let mods = vec![
+            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
+            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
+        ];
+        let mod_sites = vec!["0;4;8".to_string(), "0;4;8".to_string()];
+        let charge = Some(vec![2, 2]);
+        let nce = Some(vec![20, 20]);
+        let instrument = Some(vec!["QE".to_string(), "QE".to_string()]);
 
         let input_tensor = model
-            .encode_peptides(&peptide_sequences, mods, mod_sites, charge, nce, instrument)
+            .encode_peptides(
+                &peptide_sequences,
+                &mods,
+                &mod_sites,
+                charge,
+                nce,
+                instrument,
+            )
             .unwrap();
         let output = model.forward(&input_tensor).unwrap();
         println!("{:?}", output);
+
+        let prediction: Vec<Vec<Vec<f32>>> = output.to_vec3().unwrap();
+
+        println!("{:?}", prediction);
     }
-
-    #[test]
-    fn test_predict(){
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
-        let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
-
-        let peptide_sequences = vec!["AGHCEWQMKYR".to_string()];
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
-        let charge = Some(2);
-        let nce = Some(20);
-        let instrument = Some("QE");
-
-        let result = model.predict(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
-        // Result is a PredictionResult of Vec<Vec<f32>>
-        // ordered as b_z1	b_z2	y_z1	y_z2	b_modloss_z1	b_modloss_z2	y_modloss_z1	y_modloss_z2
-        println!("{:?}", result);
-        println!("Length peptide_sequences: {:?}", peptide_sequences[0].len());
-        println!("Length of result: {:?}", result.unwrap().len());
-    }
-
-    #[test]
-    fn test_fine_tuning(){
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
-        let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
-        let mut model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
-
-
-        // Open the CSV file
-        let file_path = "data/predicted_fragment_intensities.csv";
-        let file = File::open(file_path).unwrap();
-
-        // Create a CSV reader
-        let mut rdr = Reader::from_reader(file);
-
-        // Group fragment intensities by peptide sequence
-        let mut peptide_data_map: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
-        let mut peptide_charges: HashMap<String, i32> = HashMap::new();
-
-        for result in rdr.records() {
-            let record = result.unwrap();
-            let peptide_sequence = &record[0];
-            let precursor_charge: i32 = record[1].parse().unwrap();
-            let fragment_type = &record[2];
-            let fragment_ordinal: usize = record[3].parse().unwrap();
-            let fragment_charge: i32 = record[4].parse().unwrap();
-            let experimental_intensity: f32 = record[6].parse().unwrap();
-
-            // Get naked peptide sequence
-            let naked_peptide = remove_mass_shift(peptide_sequence);
-
-            // Get length of the peptide sequence
-            let peptide_len = naked_peptide.len() - 1;
-
-            // Initialize the peptide's intensity matrix if it doesn't exist
-            peptide_data_map
-                .entry(peptide_sequence.to_string())
-                .or_insert_with(|| vec![vec![0.0; 8]; peptide_len]); // Initialize with enough rows
-
-            // Update the peptide's charge
-            peptide_charges.insert(peptide_sequence.to_string(), precursor_charge);
-
-            // Determine the column index based on fragment type and charge
-            let col = match (fragment_type, fragment_charge) {
-                ("B", 1) => 0, // b_z1
-                ("B", 2) => 1, // b_z2
-                ("Y", 1) => 2, // y_z1
-                ("Y", 2) => 3, // y_z2
-                _ => continue, // Skip unsupported fragment types or charges
-            };
-
-            // Update the MS2 intensities matrix
-            let row = peptide_len - 1; // Convert to zero-based index
-            peptide_data_map
-                .get_mut(peptide_sequence)
-                .unwrap()
-                .resize(row + 1, vec![0.0; 8]); // Ensure the matrix has enough rows
-            peptide_data_map.get_mut(peptide_sequence).unwrap()[row][col] = experimental_intensity;
-        }
-
-        // Create PeptideData instances for each peptide
-        let mut training_data: Vec<PeptideData> = Vec::new();
-
-        for (sequence, ms2_intensities) in peptide_data_map {
-            let charge = peptide_charges.get(&sequence).copied();
-            let peptide_data = PeptideData::new(
-                &sequence,
-                charge,
-                Some(20), // Example NCE
-                Some("QE"), // Example instrument
-                None, // Retention time
-                None, // Ion mobility
-                Some(ms2_intensities), // MS2 intensities
-            );
-            training_data.push(peptide_data);
-        }
-
-
-        // let test_peptides = vec![
-        //     ("SKEEETSIDVAGKP", "", "", 2, 0.998),
-        //     ("LPILVPSAKKAIYM", "", "", 2, 1.12),
-        //     ("RTPKIQVYSRHPAE", "", "", 3, 0.838),
-        //     ("EEVQIDILDTAGQE", "", "", 2, 1.02),
-        //     ("GAPLVKPLPVNPTDPA", "", "", 2, 1.01),
-        //     ("FEDENFILK", "", "", 2, 0.897),
-        //     ("YPSLPAQQV", "", "", 1, 1.45),
-        //     ("YLPPATQVV", "", "", 2, 0.846),
-        //     ("YISPDQLADLYK", "", "", 2, 0.979),
-        //     ("PSIVRLLQCDPSSAGQF", "", "", 2, 1.10),
-        // ];
-
-
-        // // model.set_evaluation_mode();
-
-        // let mut total_error = 0.0;
-        // let mut count = 0;
-        // for (peptide, mods, mod_sites, charge, observed) in &test_peptides {
-        //     match model.predict(&[peptide.to_string()], mods, mod_sites, Some(*charge), Some(20), Some("QE")) {
-        //         Ok(predictions) => {
-        //             let predicted = predictions;
-        //             let error = (predicted - observed).abs();
-        //             total_error += error;
-        //             count += 1;
-        //         }
-        //         Err(e) => {
-        //             println!("Error during prediction for {}: {:?}", peptide, e);
-        //         }
-        //     }
-        // }
-
-        // let mean_absolute_error = total_error / count as f32;
-        // println!("Mean Absolute Error prior to fine-tuning: {:.6}", mean_absolute_error);
-
-        // Fine-tune the model
-        let modifications = match load_modifications() {
-            Ok(mods) => mods,
-            Err(e) => {
-                panic!("Failed to load modifications: {:?}", e);
-            }
-        };
-        let learning_rate = 0.001;
-        let epochs = 5;
-
-        let result = model.fine_tune(&training_data, modifications, 10, learning_rate, epochs);
-        assert!(
-            result.is_ok(),
-            "Failed to fine-tune model: {:?}",
-            result.err()
-        );
-
-        // model.set_evaluation_mode();
-
-        // let mut total_error = 0.0;
-        // let mut count = 0;
-        // for (peptide, mods, mod_sites, charge, observed) in &test_peptides {
-        //     match model.predict(&[peptide.to_string()], mods, mod_sites, Some(*charge), None, None) {
-        //         Ok(predictions) => {
-        //             assert_eq!(predictions.len(), 1, "Unexpected number of predictions");
-        //             let predicted = predictions[0];
-        //             let error = (predicted - observed).abs();
-        //             total_error += error;
-        //             count += 1;
-        //         }
-        //         Err(e) => {
-        //             println!("Error during prediction for {}: {:?}", peptide, e);
-        //         }
-        //     }
-        // }
-
-        // let mean_absolute_error = total_error / count as f32;
-        // println!("Mean Absolute Error post fine-tuning: {:.6}", mean_absolute_error);
-    }
-
 }
