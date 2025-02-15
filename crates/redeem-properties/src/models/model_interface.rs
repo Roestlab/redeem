@@ -363,8 +363,8 @@ pub trait ModelInterface: Send + Sync {
         };
 
         info!(
-            "Fine-tuning {} model on {} batches with batch size {} and learning rate {} for {} epochs",
-            self.get_model_arch(), num_batches, batch_size, learning_rate, epochs
+            "Fine-tuning {} model on {} peptide features ({} batches) for {} epochs",
+            self.get_model_arch(), training_data.len(), num_batches, epochs
         );
 
         let params = candle_nn::ParamsAdamW {
