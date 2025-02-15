@@ -6,6 +6,8 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 ### Todo
 
+- [ ] implement learning rate scheduler  
+- [ ] implement early stopping during fine-tuning  
 - [ ] freeze certain layers for fine-tuning?  
 - [ ] xgboost/semi-supervised learning param cleanup  
 - [ ] Clean up code / remove comments and unneeded debug macros  
