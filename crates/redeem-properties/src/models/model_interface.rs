@@ -128,6 +128,7 @@ pub fn create_var_map(
     Ok(())
 }
 
+/// Model interface trait for deep learning models.
 pub trait ModelInterface: Send + Sync {
     fn property_type(&self) -> PropertyType;
 
@@ -364,8 +365,8 @@ pub trait ModelInterface: Send + Sync {
         };
 
         info!(
-            "Fine-tuning {} model on {} batches with batch size {} and learning rate {} for {} epochs",
-            self.get_model_arch(), num_batches, batch_size, learning_rate, epochs
+            "Fine-tuning {} model on {} peptide features ({} batches) for {} epochs",
+            self.get_model_arch(), training_data.len(), num_batches, epochs
         );
 
         let params = candle_nn::ParamsAdamW {
@@ -472,13 +473,13 @@ pub trait ModelInterface: Send + Sync {
                 let predicted = self.forward(&input_batch).unwrap();
                 let loss = candle_nn::loss::mse(&predicted, &target_batch).unwrap();
 
-                // opt.backward_step(&loss).unwrap();
                 // Lock the optimizer before updating
+                // TODO: Is this safe to do across threads?
                 let mut opt_lock = opt.lock().unwrap();
                 opt_lock.backward_step(&loss).unwrap();
 
                 let loss_value = loss.to_vec0::<f32>().unwrap_or(990.0); // Ensure no error
-                                                                         // Safely accumulate the loss
+                // Safely accumulate the loss
                 let mut total_loss_lock = total_loss.lock().unwrap();
                 *total_loss_lock += loss_value;
                 progress.inc();
