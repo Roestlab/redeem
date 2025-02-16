@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ModelParams {
-    pub learning_rate: f32, // Shared parameter
-    pub model_type: ModelType, // Enum for model-specific parameters
+    pub learning_rate: f32, 
+
+    #[serde(flatten)]
+    pub model_type: ModelType, 
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(tag = "model")]
 pub enum ModelType {
     XGBoost {
         max_depth: u32,

@@ -43,7 +43,7 @@ impl SemiSupervisedLearner {
     /// A new SemiSupervisedLearner
     pub fn new(
         model_type: ModelType,
-        learning_rate: f32, // Explicitly pass learning rate
+        learning_rate: f32, 
         train_fdr: f32,
         xeval_num_iter: usize,
     ) -> Self {
