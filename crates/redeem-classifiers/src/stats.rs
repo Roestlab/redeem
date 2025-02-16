@@ -84,6 +84,46 @@ pub fn tdc(scores: &Array1<f32>, target: &Array1<bool>, desc: bool) -> Array1<f3
     final_qvals
 }
 
+// /// Convert a list of FDRs to q-values.
+// ///
+// /// This turns a list of FDRs into q-values. All of the inputs are assumed to be sorted.
+// /// 
+// /// Adpated from: https://github.com/wfondrie/mokapot/blob/main/mokapot/qvalues.py#L148
+// ///
+// /// # Arguments
+// ///
+// /// * `fdr` - A vector of all unique FDR values.
+// /// * `num_total` - A vector of the cumulative number of PSMs at each score.
+// /// * `met` - A vector of the unique scores for each PSM.
+// /// * `indices` - A vector where the value at index i indicates the number of PSMs that shared the unique FDR value in `fdr`.
+// ///
+// /// # Returns
+// ///
+// /// A vector of q-values.
+// fn fdr2qvalue(fdr: &Array1<f32>, num_total: &Array1<usize>, met: &Vec<f32>, indices: &Vec<usize>) -> Array1<f32> {
+//     let mut min_q: f32 = 1.0;
+//     let mut qvals = Array1::<f32>::ones(fdr.len());
+//     let mut prev_idx = 0;
+
+//     for (idx, &count) in indices.iter().enumerate() {
+//         let next_idx = prev_idx + count;
+//         let group = prev_idx..next_idx;
+
+//         let fdr_group = fdr.slice(s![group.clone()]);
+//         let n_group = num_total.slice(s![group.clone()]);
+        
+//         let curr_fdr = fdr_group[n_group.argmax().unwrap()]; // This line is not working in ndarray v0.15.0, as argmax is only available in v0.16.0, but linfa uses v0.15.0. They are working on updating to v0.16.0. https://github.com/rust-ml/linfa/pull/371
+//         if curr_fdr < min_q {
+//             min_q = curr_fdr;
+//         }
+
+//         qvals.slice_mut(s![group]).fill(min_q);
+//         prev_idx = next_idx;
+//     }
+
+//     qvals
+// }
+
 /// Convert a list of FDRs to q-values.
 ///
 /// This turns a list of FDRs into q-values. All of the inputs are assumed to be sorted.
@@ -111,8 +151,18 @@ fn fdr2qvalue(fdr: &Array1<f32>, num_total: &Array1<usize>, met: &Vec<f32>, indi
 
         let fdr_group = fdr.slice(s![group.clone()]);
         let n_group = num_total.slice(s![group.clone()]);
-        
-        let curr_fdr = fdr_group[n_group.argmax().unwrap()];
+
+        // Manual implementation of argmax for ndarray v0.15.0
+        let mut max_index = 0;
+        let mut max_value = n_group[0];
+        for (i, &value) in n_group.iter().enumerate() {
+            if value > max_value {
+                max_value = value;
+                max_index = i;
+            }
+        }
+
+        let curr_fdr = fdr_group[max_index];
         if curr_fdr < min_q {
             min_q = curr_fdr;
         }
