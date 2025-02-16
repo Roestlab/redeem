@@ -14,7 +14,8 @@ use xgboost::{
 
 use sage_core::scoring::Feature;
 
-use crate::psm_scorer::{SemiSupervisedModel, ModelParams};
+use crate::models::utils::{ModelType, ModelParams};
+use crate::psm_scorer::SemiSupervisedModel;
 
 pub struct XGBoostClassifier {
     booster: Option<Booster>,
@@ -38,34 +39,20 @@ impl SemiSupervisedModel for XGBoostClassifier {
         x_eval: Option<&Array2<f32>>,
         y_eval: Option<&[i32]>,
     ) {
-        // convert y to [0, 1] since xgboost only supports 0 and 1 for binary regression
+        // Convert y to [0, 1] for XGBoost binary regression
         // Note: we set targets (original 1) as 1 and decoys (original -1) as 0, so that the scores are positive for targets and negative for decoys
         // TODO: this maybe should be done outside of the model
-        let y = y
-            .iter()
-            .map(|&l| if l == 1 { 1 } else { 0 })
-            .collect::<Vec<i32>>();
-        let y_eval = if let Some(y_e) = y_eval {
-            Some(
-                y_e.iter()
-                    .map(|&l| if l == 1 { 1 } else { 0 })
-                    .collect::<Vec<i32>>(),
-            )
-        } else {
-            None
-        };
-
+        let y = y.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>();
+        let y_eval = y_eval.map(|y_e| y_e.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>());
+    
         // Convert feature matrix into DMatrix
         let mut dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
-        dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>())
-            .unwrap();
-
+        dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>()).unwrap();
+    
         let mut eval_matrix = None;
         let dmat_eval = if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
             let mut matrix = DMatrix::from_dense(x_e.as_slice().unwrap(), x_e.nrows()).unwrap();
-            matrix
-                .set_labels(&y_e.iter().map(|&l| l as f32).collect::<Vec<f32>>())
-                .unwrap();
+            matrix.set_labels(&y_e.iter().map(|&l| l as f32).collect::<Vec<f32>>()).unwrap();
             eval_matrix = Some(matrix);
             Some(vec![
                 (&dmat, "train"),
@@ -74,53 +61,56 @@ impl SemiSupervisedModel for XGBoostClassifier {
         } else {
             None
         };
-
-        // configure learning objective to use binary logistic regression
-        let learning_params = LearningTaskParametersBuilder::default()
-            .objective(Objective::BinaryLogisticRaw)
-            .build()
-            .unwrap();
-
-        // // configure learning objective to use multiclass softmax with 3 classes
-        // // Note: was thinking of using mutliclass softmax prob for the unlabelled PSM cases. But instead, we just rmeove these from training, which is what is done in Mokapot.
-        // let learning_params = LearningTaskParametersBuilder::default()
-        //     .objective(Objective::MultiSoftprob(3))
-        //     .build().unwrap();
-
-        // configure the tree-based learning model's parameters
-        let tree_params = TreeBoosterParametersBuilder::default()
-            .max_depth(self.params.max_depth)
-            .eta(self.params.learning_rate)
-            .build()
-            .unwrap();
-
-        // overall configuration for Booster
-        let booster_params = BoosterParametersBuilder::default()
-            .booster_type(BoosterType::Tree(tree_params))
-            .learning_params(learning_params)
-            .verbose(false)
-            .build()
-            .unwrap();
-
-        // Create Training Parameters with evaluation sets if needed
-        let training_params = TrainingParametersBuilder::default()
-            .dtrain(&dmat)
-            .boost_rounds(self.params.num_boost_round)
-            .booster_params(booster_params)
-            .evaluation_sets(dmat_eval.as_deref())
-            .build()
-            .unwrap();
-
-        // Train the model and store the booster
-        self.booster = Some(Booster::train(&training_params).unwrap());
+    
+        if let ModelType::XGBoost {
+            max_depth,
+            num_boost_round
+        } = &self.params.model_type
+        {
+            // Configure learning objective
+            let learning_params = LearningTaskParametersBuilder::default()
+                .objective(Objective::BinaryLogisticRaw)
+                .build()
+                .unwrap();
+    
+            // Configure the tree-based learning model's parameters
+            let tree_params = TreeBoosterParametersBuilder::default()
+                .max_depth(*max_depth)
+                .eta(self.params.learning_rate)
+                .build()
+                .unwrap();
+    
+            // Overall configuration for Booster
+            let booster_params = BoosterParametersBuilder::default()
+                .booster_type(BoosterType::Tree(tree_params))
+                .learning_params(learning_params)
+                .verbose(false)
+                .build()
+                .unwrap();
+    
+            // Create Training Parameters with evaluation sets if needed
+            let training_params = TrainingParametersBuilder::default()
+                .dtrain(&dmat)
+                .boost_rounds(*num_boost_round)
+                .booster_params(booster_params)
+                .evaluation_sets(dmat_eval.as_deref())
+                .build()
+                .unwrap();
+    
+            // Train the model and store the booster
+            self.booster = Some(Booster::train(&training_params).unwrap());
+        } else {
+            eprintln!("Error: Expected ModelType::XGBoost but got another type.");
+        }
     }
+    
 
     fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
         let dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
         self.booster.as_ref().unwrap().predict(&dmat).unwrap()
     }
 
-    fn predict_proba(&self, x: &Array2<f32>) -> Vec<f32> {
+    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
         self.predict(x)
     }
 }
