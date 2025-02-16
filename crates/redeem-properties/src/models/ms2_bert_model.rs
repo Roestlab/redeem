@@ -223,10 +223,9 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         let combined_input = Tensor::cat(&[in_x.clone(), meta_x], 2)?;
 
         // Forward pass through hidden_nn
-        // NOTE: temporary hack-fix for BERT weights, which use LayerNorm, which currently throws an error on CUDA: ` Some(no cuda implementation for layer-norm`
         let hidden_x = self
             .hidden_nn
-            .forward(&combined_input.clone().to_device(&Device::Cpu)?, None)?;
+            .forward(&combined_input.clone(), None)?;
 
         // // Handle attentions if needed (similar to PyTorch)
         // if self.output_attentions {
@@ -236,7 +235,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         // }
 
         // Apply dropout and combine with input
-        let x_tmp = (hidden_x.to_device(combined_input.device())? + combined_input * 0.2)?;
+        let x_tmp = (hidden_x + combined_input * 0.2)?;
         let hidden_output = self.dropout.forward(&x_tmp, true)?;
 
         // Forward pass through output_nn
