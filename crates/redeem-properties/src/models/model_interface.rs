@@ -350,147 +350,93 @@ pub trait ModelInterface: Send + Sync {
         epochs: usize,
     ) -> Result<()> {
         let num_batches = if training_data.len() < batch_size {
-            1 // Ensure at least one batch if batch_size is larger than total length
+            1
         } else {
             let full_batches = training_data.len() / batch_size;
-            let remainder = training_data.len() % batch_size;
-        
-            if remainder > 0 {
-                full_batches + 1 
+            if training_data.len() % batch_size > 0 {
+                full_batches + 1
             } else {
-                full_batches 
+                full_batches
             }
         };
-
+    
         info!(
             "Fine-tuning {} model on {} peptide features ({} batches) for {} epochs",
             self.get_model_arch(), training_data.len(), num_batches, epochs
         );
-
+    
         let params = candle_nn::ParamsAdamW {
             lr: learning_rate,
             ..Default::default()
         };
         let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
-        let opt = Arc::new(Mutex::new(opt)); // Wrap optimizer in Arc<Mutex<>> for thread safety
-
+    
         for epoch in 0..epochs {
             let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
-            let total_loss = Arc::new(Mutex::new(0.0));
-
-            (0..num_batches).into_par_iter().for_each(|batch_idx| {
+            let mut total_loss = 0.0;
+    
+            for batch_idx in 0..num_batches {
                 let start = batch_idx * batch_size;
                 let end = (start + batch_size).min(training_data.len());
                 let batch_data = &training_data[start..end];
-
-                let peptides: Vec<String> = batch_data
-                    .iter()
-                    .map(|p| remove_mass_shift(&p.sequence))
-                    .collect();
-                let mods: Vec<String> = batch_data
-                    .iter()
-                    .map(|p| get_modification_string(&p.sequence, &modifications))
-                    .collect();
-                let mod_sites: Vec<String> = batch_data
-                    .iter()
-                    .map(|p| get_modification_indices(&p.sequence))
-                    .collect();
-
-                // Optional data for prediction
-                let charges: Option<Vec<i32>> = if batch_data.iter().all(|p| p.charge.is_some()) {
-                    Some(batch_data.iter().filter_map(|p| p.charge).collect())
-                } else {
-                    None
-                };
-
-                let nces: Option<Vec<i32>> = if batch_data.iter().all(|p| p.nce.is_some()) {
-                    Some(batch_data.iter().filter_map(|p| p.nce).collect())
-                } else {
-                    None
-                };
-
-                let instruments: Option<Vec<String>> =
-                    if batch_data.iter().all(|p| p.instrument.is_some()) {
-                        Some(
-                            batch_data
-                                .iter()
-                                .filter_map(|p| p.instrument.clone())
-                                .collect(),
-                        )
-                    } else {
-                        None
-                    };
-
-                let input_batch = self
-                    .encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)
-                    .unwrap();
-
+    
+                let peptides: Vec<String> = batch_data.iter().map(|p| remove_mass_shift(&p.sequence)).collect();
+                let mods: Vec<String> = batch_data.iter().map(|p| get_modification_string(&p.sequence, &modifications)).collect();
+                let mod_sites: Vec<String> = batch_data.iter().map(|p| get_modification_indices(&p.sequence)).collect();
+    
+                let charges = batch_data.iter().filter_map(|p| p.charge).collect::<Vec<_>>();
+                let charges = if charges.len() == batch_data.len() { Some(charges) } else { None };
+    
+                let nces = batch_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
+                let nces = if nces.len() == batch_data.len() { Some(nces) } else { None };
+    
+                let instruments = batch_data.iter().filter_map(|p| p.instrument.clone()).collect::<Vec<_>>();
+                let instruments = if instruments.len() == batch_data.len() { Some(instruments) } else { None };
+    
+                let input_batch = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
+    
                 let batch_targets = match self.property_type() {
                     PropertyType::RT => PredictionResult::RTResult(
-                        batch_data
-                            .iter()
-                            .map(|p| p.retention_time.unwrap_or_default())
-                            .collect(),
+                        batch_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
                     ),
                     PropertyType::CCS => PredictionResult::IMResult(
-                        batch_data
-                            .iter()
-                            .map(|p| p.ion_mobility.unwrap_or_default())
-                            .collect(),
+                        batch_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
                     ),
                     PropertyType::MS2 => PredictionResult::MS2Result(
-                        batch_data
-                            .iter()
-                            .map(|p| p.ms2_intensities.clone().unwrap_or_default())
-                            .collect(),
+                        batch_data.iter().map(|p| p.ms2_intensities.clone().unwrap_or_default()).collect(),
                     ),
                 };
-
+    
                 let target_batch = match batch_targets {
-                    PredictionResult::RTResult(ref values)
-                    | PredictionResult::IMResult(ref values) => {
-                        Tensor::new(values.clone(), &self.get_device()).unwrap()
+                    PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                        Tensor::new(values.clone(), &self.get_device())?
                     }
                     PredictionResult::MS2Result(ref spectra) => {
-                        let max_len = spectra.iter().map(|s| s.len()).max().unwrap();
-                        let feature_dim = spectra
-                            .first()
-                            .map(|s| s.first().map(|v| v.len()).unwrap_or(0))
-                            .unwrap_or(0);
+                        let max_len = spectra.iter().map(|s| s.len()).max().unwrap_or(1);
+                        let feature_dim = spectra.get(0).and_then(|s| s.get(0)).map(|v| v.len()).unwrap_or(1);
                         let mut padded_spectra = spectra.clone();
-                        for s in padded_spectra.iter_mut() {
+                        for s in &mut padded_spectra {
                             s.resize(max_len, vec![0.0; feature_dim]);
                         }
-                        Tensor::new(padded_spectra.concat(), &self.get_device())
-                            .unwrap()
-                            .reshape((batch_data.len(), max_len, feature_dim))
-                            .unwrap()
+                        Tensor::new(padded_spectra.concat(), &self.get_device())?.reshape((batch_data.len(), max_len, feature_dim))?
                     }
                 };
+    
+                let predicted = self.forward(&input_batch)?;
+                let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
+                opt.backward_step(&loss)?;
+    
+                total_loss += loss.to_vec0::<f32>().unwrap_or(990.0);
 
-                let predicted = self.forward(&input_batch).unwrap();
-                let loss = candle_nn::loss::mse(&predicted, &target_batch).unwrap();
-
-                // opt.backward_step(&loss).unwrap();
-                // Lock the optimizer before updating
-                let mut opt_lock = opt.lock().unwrap();
-                opt_lock.backward_step(&loss).unwrap();
-
-                let loss_value = loss.to_vec0::<f32>().unwrap_or(990.0); // Ensure no error
-                                                                         // Safely accumulate the loss
-                let mut total_loss_lock = total_loss.lock().unwrap();
-                *total_loss_lock += loss_value;
+                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
                 progress.inc();
-            });
-
-            let avg_loss = *total_loss.lock().unwrap() as f32 / num_batches as f32;
-            progress.update_description(&format!(
-                "[fine-tuning] Epoch {}: Avg. Batch Loss: {}",
-                epoch, avg_loss
-            ));
+            }
+    
+            let avg_loss = total_loss / num_batches as f32;
+            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Batch Loss: {}", epoch, avg_loss));
             progress.finish();
         }
-
+    
         Ok(())
     }
 
