@@ -11,7 +11,7 @@ pub struct ModelParams {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(tag = "model")]
+// #[serde(tag = "model")]
 pub enum ModelType {
     XGBoost {
         max_depth: u32,
