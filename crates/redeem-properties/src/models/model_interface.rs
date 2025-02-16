@@ -115,13 +115,7 @@ pub fn create_var_map(
     let mut ws = var_map.data().lock().unwrap();
 
     for (name, tensor) in tensor_data {
-        // NOTE: This is a temporary hack-fix for LSTM weights, which use sigmoid, which currently throws an error on CUDA: `no cuda implementation for sigmoid`
-        // NOTE: Need to set BERT weights to CPU, since it uses a LayerNorm module that throws an error on CUDA: `Some(no cuda implementation for layer-norm`
-        if name.contains("hidden") {
-            ws.insert(name, Var::from_tensor(&tensor.to_device(&Device::Cpu)?)?);
-        } else {
-            ws.insert(name, Var::from_tensor(&tensor.to_device(device)?)?);
-        }
+        ws.insert(name, Var::from_tensor(&tensor.to_device(device)?)?);
     }
 
     Ok(())
