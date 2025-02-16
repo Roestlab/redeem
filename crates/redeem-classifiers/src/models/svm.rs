@@ -40,18 +40,19 @@ impl SemiSupervisedModel for SVMClassifier {
         let y = y.iter().map(|&l| l == 1).collect::<Vec<bool>>();
 
         // let y_eval = y_eval.map(|y_e| y_e.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>());
-        let y_eval = y_eval.map(|y_e| y_e.iter().map(|&l| l == 1).collect::<Vec<bool>>());
+        // let y_eval = y_eval.map(|y_e| y_e.iter().map(|&l| l == 1).collect::<Vec<bool>>());
 
         // Convert y and y_eval to ArrayBase<OwnedRepr<i32>, Dim<[usize; 1]>>
         let y = Array1::from_vec(y);
         // let y = CountedTargets::new(y);
 
-        let y_eval = y_eval.map(|y_e| Array1::from_vec(y_e));
+        // let y_eval = y_eval.map(|y_e| Array1::from_vec(y_e));
 
         // Convert feature matrix from f32 to f64
         let x_f64 = x.mapv(|v| v as f64);
 
         // Convert feature matrix into Dataset
+        log::trace!("Preparing dataset...");
         let dataset = Dataset::new(x_f64.to_owned(), y);
 
         // Extract SVM parameters from ModelParams
@@ -83,7 +84,9 @@ impl SemiSupervisedModel for SVMClassifier {
             };
 
             // Fit the model
+            log::trace!("Fitting model...");
             self.model = Some(<SvmParams<f64, Pr> as linfa::traits::Fit<_, _, _>>::fit(&model, &dataset).unwrap());
+            log::trace!("Model fitted successfully.");
         } else {
             eprintln!("Error: Expected ModelType::SVM but got another type.");
         }
@@ -174,5 +177,7 @@ mod tests {
         let cm = <Array1<bool> as ToConfusionMatrix<bool, _>>::confusion_matrix(&preds, &ground_truth).unwrap();
 
         println!("Confusion Matrix: {:?}", cm);
+
+        println!("accuracy {}, MCC {}", cm.accuracy(), cm.mcc());
     }
 }

@@ -43,7 +43,7 @@ impl SemiSupervisedLearner {
     /// A new SemiSupervisedLearner
     pub fn new(
         model_type: ModelType,
-        learning_rate: f32, // Explicitly pass learning rate
+        learning_rate: f32, 
         train_fdr: f32,
         xeval_num_iter: usize,
     ) -> Self {
@@ -160,7 +160,7 @@ impl SemiSupervisedLearner {
             .enumerate()
             .filter_map(|(i, &label)| if label == 0 { Some(i) } else { None })
             .collect();
-
+        log::trace!("Removing {} unlabeled PSMs", indices_to_remove.len());
         experiment.remove_psms(&indices_to_remove);
     }
 
@@ -213,6 +213,7 @@ impl SemiSupervisedLearner {
     ///
     /// The predictions for the input features
     pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>) -> Array1<f32> {
+
         let mut experiment = Experiment::new(x.clone(), y.clone());
         experiment.log_input_data_summary();
 
@@ -224,14 +225,17 @@ impl SemiSupervisedLearner {
         let folds = self.create_folds(&experiment, self.xeval_num_iter);
 
         for (fold, (mut train_exp, test_exp)) in folds.into_iter().enumerate() {
-            println!("Learning on Cross-Validation Fold: {}", fold);
+            
             let n_samples = experiment.x.nrows();
+            log::info!("Learning on Cross-Validation Fold: {} with {} training samples", fold, train_exp.x.nrows());
+
             let mut all_predictions = Array1::zeros(n_samples);
 
             self.remove_unlabeled_psms(&mut train_exp);
 
             self.model
                 .fit(&train_exp.x, &train_exp.y.to_vec(), None, None);
+            
             let fold_predictions = Array1::from(self.model.predict_proba(&test_exp.x));
 
             // Update predictions
@@ -244,7 +248,7 @@ impl SemiSupervisedLearner {
         }
 
         // Final prediction on the entire dataset
-        println!("Final prediction on the entire dataset");
+        log::info!("Final prediction on the entire dataset");
         let experiment = Experiment::new(x, y);
 
         self.model
@@ -321,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn test_semi_supervised_learner() {
+    fn test_xgb_semi_supervised_learner() {
         // Load the test data from the TSV files
         let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
         let y = read_labels_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_labels_for_testing.csv").unwrap();
@@ -339,6 +343,39 @@ mod tests {
             0.001,
             1.0,
             2,
+        );
+        let predictions = learner.fit(x, y.clone());
+
+        println!("Labels: {:?}", y);
+
+        // Evaluate the predictions
+        println!("Predictions: {:?}", predictions);
+        // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
+    }
+
+    #[test]
+    fn test_svm_semi_supervised_learner() {
+        // Load the test data from the TSV files
+        let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
+        let y = read_labels_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_labels_for_testing.csv").unwrap();
+
+        println!("Loaded features shape: {:?}", x.shape());
+        println!("Loaded labels shape: {:?}", y.shape());
+
+        // Create and train your SemiSupervisedLearner
+        let params = ModelType::SVM  {
+                eps: 0.1,
+                c: (1.0, 1.0),
+                kernel: "linear".to_string(),
+                gaussian_kernel_eps: 0.1,
+                polynomial_kernel_constant: 1.0,
+                polynomial_kernel_degree: 3.0
+            };
+        let mut learner = SemiSupervisedLearner::new(
+            params,
+            0.001,
+            1.0,
+            1000,
         );
         let predictions = learner.fit(x, y.clone());
 

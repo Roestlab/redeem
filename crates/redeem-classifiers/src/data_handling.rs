@@ -31,7 +31,7 @@ impl Experiment {
     pub fn log_input_data_summary(&self) {
         println!("----- Input Data Summary -----");
         println!("Info: {} Target PSMs and {} Decoy PSMs", self.y.iter().filter(|&&v| v == 1).count(), self.y.iter().filter(|&&v| v == -1).count());
-        println!("Info: {} scores (columns)", self.x.ncols());
+        println!("Info: {} feature scores (columns)", self.x.ncols());
         println!("-------------------------------");
     }
 
