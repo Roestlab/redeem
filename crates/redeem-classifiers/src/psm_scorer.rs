@@ -314,7 +314,7 @@ impl SemiSupervisedLearner {
 
             let mut all_predictions = Array1::zeros(n_samples);
 
-            self.remove_unlabeled_psms(&mut train_exp);
+            // self.remove_unlabeled_psms(&mut train_exp);
 
             self.model
                 .fit(&train_exp.x, &train_exp.y.to_vec(), None, None);
