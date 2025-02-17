@@ -27,6 +27,7 @@ pub struct SemiSupervisedLearner {
     model: Box<dyn SemiSupervisedModel>,
     train_fdr: f32,
     xeval_num_iter: usize,
+    class_pct: Option<(f64, f64)>,
 }
 
 impl SemiSupervisedLearner {
@@ -37,6 +38,7 @@ impl SemiSupervisedLearner {
     /// * `model_type` - The type of model to use
     /// * `train_fdr` - The FDR threshold to use for training
     /// * `xeval_num_iter` - The number of iterations to use for cross-validation
+    /// * `class_pct` - (f64, f64) The percentage of targets and decoys to use for training
     ///
     /// # Returns
     ///
@@ -46,6 +48,7 @@ impl SemiSupervisedLearner {
         learning_rate: f32, 
         train_fdr: f32,
         xeval_num_iter: usize,
+        class_pct: Option<(f64, f64)>,
     ) -> Self {
         let model: Box<dyn SemiSupervisedModel> = match model_type {
             ModelType::XGBoost { max_depth, num_boost_round } => {
@@ -75,6 +78,7 @@ impl SemiSupervisedLearner {
             model,
             train_fdr,
             xeval_num_iter,
+            class_pct,
         }
     }
 
@@ -170,6 +174,8 @@ impl SemiSupervisedLearner {
     ///
     /// * `experiment` - The experiment to use
     /// * `n_folds` - The number of folds to create
+    /// * `target_pct` - The percentage of targets to use for training
+    /// * `decoy_pct` - The percentage of decoys to use for training
     ///
     /// # Returns
     ///
@@ -178,29 +184,101 @@ impl SemiSupervisedLearner {
         &self,
         experiment: &Experiment,
         n_folds: usize,
+        target_pct: Option<f64>,
+        decoy_pct: Option<f64>,
     ) -> Vec<(Experiment, Experiment)> {
+        let mut rng = thread_rng();
         let n_samples = experiment.x.nrows();
-        let mut indices: Vec<usize> = (0..n_samples).collect();
-        indices.shuffle(&mut thread_rng());
-
-        let fold_size = n_samples / n_folds;
-
+    
+        // Separate targets and decoys
+        let targets: Vec<_> = (0..n_samples).filter(|&i| experiment.y[i] == 1).collect();
+        let decoys: Vec<_> = (0..n_samples).filter(|&i| experiment.y[i] == -1).collect();
+    
+        // If neither target_pct nor decoy_pct is set, use the full data
+        let use_full_data = target_pct.is_none() && decoy_pct.is_none();
+    
+        // Calculate the number of targets and decoys to include in each fold
+        let targets_per_fold = if use_full_data {
+            (targets.len() as f64 / n_folds as f64).ceil() as usize
+        } else {
+            (targets.len() as f64 * target_pct.unwrap_or(1.0) / n_folds as f64).ceil() as usize
+        };
+        let decoys_per_fold = if use_full_data {
+            (decoys.len() as f64 / n_folds as f64).ceil() as usize
+        } else {
+            (decoys.len() as f64 * decoy_pct.unwrap_or(1.0) / n_folds as f64).ceil() as usize
+        };
+    
         (0..n_folds)
             .map(|i| {
-                let test_indices: Vec<usize> = indices[i * fold_size..(i + 1) * fold_size].to_vec();
-                let mut train_mask = Array1::from_elem(n_samples, true);
-                for &idx in &test_indices {
-                    train_mask[idx] = false;
+                // Randomly select targets and decoys for the test set
+                let test_targets: Vec<_> = targets.choose_multiple(&mut rng, targets_per_fold).cloned().collect();
+                let test_decoys: Vec<_> = decoys.choose_multiple(&mut rng, decoys_per_fold).cloned().collect();
+    
+                // Remaining targets and decoys after selecting test samples
+                let remaining_targets: Vec<_> = targets.iter().filter(|t| !test_targets.contains(t)).cloned().collect();
+                let remaining_decoys: Vec<_> = decoys.iter().filter(|d| !test_decoys.contains(d)).cloned().collect();
+    
+                // Randomly select targets and decoys for the training set
+                let train_targets: Vec<_> = if use_full_data {
+                    remaining_targets.clone()
+                } else {
+                    remaining_targets
+                        .choose_multiple(
+                            &mut rng,
+                            (remaining_targets.len() as f64 * target_pct.unwrap_or(1.0)).round() as usize,
+                        )
+                        .cloned()
+                        .collect()
+                };
+                let train_decoys: Vec<_> = if use_full_data {
+                    remaining_decoys.clone()
+                } else {
+                    remaining_decoys
+                        .choose_multiple(
+                            &mut rng,
+                            (remaining_decoys.len() as f64 * decoy_pct.unwrap_or(1.0)).round() as usize,
+                        )
+                        .cloned()
+                        .collect()
+                };
+    
+                // Combine training and testing indices
+                let train_indices: Vec<_> = train_targets.into_iter().chain(train_decoys.into_iter()).collect();
+                let test_indices: Vec<_> = test_targets.into_iter().chain(test_decoys.into_iter()).collect();
+    
+                // Create masks for training and testing sets
+                let mut train_mask = Array1::from_elem(n_samples, false);
+                for &idx in &train_indices {
+                    train_mask[idx] = true;
                 }
-                let test_mask = train_mask.mapv(|x| !x);
-
+    
+                let mut test_mask = Array1::from_elem(n_samples, false);
+                for &idx in &test_indices {
+                    test_mask[idx] = true;
+                }
+    
+                // Filter the experiment to create training and testing sets
                 let train_exp = experiment.filter(&train_mask);
                 let test_exp = experiment.filter(&test_mask);
-
+    
+                log::trace!(
+                    "Preparing fold {} with {} training samples ({} targets and {} decoys) and {} testing samples ({} targets and {} decoys)",
+                    i,
+                    train_exp.x.nrows(),
+                    train_exp.y.iter().filter(|&&x| x == 1).count(),
+                    train_exp.y.iter().filter(|&&x| x == -1).count(),
+                    test_exp.x.nrows(),
+                    test_exp.y.iter().filter(|&&x| x == 1).count(),
+                    test_exp.y.iter().filter(|&&x| x == -1).count()
+                );
+    
                 (train_exp, test_exp)
             })
             .collect()
     }
+    
+    
 
     /// Fit the SemiSupervisedLearner
     ///
@@ -215,6 +293,7 @@ impl SemiSupervisedLearner {
     pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>) -> Array1<f32> {
 
         let mut experiment = Experiment::new(x.clone(), y.clone());
+
         experiment.log_input_data_summary();
 
         // Get initial best feature
@@ -222,7 +301,7 @@ impl SemiSupervisedLearner {
             self.init_best_feature(&experiment, self.train_fdr);
         experiment.y = new_labels.clone();
 
-        let folds = self.create_folds(&experiment, self.xeval_num_iter);
+        let folds = self.create_folds(&experiment, self.xeval_num_iter, self.class_pct.map(|(t, d)| t), self.class_pct.map(|(t, d)| d));
 
         for (fold, (mut train_exp, test_exp)) in folds.into_iter().enumerate() {
             
@@ -343,6 +422,7 @@ mod tests {
             0.001,
             1.0,
             2,
+            Some((0.2, 0.5))
         );
         let predictions = learner.fit(x, y.clone());
 
@@ -376,6 +456,7 @@ mod tests {
             0.001,
             1.0,
             1000,
+            Some((0.2, 0.5))
         );
         let predictions = learner.fit(x, y.clone());
 
