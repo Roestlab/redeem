@@ -198,7 +198,7 @@ impl SemiSupervisedLearner {
         let use_full_data = target_pct.is_none() && decoy_pct.is_none();
 
         if !use_full_data {
-            log::info!("Using {} targets and {} decoys for training", target_pct.unwrap_or(1.0), decoy_pct.unwrap_or(1.0));
+            log::info!("Using {} % of targets and {} % of decoys for training", target_pct.unwrap_or(1.0) * 100.0, decoy_pct.unwrap_or(1.0) * 100.0);
         }
     
         // Calculate the number of targets and decoys to include in each fold
