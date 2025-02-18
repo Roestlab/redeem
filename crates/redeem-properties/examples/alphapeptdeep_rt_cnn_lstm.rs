@@ -103,8 +103,10 @@ fn print_predictions(peptides: &[String], rt_preds: &[f32], observed_rts: &[f32]
 }
 
 fn main() -> Result<()> {
-    let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-    let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+    env_logger::init();
+    // let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+    let model_path = PathBuf::from("/home/singjc/Documents/github/redeem/rt_fine_tuned.safetensors");
+    let constants_path = PathBuf::from("/home/singjc/Documents/github/redeem/crates/redeem-properties/data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
 
     // let device use cuda if available otherwise use cpu
     let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
