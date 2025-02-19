@@ -84,6 +84,7 @@ fn main() -> Result<()> {
         num_boost_round: 10,
         debug: true,
         training_optimization_level: 1,
+        loss_type: "LogLikelyhood".to_string(),
     };
 
     let mut learner = SemiSupervisedLearner::new(

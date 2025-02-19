@@ -37,6 +37,7 @@ impl SemiSupervisedModel for GBDTClassifier {
             num_boost_round,
             debug,
             training_optimization_level,
+            loss_type,
         } = &self.params.model_type {
             let mut config = Config::new();
             
@@ -46,7 +47,7 @@ impl SemiSupervisedModel for GBDTClassifier {
             config.set_iterations(*num_boost_round as usize);
             config.set_debug(*debug);
             config.set_training_optimization_level(*training_optimization_level);
-            config.set_loss("LogLikelyhood"); 
+            config.set_loss(loss_type); 
 
 
             let mut gbdt = GBDT::new(&config);
@@ -126,6 +127,7 @@ mod tests {
                 num_boost_round: 3,
                 debug: true,
                 training_optimization_level: 2,
+                loss_type: "LogLikelyhood".to_string(),
             },
         };
 
