@@ -73,7 +73,7 @@ impl SemiSupervisedLearner {
                 };
                 Box::new(SVMClassifier::new(params))
             }
-            ModelType::GBDT { max_depth, num_boost_round, debug, training_optimization_level } => {
+            ModelType::GBDT { max_depth, num_boost_round, debug, training_optimization_level, loss_type } => {
                 let params = ModelParams {
                     learning_rate,
                     model_type: ModelType::GBDT {
@@ -81,6 +81,7 @@ impl SemiSupervisedLearner {
                         num_boost_round,
                         debug,
                         training_optimization_level,
+                        loss_type
                     },
                 };
                 Box::new(GBDTClassifier::new(params))
