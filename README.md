@@ -35,4 +35,5 @@ The ReDeeM project consists of two primary crates:
     Model | Name | Architecture | Implemented
     --- | --- | --- | ---
     XGBoost Classifier | `redeem_classifiers::XGBoostClassifier` | XGBoost | :heavy_check_mark:
+    GBDT Classifier | `redeem_classifiers::GBDTClassifier` | GBDT | :heavy_check_mark:
     SVM Classifier | `redeem_classifiers::SVMClassifier` | SVM | :heavy_check_mark:
