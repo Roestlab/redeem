@@ -348,8 +348,8 @@ impl SemiSupervisedLearner {
         log::info!("Final prediction on the entire dataset");
         let experiment = Experiment::new(x, y);
 
-        self.model
-            .fit(&experiment.x, &experiment.y.to_vec(), None, None);
+        // self.model
+        //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
         Array1::from(self.model.predict_proba(&experiment.x))
     }
 }
