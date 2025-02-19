@@ -19,7 +19,7 @@ use crate::utils::logging::Progress;
 use crate::utils::data_handling::PeptideData;
 use crate::utils::peptdeep_utils::{extract_masses_and_indices, get_modification_indices, remove_mass_shift};
 use crate::{
-    models::model_interface::{ModelInterface, PropertyType, PredictionResult,create_var_map},
+    models::model_interface::{ModelInterface, PropertyType, PredictionResult,load_tensors_from_model, create_var_map},
     utils::peptdeep_utils::{
         load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
     },
@@ -75,7 +75,7 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         mask_modloss: bool,
         device: Device
     ) -> Result<Self> {
-        let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
+        let tensor_data = load_tensors_from_model(model_path.as_ref(), &device)?;
 
         let mut varmap = candle_nn::VarMap::new();
         create_var_map(&mut varmap, tensor_data, &device)?;

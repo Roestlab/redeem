@@ -10,14 +10,13 @@ use crate::{
         }
     },
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor, Var};
-use candle_nn::{Module, Optimizer, VarBuilder, VarMap};
+use candle_nn::{Module, Optimizer, VarMap};
 use log::info;
 use rayon::prelude::*;
 use std::ops::{Index, IndexMut};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, path::PathBuf};
 
@@ -25,6 +24,49 @@ use std::{collections::HashMap, path::PathBuf};
 const CHARGE_FACTOR: f64 = 0.1;
 const NCE_FACTOR: f64 = 0.01;
 
+
+/// Load tensors from a model file.
+/// 
+/// Supported model formats include:
+/// - PyTorch (.pt, .pth, .pkl)
+/// - SafeTensors (.safetensors)
+/// 
+/// # Arguments
+/// * `model_path` - Path to the model file.
+/// * `device` - Device to load the tensors on.
+/// 
+/// # Returns
+/// A vector of tuples containing the tensor names and their corresponding tensors.
+pub fn load_tensors_from_model<P: AsRef<Path>>(model_path: P, device: &Device) -> Result<Vec<(String, Tensor)>> {
+    let path: &Path = model_path.as_ref();
+    let extension = path.extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    
+    match extension.as_str() {
+        "pt" | "pth" | "pkl" => {
+            log::trace!("Loading tensors from PyTorch model: {:?}", path);
+            let tensor_data = candle_core::pickle::read_all(path)
+                .with_context(|| format!("Failed to read PyTorch model from: {:?}", path))?;
+            Ok(tensor_data)
+        }
+        "safetensors" => {
+            log::trace!("Loading tensors from SafeTensors model: {:?}", path);
+            let tensor_data = candle_core::safetensors::load(path, device)
+                .with_context(|| format!("Failed to load SafeTensors from: {:?}", path))?;
+
+            // Convert HashMap<String, Tensor> to Vec<(String, Tensor)>
+            let tensors = tensor_data.into_iter().collect();
+
+            Ok(tensors)
+        }
+        _ => Err(anyhow::anyhow!("Unsupported model format: {:?}", path)),
+    }
+}
+
+
+/// Represents the type of property to predict.
 #[derive(Clone)]
 pub enum PropertyType {
     RT,
@@ -42,6 +84,9 @@ impl PropertyType {
     }
 }
 
+/// Represents a single prediction value or a matrix of prediction values.
+/// 
+/// This enum is used to store the output of a model prediction, which can be a single value or a matrix of values. For example, retention time (RT) and collision cross-section (CCS) predictions are single values, while MS2 intensity predictions are matrices.
 #[derive(Clone)]
 pub enum PredictionValue {
     Single(f32),
@@ -81,6 +126,10 @@ impl Index<(usize, usize)> for PredictionValue {
     }
 }
 
+
+/// Represents the output of a model prediction.
+/// 
+/// This enum is used to store the output of a model prediction, which can be a vector of retention times (RT), collision cross-sections (CCS), or a vector matrices of MS2 intensities.
 #[derive(Debug, Clone)]
 pub enum PredictionResult {
     RTResult(Vec<f32>),
@@ -106,7 +155,12 @@ impl PredictionResult {
     }
 }
 
-/// Creates a new `VarMap` and populates it with the given tensor data.
+/// Populates a mutable `VarMap` instance with tensors.
+/// 
+/// # Arguments
+/// * `var_map` - A mutable reference to a `VarMap` instance.
+/// * `tensor_data` - A vector of tuples containing the tensor names and their corresponding tensors.
+/// * `device` - The device to load the tensors on.
 pub fn create_var_map(
     var_map: &mut VarMap,
     tensor_data: Vec<(String, Tensor)>,
@@ -121,11 +175,19 @@ pub fn create_var_map(
     Ok(())
 }
 
+
+/// Represents an abstract deep learning model interface.
+/// 
+/// This trait defines the methods and properties that a deep learning model must implement to be used for property prediction tasks.
 pub trait ModelInterface: Send + Sync {
+
+    /// Get the property type of the model.
     fn property_type(&self) -> PropertyType;
 
+    /// Get the model architecture name.
     fn model_arch(&self) -> &'static str;
 
+    /// Create a new instance of the model.
     fn new<P: AsRef<Path>>(
         model_path: P,
         constants_path: P,
@@ -138,6 +200,7 @@ pub trait ModelInterface: Send + Sync {
     where
         Self: Sized;
 
+    /// Forward pass through the model.
     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error>;
 
     /// Predict the retention times for a peptide sequence.
@@ -191,6 +254,17 @@ pub trait ModelInterface: Send + Sync {
     }
 
     /// Encode a batch of peptide sequences (plus modifications) into a tensor.
+    /// 
+    /// # Arguments
+    /// * `peptide_sequences` - A vector of peptide sequences.
+    /// * `mods` - A vector of strings representing the modifications for each peptide.
+    /// * `mod_sites` - A vector of strings representing the modification site indices for each peptide.
+    /// * `charge` - An optional vector of charge states for each peptide.
+    /// * `nce` - An optional vector of nominal collision energies for each peptide.
+    /// * `instruments` - An optional vector of instrument names for each peptide.
+    /// 
+    /// # Returns
+    /// A tensor containing the encoded peptide sequences.
     fn encode_peptides(
         &self,
         peptide_sequences: &[String],
@@ -260,6 +334,17 @@ pub trait ModelInterface: Send + Sync {
     }
 
     /// Encode peptide sequence (plus modifications) into a tensor.
+    /// 
+    /// # Arguments
+    /// * `peptide_sequence` - The peptide sequence.
+    /// * `mods` - A string representing the modifications for the peptide.
+    /// * `mod_sites` - A string representing the modification site indices for the peptide.
+    /// * `charge` - An optional charge state for the peptide.
+    /// * `nce` - An optional nominal collision energy for the peptide.
+    /// * `instrument` - An optional instrument name for the peptide.
+    /// 
+    /// # Returns
+    /// A tensor containing the encoded peptide sequence.
     fn encode_peptide(
         &self,
         peptide_sequence: &str,
@@ -332,6 +417,13 @@ pub trait ModelInterface: Send + Sync {
     }
 
     /// Fine-tune the model on a batch of training data.
+    /// 
+    /// # Arguments
+    /// * `training_data` - A vector of `PeptideData` instances representing the training data.
+    /// * `modifications` - A map of modifications and their corresponding feature vectors.
+    /// * `batch_size` - The batch size to use for training.
+    /// * `learning_rate` - The learning rate to use for training.
+    /// * `epochs` - The number of epochs to train for.
     fn fine_tune(
         &mut self,
         training_data: &Vec<PeptideData>,

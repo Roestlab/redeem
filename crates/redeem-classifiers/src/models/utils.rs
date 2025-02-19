@@ -25,6 +25,13 @@ pub enum ModelType {
         polynomial_kernel_constant: f64,
         polynomial_kernel_degree: f64,
     },
+    GBDT {
+        max_depth: u32,
+        num_boost_round: u32,
+        debug: bool,
+        training_optimization_level: u8,
+        loss_type: String,
+    },
 }
 
 impl ModelType {
@@ -41,6 +48,13 @@ impl ModelType {
                 gaussian_kernel_eps: 0.1,
                 polynomial_kernel_constant: 1.0,
                 polynomial_kernel_degree: 3.0,
+            }),
+            "gbdt" => Ok(ModelType::GBDT {
+                max_depth: 6,
+                num_boost_round: 3,
+                debug: false,
+                training_optimization_level: 2,
+                loss_type:"LogLikelyhood".to_string(),
             }),
             _ => Err(format!("Unknown model type: {}", s)),
         }

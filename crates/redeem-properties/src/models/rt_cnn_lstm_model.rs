@@ -13,7 +13,7 @@ use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
 };
 use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::models::model_interface::{ModelInterface, PropertyType, PredictionResult, create_var_map};
+use crate::models::model_interface::{ModelInterface, PropertyType, PredictionResult, load_tensors_from_model, create_var_map};
 use crate::utils::data_handling::PeptideData;
 use crate::utils::peptdeep_utils::{
     extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
@@ -63,7 +63,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
         device: Device,
     ) -> Result<Self> {
 
-        let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
+        let tensor_data = load_tensors_from_model(model_path.as_ref(), &device)?;
  
         let mut varmap = candle_nn::VarMap::new();
         create_var_map(&mut varmap, tensor_data, &device)?;

@@ -18,7 +18,7 @@ use crate::{
         },
         featurize::{aa_one_hot, get_aa_indices, get_mod_features},
     },
-    models::model_interface::{create_var_map, ModelInterface, PropertyType},
+    models::model_interface::{load_tensors_from_model, create_var_map, ModelInterface, PropertyType},
     utils::{
         data_handling::PeptideData,
         logging::Progress,
@@ -83,8 +83,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         mask_modloss: bool,
         device: Device,
     ) -> Result<Self> {
-        // let var_store = VarBuilder::from_pth(model_path, candle_core::DType::F32, &device)?;
-        let tensor_data = candle_core::pickle::read_all(model_path.as_ref())?;
+        let tensor_data = load_tensors_from_model(model_path.as_ref(), &device)?;
 
         let mut varmap = VarMap::new();
         create_var_map(&mut varmap, tensor_data, &device)?;
