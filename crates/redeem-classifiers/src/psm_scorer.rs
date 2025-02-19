@@ -9,6 +9,7 @@ use crate::data_handling::Experiment;
 use crate::models::utils::{ModelParams, ModelType};
 use crate::models::xgboost::XGBoostClassifier;
 use crate::models::svm::SVMClassifier;
+use crate::models::gbdt::GBDTClassifier;
 
 
 pub trait SemiSupervisedModel {
@@ -71,6 +72,18 @@ impl SemiSupervisedLearner {
                     },
                 };
                 Box::new(SVMClassifier::new(params))
+            }
+            ModelType::GBDT { max_depth, num_boost_round, debug, training_optimization_level } => {
+                let params = ModelParams {
+                    learning_rate,
+                    model_type: ModelType::GBDT {
+                        max_depth,
+                        num_boost_round,
+                        debug,
+                        training_optimization_level,
+                    },
+                };
+                Box::new(GBDTClassifier::new(params))
             }
         };
 
