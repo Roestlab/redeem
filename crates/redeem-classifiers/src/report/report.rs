@@ -78,11 +78,45 @@ impl Report {
         let current_date = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     
         html! {
+            (maud::DOCTYPE)
             html {
                 head {
                     title { (self.title) }
                     script src="https://cdn.plot.ly/plotly-latest.min.js" {}
+                    // Include DataTables CSS and JS
+                    link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.css" {}
+                    script src="https://code.jquery.com/jquery-3.6.0.min.js" {}
+                    script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js" {}
+                    // Include FileSaver.js for downloading
+                    script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js" {}
     
+                    // Custom JavaScript for interactivity and downloading
+                    script {
+                        r#"
+                        $(document).ready(function() {
+                            console.log("Initializing DataTable...");
+                            $('#dataTable').DataTable();
+
+                            $('#downloadCsv').on('click', function() {
+                                console.log("Download button clicked...");
+                                let csv = [];
+                                let rows = document.querySelectorAll('#dataTable tr');
+                                for (let i = 0; i < rows.length; i++) {
+                                    let row = [], cols = rows[i].querySelectorAll('td, th');
+                                    for (let j = 0; j < cols.length; j++) {
+                                        row.push(cols[j].innerText);
+                                    }
+                                    csv.push(row.join(','));
+                                }
+                                let csvContent = csv.join('\n');
+                                console.log("Generated CSV content:", csvContent);
+                                let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                saveAs(blob, 'table_data.csv');
+                            });
+                        });
+                        "#
+                    }
+
                     // Banner CSS
                     style {
                         (PreEscaped("
