@@ -58,6 +58,12 @@ fn interpolate_ecdf(x: &Vec<f32>, y: &Vec<f32>, x_seq: &Vec<f32>) -> Vec<f32> {
     }).collect()
 }
 
+fn estimate_pi0(decoy_scores: &Vec<f32>, lambda: f32) -> f32 {
+    let n = decoy_scores.len() as f32;
+    let count_above_lambda = decoy_scores.iter().filter(|&&s| s > lambda).count() as f32;
+    count_above_lambda / ((1.0 - lambda) * n)
+}
+
 /// Generate a P-P plot as described in Debrie, E. et. al. (2023) Journal of Proteome Research.
 /// 
 /// # Arguments
@@ -67,12 +73,8 @@ fn interpolate_ecdf(x: &Vec<f32>, y: &Vec<f32>, x_seq: &Vec<f32>) -> Vec<f32> {
 /// * `title` - The title of the plot
 /// 
 pub fn plot_pp(scores: &Array1<f32>, labels: &Array1<i32>, title: &str) -> Result<Plot, String> {
-
-    // Assert that the scores and labels have the same length
     assert_eq!(scores.len(), labels.len(), "Scores and labels must have the same length");
-
-    // Assert that the labels are only two classes
-    assert!(labels.iter().all(|&l| l == 1 || l == -1), "Labels must be composed of only two classes, 1 for targets and -1 for decoys");
+    assert!(labels.iter().all(|&l| l == 1 || l == -1), "Labels must be 1 for targets and -1 for decoys");
 
     let mut scores_target = Vec::new();
     let mut scores_decoy = Vec::new();
@@ -95,20 +97,35 @@ pub fn plot_pp(scores: &Array1<f32>, labels: &Array1<i32>, title: &str) -> Resul
     let y_target_interp = interpolate_ecdf(&x_target, &y_target, &x_seq);
     let y_decoy_interp = interpolate_ecdf(&x_decoy, &y_decoy, &x_seq);
 
+    // Estimate pi0
+    let pi0 = estimate_pi0(&scores_decoy, 0.5);
+    let pi0_line_y: Vec<f32> = y_decoy_interp.iter().map(|&x| pi0 * x).collect();
+
     let mut plot = Plot::new();
 
     let scatter = Scatter::new(y_decoy_interp.clone(), y_target_interp.clone())
         .mode(plotly::common::Mode::Markers)
         .name("Target vs Decoy ECDF");
-    
+
     let reference_line = Scatter::new(vec![0.0, 1.0], vec![0.0, 1.0])
         .mode(plotly::common::Mode::Lines)
         .name("y = x (Perfect match)")
         .line(plotly::common::Line::new().color("red").dash(plotly::common::DashType::Dash));
-    
+
+    let pi0_line = Scatter::new(y_decoy_interp.clone(), pi0_line_y)
+        .mode(plotly::common::Mode::Lines)
+        .name(format!("Estimated π₀ = {:.3}", pi0))
+        .line(plotly::common::Line::new().color("blue").dash(plotly::common::DashType::Dot));
+
     plot.add_trace(scatter);
     plot.add_trace(reference_line);
-    plot.set_layout(Layout::new().title(title).x_axis(plotly::layout::Axis::new().title("Decoy ECDF")).y_axis(plotly::layout::Axis::new().title("Target ECDF")));
-    
+    plot.add_trace(pi0_line);
+    plot.set_layout(
+        Layout::new()
+            .title(title)
+            .x_axis(plotly::layout::Axis::new().title("Decoy ECDF"))
+            .y_axis(plotly::layout::Axis::new().title("Target ECDF")),
+    );
+
     Ok(plot)
 }
