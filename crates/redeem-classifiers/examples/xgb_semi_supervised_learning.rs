@@ -67,6 +67,7 @@ fn save_predictions_to_csv(
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
     // Load the test data from the TSV files
     let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
     // Select first 10 columns of data
@@ -87,6 +88,7 @@ fn main() -> Result<()> {
         0.001,
         1.0,
         10,
+        Some((0.15, 1.0))
     );
     let predictions = learner.fit(x, y.clone());
 

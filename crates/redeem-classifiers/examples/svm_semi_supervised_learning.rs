@@ -91,7 +91,8 @@ fn main() -> Result<()> {
         params,
         0.001,
         1.0,
-        5,
+        500,
+        Some((0.15, 1.0))
     );
     let predictions = learner.fit(x, y.clone());
 
