@@ -83,41 +83,46 @@ impl Report {
                 head {
                     title { (self.title) }
                     script src="https://cdn.plot.ly/plotly-latest.min.js" {}
-                    // Include DataTables CSS and JS
-                    link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.css" {}
-                    script src="https://code.jquery.com/jquery-3.6.0.min.js" {}
-                    script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js" {}
-                    // Include FileSaver.js for downloading
+                    script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.4/jquery.min.js" {}
+                    script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js" {}
+                    link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css" {}
                     script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js" {}
     
-                    // Custom JavaScript for interactivity and downloading
+                    // JavaScript for DataTables and CSV export
                     script {
                         r#"
                         $(document).ready(function() {
-                            console.log("Initializing DataTable...");
-                            $('#dataTable').DataTable();
-
+                            let table = $('#dataTable').DataTable({
+                                paging: true,
+                                searching: true,
+                                ordering: true
+                            });
+                            
                             $('#downloadCsv').on('click', function() {
-                                console.log("Download button clicked...");
                                 let csv = [];
-                                let rows = document.querySelectorAll('#dataTable tr');
-                                for (let i = 0; i < rows.length; i++) {
-                                    let row = [], cols = rows[i].querySelectorAll('td, th');
-                                    for (let j = 0; j < cols.length; j++) {
-                                        row.push(cols[j].innerText);
-                                    }
+                                let headers = [];
+                                $('#dataTable thead th').each(function() {
+                                    headers.push($(this).text());
+                                });
+                                csv.push(headers.join(','));
+                                
+                                $('#dataTable tbody tr').each(function() {
+                                    let row = [];
+                                    $(this).find('td').each(function() {
+                                        row.push('"' + $(this).text() + '"');
+                                    });
                                     csv.push(row.join(','));
-                                }
+                                });
+                                
                                 let csvContent = csv.join('\n');
-                                console.log("Generated CSV content:", csvContent);
                                 let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
                                 saveAs(blob, 'table_data.csv');
                             });
                         });
                         "#
                     }
-
-                    // Banner CSS
+    
+                    // CSS styles
                     style {
                         (PreEscaped("
                             body {
@@ -137,37 +142,20 @@ impl Report {
                                 overflow: hidden;
                             }
                             .banner img {
-                                max-height: 150px; /* Size of logo */
+                                max-height: 100px;
                                 width: auto;
                                 height: auto;
                                 margin-right: 15px;
                             }
-                            .banner-text {
-                                flex-grow: 1;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
-                                white-space: nowrap;
-                            }
                             .banner-text h2 {
-                                font-size: 50px;
+                                font-size: 36px;
                                 margin: 0;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
                                 white-space: nowrap;
                             }
                             .banner-text p {
-                                font-size: 24px;
+                                font-size: 16px;
                                 margin: 0;
                                 opacity: 0.8;
-                            }
-                        "))
-                    }
-                    
-                    // Tabs CSS
-                    style {
-                        (PreEscaped("
-                            body {
-                                font-family: Arial, sans-serif;
                             }
                             .tabs {
                                 display: flex;
@@ -176,8 +164,6 @@ impl Report {
                             .tab {
                                 padding: 10px 20px;
                                 cursor: pointer;
-                                border: none;
-                                background: none;
                                 font-size: 16px;
                                 font-weight: bold;
                                 color: #444;
@@ -193,33 +179,15 @@ impl Report {
                             .tab-content {
                                 display: none;
                                 padding: 20px;
-                                border-radius: 10px;
                             }
                             .tab-content.active {
                                 display: block;
                             }
                         "))
                     }
-    
-                    // JavaScript for tabs
-                    script {
-                        (PreEscaped("
-                            function showTab(tabId) {
-                                let tabs = document.querySelectorAll('.tab-content');
-                                tabs.forEach(tab => tab.classList.remove('active'));
-    
-                                let buttons = document.querySelectorAll('.tab');
-                                buttons.forEach(btn => btn.classList.remove('active'));
-    
-                                document.getElementById(tabId).classList.add('active');
-                                document.querySelector(`[data-tab='${tabId}']`).classList.add('active');
-                            }
-                        "))
-                    }
                 }
-    
+                
                 body {
-                    // Banner Section
                     div class="banner" {
                         @if let Some(ref logo) = self.software_logo {
                             img src=(logo) alt="Software Logo";
@@ -228,9 +196,8 @@ impl Report {
                             h2 { (self.software_name) " v" (self.version) }
                             p class="timestamp" { "Generated on: " (current_date) }
                         }
-                    }                    
-    
-                    // Tabs Navigation
+                    }
+                    
                     div class="tabs" {
                         @for (i, section) in self.sections.iter().enumerate() {
                             button class="tab" data-tab=(format!("tab{}", i)) onclick=(format!("showTab('tab{}')", i)) {
@@ -239,13 +206,11 @@ impl Report {
                         }
                     }
     
-                    // Tab Content
                     @for (i, section) in self.sections.iter().enumerate() {
                         div id=(format!("tab{}", i)) class={@if i == 0 { "tab-content active" } @else { "tab-content" }} {
                             (section.render())
                         }
                     }
-                    
                 }
             }
         }
