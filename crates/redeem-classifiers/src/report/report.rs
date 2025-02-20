@@ -122,6 +122,25 @@ impl Report {
                         "#
                     }
     
+                    // JavaScript for tabs
+                    script {
+                        (PreEscaped(r#"
+                            function showTab(tabId) {
+                                document.querySelectorAll('.tab-content').forEach(function(tab) {
+                                    tab.classList.remove('active');
+                                });
+                    
+                                document.querySelectorAll('.tab').forEach(function(tab) {
+                                    tab.classList.remove('active');
+                                });
+                    
+                                document.getElementById(tabId).classList.add('active');
+                                document.querySelector(`[data-tab='${tabId}']`).classList.add('active');
+                            }
+                        "#))
+                    }
+                    
+
                     // CSS styles
                     style {
                         (PreEscaped("
