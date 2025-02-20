@@ -52,10 +52,16 @@ fn interpolate_ecdf(x: &Vec<f64>, y: &Vec<f64>, x_seq: &Vec<f64>) -> Vec<f64> {
     }).collect()
 }
 
-fn estimate_pi0(decoy_scores: &Vec<f64>, lambda: f64) -> f64 {
-    let n = decoy_scores.len() as f64;
-    let count_above_lambda = decoy_scores.iter().filter(|&&s| s > lambda).count() as f64;
-    count_above_lambda / ((1.0 - lambda) * n)
+// fn estimate_pi0(decoy_scores: &Vec<f64>, lambda: f64) -> f64 {
+//     let n = decoy_scores.len() as f64;
+//     let count_above_lambda = decoy_scores.iter().filter(|&&s| s > lambda).count() as f64;
+//     count_above_lambda / ((1.0 - lambda) * n)
+// }
+
+fn estimate_pi0(labels: &Vec<i32>) -> f64 {
+    let count_decoys = labels.iter().filter(|&&l| l == -1).count() as f64;
+    let count_targets = labels.iter().filter(|&&l| l == 1).count() as f64;
+    count_decoys / count_targets
 }
 
 /// Generate a P-P plot as described in Debrie, E. et. al. (2023) Journal of Proteome Research.
@@ -91,7 +97,8 @@ pub fn plot_pp(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot
     let y_target_interp = interpolate_ecdf(&x_target, &y_target, &x_seq);
     let y_decoy_interp = interpolate_ecdf(&x_decoy, &y_decoy, &x_seq);
 
-    let pi0 = estimate_pi0(&scores_decoy, 0.5);
+    // let pi0 = estimate_pi0(&scores_decoy, 0.5);
+    let pi0 = estimate_pi0(labels);
     let pi0_line_y: Vec<f64> = y_decoy_interp.iter().map(|&x| pi0 * x).collect();
 
     let mut plot = Plot::new();
