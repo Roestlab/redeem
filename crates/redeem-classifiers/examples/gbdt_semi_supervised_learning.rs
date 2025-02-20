@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use csv::ReaderBuilder;
 use maud::html;
 use ndarray::{Array1, Array2};
-use plotly::histogram::HistNorm;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -123,6 +122,12 @@ fn main() -> Result<()> {
     report.add_section(intro_section);
 
     // Score Distribution Section
+
+    // convert the predictions to Array1<f32> to Vec<f64> 
+    let predictions = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
+    // convert the y to Array1<i32> to Vec<i32>
+    let y = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+
     let plot = plot_score_histogram(&predictions, &y, "GBDT Score").unwrap();
     let pp_plot = plot_pp(&predictions, &y, "GBDT Score").unwrap();
 
