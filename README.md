@@ -10,7 +10,19 @@
 
 # ReDeeM: Repository for Deep Learning Models for Mass Spectrometry
 
-ReDeeM is a Rust crate designed for implementing deep learning models specifically tailored for mass spectrometry data. The primary goal of this project is to facilitate the prediction of peptide properties and to develop classifier scoring models (TDA).
+ReDeeM is a Rust crate designed for implementing deep learning models specifically tailored for mass spectrometry data. The primary goal of this project is to facilitate the prediction of peptide properties and to develop classifier scoring models (TDA). 
+
+### Usage
+
+The ReDeeM crates are designed to be used as a library in other projects, i.e. in Sage. To use the ReDeeM crates, add the following to your `Cargo.toml` file:
+
+```toml
+[dependencies]
+redeem-properties = { git = "https://github.com/singjc/redeem.git", branch = "master" }
+redeem-classifiers = { git = "https://github.com/singjc/redeem.git", branch = "master" }
+```
+
+**Note**: The ReDeeM crates are still under development and are not yet available on crates.io.
 
 ### Current Crates
 
@@ -18,6 +30,8 @@ The ReDeeM project consists of two primary crates:
 
 1. **redeem-properties**: 
    - This crate focuses on deep learning models for peptide property prediction. It implements models for predicting retention time (RT), ion mobility (IM), and MS2 fragment intensities using the Candle library.
+   - The models are implemented using the Candle library, which is a Rust library for building deep learning models.
+   - The models can be fine-tuned on new data and can be saved in the safetensor format for later use.
    
    - Current Models
   
