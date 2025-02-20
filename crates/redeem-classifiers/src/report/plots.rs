@@ -5,7 +5,7 @@ use plotly::layout::{Layout, Axis};
 use itertools_num::linspace;
 
 /// Plot a histogram of the scores for the targets and decoys
-pub fn plot_score_histogram(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot, String> {
+pub fn plot_score_histogram(scores: &Vec<f64>, labels: &Vec<i32>, title: &str, x_title: &str) -> Result<Plot, String> {
     assert_eq!(scores.len(), labels.len(), "Scores and labels must have the same length");
     assert!(labels.iter().all(|&l| l == 1 || l == -1), "Labels must be 1 for targets and -1 for decoys");
 
@@ -25,7 +25,7 @@ pub fn plot_score_histogram(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -
 
     let layout = Layout::new()
         .title(title)
-        .x_axis(plotly::layout::Axis::new().title("Score"))
+        .x_axis(plotly::layout::Axis::new().title(x_title))
         .y_axis(plotly::layout::Axis::new().title("Density"));
 
     let mut plot = Plot::new();
