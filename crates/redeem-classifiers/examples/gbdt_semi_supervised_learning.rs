@@ -1,12 +1,16 @@
 use anyhow::{Context, Result};
 use csv::ReaderBuilder;
+use maud::html;
 use ndarray::{Array1, Array2};
+use plotly::histogram::HistNorm;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
 use redeem_classifiers::models::utils::ModelType;
+use redeem_classifiers::report::{report::{Report, ReportSection}, plots::{plot_score_histogram, plot_pp}};
+
 
 fn read_features_tsv(path: &str) -> Result<Array2<f32>, Box<dyn Error>> {
     let mut reader = ReaderBuilder::new()
@@ -82,7 +86,7 @@ fn main() -> Result<()> {
     let params = ModelType::GBDT {
         max_depth: 3,
         num_boost_round: 10,
-        debug: true,
+        debug: false,
         training_optimization_level: 1,
         loss_type: "LogLikelyhood".to_string(),
     };
@@ -90,8 +94,8 @@ fn main() -> Result<()> {
     let mut learner = SemiSupervisedLearner::new(
         params,
         0.001,
-        1.0,
-        10,
+        0.01,
+        3,
         Some((0.15, 1.0))
     );
     let predictions = learner.fit(x, y.clone());
@@ -101,5 +105,44 @@ fn main() -> Result<()> {
     // Evaluate the predictions
     println!("Predictions: {:?}", predictions);
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
+
+
+    // Create a new report
+    let mut report = Report::new(
+        "Sage Report", 
+        "14", 
+        Some("/home/singjc/Documents/github/redeem/img/redeem_logo.png"),
+        "My Data Analysis Report"
+    );
+
+    // Section 1: Introduction
+    let mut intro_section = ReportSection::new("Introduction");
+    intro_section.add_content(html! {
+        "This report provides an analysis of the dataset. Below are some visualizations."
+    });
+    report.add_section(intro_section);
+
+    // Score Distribution Section
+    let plot = plot_score_histogram(&predictions, &y, "GBDT Score").unwrap();
+    let pp_plot = plot_pp(&predictions, &y, "GBDT Score").unwrap();
+
+    let mut plot_section = ReportSection::new("Score Distribution");
+    plot_section.add_content(html! {
+        "This plot shows the distribution of the GBDT scores."
+    });
+    plot_section.add_plot(plot);
+    
+    plot_section.add_content(html! {
+        "Now we show the P-P plot, which compares ECDF distributions."
+    });
+    plot_section.add_plot(pp_plot);
+    report.add_section(plot_section);
+
+    // Save the report to an HTML file
+    report.save_to_file("report.html")?;
+
+
+    println!("Report saved to report.html");
+
     Ok(())
 }
