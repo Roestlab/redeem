@@ -109,7 +109,7 @@ impl SemiSupervisedLearner {
         experiment: &Experiment,
         eval_fdr: f32,
     ) -> (usize, usize, Array1<i32>, bool, Array1<f32>) {
-        // Helper function to count targets by feature
+        /// Helper function to count targets by feature
         let targets_count_by_feature = |desc: bool| -> Vec<usize> {
             (0..experiment.x.ncols())
                 .map(|col| {
@@ -144,6 +144,12 @@ impl SemiSupervisedLearner {
                 best_desc = *desc;
             }
         }
+
+        log::trace!(
+            "Best feature: {} with {} positives",
+            best_feat,
+            best_positives
+        );
 
         if best_positives == 0 {
             panic!("No PSMs found below the 'eval_fdr' {}", eval_fdr);
@@ -315,11 +321,14 @@ impl SemiSupervisedLearner {
         experiment.log_input_data_summary();
 
         // Get initial best feature
-        let (best_feat, best_positives, mut new_labels, best_desc, best_feature_scores) =
+        let (_best_feat, _best_positives, mut new_labels, best_desc, _best_feature_scores) =
             self.init_best_feature(&experiment, self.train_fdr);
-        experiment.y = new_labels.clone();
 
-        let folds = self.create_folds(&experiment, self.xeval_num_iter, self.class_pct.map(|(t, d)| t), self.class_pct.map(|(t, d)| d));
+        // println!("Original labels: {:?}", experiment.y);
+        experiment.y = new_labels.clone();
+        // println!("New labels: {:?}", experiment.y);
+
+        let folds = self.create_folds(&experiment, self.xeval_num_iter, self.class_pct.map(|(t, _d)| t), self.class_pct.map(|(_t, d)| d));
 
         for (fold, (mut train_exp, test_exp)) in folds.into_iter().enumerate() {
             
@@ -328,7 +337,7 @@ impl SemiSupervisedLearner {
 
             let mut all_predictions = Array1::zeros(n_samples);
 
-            // self.remove_unlabeled_psms(&mut train_exp);
+            self.remove_unlabeled_psms(&mut train_exp);
 
             self.model
                 .fit(&train_exp.x, &train_exp.y.to_vec(), None, None);
@@ -340,7 +349,7 @@ impl SemiSupervisedLearner {
                 all_predictions[test_exp.tg_num_id[i] as usize] = *pred;
             }
 
-            let new_labels = experiment.update_labels(&all_predictions, self.train_fdr, best_desc);
+            new_labels = experiment.update_labels(&all_predictions, self.train_fdr, best_desc);
             experiment.y = new_labels;
         }
 
