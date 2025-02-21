@@ -99,8 +99,10 @@ impl Report {
                                     searching: true,
                                     ordering: true,
                                     scrollX: true,
+                                    autoWidth: false,  // Ensures DataTables doesn't override widths
                                     colResize: {
-                                        enable: true  // Corrected initialization
+                                        enable: true,  // Enable column resizing
+                                        resizeTable: true
                                     }
                                 });
 
@@ -163,7 +165,13 @@ impl Report {
                                 border-collapse: collapse;
                             }
                             table.display {
-                                width: 100% !important; /* Ensure DataTables respects the container width */
+                                width: 100% 
+                                table-layout: fixed;
+                                border-collapse: collapse;
+                            }
+
+                            .dataTables_scrollHeadInner {
+                                width: 100% !important;
                             }
                         "))
                     }
@@ -267,5 +275,75 @@ impl Report {
         let mut file = std::fs::File::create(filename)?;
         file.write_all(self.render().into_string().as_bytes())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_report() {
+        let mut report = Report::new("Redeem", "1.0", Some("logo.png"), "My Report");
+
+        let mut section1 = ReportSection::new("Section 1");
+        section1.add_content(html! {
+            p { "This is the first section of the report." }
+        });
+
+        // create table
+        let table = html! {
+            table class="display" id="dataTable" {
+                thead {
+                    tr {
+                        th { "Name" }
+                        th { "Age" }
+                        th { "City" }
+                        th { "Country" }
+                        th { "Occupation" }
+                        th { "Salary" }
+                        th { "Join Date" }
+                        th { "Active" }
+                        th { "Actions" }
+                        th { "Actions" }
+                        th { "Actions" }
+                    }
+                }
+                tbody {
+                    tr {
+                        td { "JohnMichaelbrunovalentinemark Beckham" }
+                        td { "30" }
+                        td { "New York" }
+                        td { "USA" }
+                        td { "Engineer" }
+                        td { "100,000" }
+                        td { "2022-01-01" }
+                        td { "Yes" }
+                        td { "Edit | Delete" }
+                        td { "Edit | Delete" }
+                        td { "Edit | Delete" }
+                    }
+                    tr {
+                        td { "Jane Smith" }
+                        td { "25" }
+                        td { "Los Angeles" }
+                        td { "USA" }
+                        td { "Designer" }
+                        td { "80,000" }
+                        td { "2022-02-15" }
+                        td { "No" }
+                        td { "Edit | Delete" }
+                        td { "Edit | Delete" }
+                        td { "Edit | Delete" }
+                    }
+                }
+            }
+        };
+        section1.add_content(table);
+
+        report.add_section(section1);
+
+        report.save_to_file("report.html").unwrap();
     }
 }
