@@ -174,9 +174,12 @@ pub fn plot_boxplot(scores: &Vec<Vec<f64>>, filenames: Vec<String>, title: &str,
 pub fn plot_scatter(x: &Vec<Vec<f64>>, y: &Vec<Vec<f64>>, labels: Vec<String>, title: &str, x_title: &str, y_title: &str) -> Result<Plot, String> {
     assert_eq!(x.len(), y.len(), "X and Y must have the same length");
 
+    // Check to see how large the data is, if there's a large amount of data we should use web_gl_mode. We can look at one of the arrays to see how many points there are
+    let web_gl_mode = x[0].len() > 10_000;
+
     let mut plot = Plot::new();
     for (i, (x_i, y_i)) in x.iter().zip(y.iter()).enumerate() {
-        let trace = Scatter::new(x_i.to_vec(), y_i.to_vec()).name(labels[i].clone()).mode(Mode::Markers).marker(Marker::new().size(10));
+        let trace = Scatter::new(x_i.to_vec(), y_i.to_vec()).name(labels[i].clone()).mode(Mode::Markers).marker(Marker::new().size(10)).web_gl_mode(true);
         plot.add_trace(trace);
     }
 
