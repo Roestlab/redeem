@@ -90,37 +90,38 @@ impl Report {
     
                     // JavaScript for DataTables and CSV export
                     script {
-                        r#"
-                        $(document).ready(function() {
-                            let table = $('#dataTable').DataTable({
-                                paging: true,
-                                searching: true,
-                                ordering: true
-                            });
-                            
-                            $('#downloadCsv').on('click', function() {
-                                let csv = [];
-                                let headers = [];
-                                $('#dataTable thead th').each(function() {
-                                    headers.push($(this).text());
+                        (PreEscaped(r#"
+                            $(document).ready(function() {
+                                let table = $('#dataTable').DataTable({
+                                    paging: true,
+                                    searching: true,
+                                    ordering: true,
+                                    scrollX: true  // Enable horizontal scrolling
                                 });
-                                csv.push(headers.join(','));
-                                
-                                $('#dataTable tbody tr').each(function() {
-                                    let row = [];
-                                    $(this).find('td').each(function() {
-                                        row.push('"' + $(this).text() + '"');
+                    
+                                $('#downloadCsv').on('click', function() {
+                                    let csv = [];
+                                    let headers = [];
+                                    $('#dataTable thead th').each(function() {
+                                        headers.push($(this).text());
                                     });
-                                    csv.push(row.join(','));
+                                    csv.push(headers.join(','));
+                    
+                                    $('#dataTable tbody tr').each(function() {
+                                        let row = [];
+                                        $(this).find('td').each(function() {
+                                            row.push('"' + $(this).text() + '"');
+                                        });
+                                        csv.push(row.join(','));
+                                    });
+                    
+                                    let csvContent = csv.join('\n');
+                                    let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                    saveAs(blob, 'table_data.csv');
                                 });
-                                
-                                let csvContent = csv.join('\n');
-                                let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                                saveAs(blob, 'table_data.csv');
                             });
-                        });
-                        "#
-                    }
+                        "#))
+                    }                    
     
                     // JavaScript for tabs
                     script {
@@ -142,6 +143,26 @@ impl Report {
                     
 
                     // CSS styles
+
+                    style {
+                        (PreEscaped("
+                            .table-container {
+                                width: 100%;
+                                overflow-x: auto; /* Enable horizontal scrolling */
+                                white-space: nowrap; /* Prevent line breaks in cells */
+                                border: 1px solid #ddd; /* Optional: Add a border */
+                                padding: 10px;
+                            }
+                            table {
+                                width: 100%;
+                                border-collapse: collapse;
+                            }
+                            table.display {
+                                width: 100% !important; /* Ensure DataTables respects the container width */
+                            }
+                        "))
+                    }
+                    
                     style {
                         (PreEscaped("
                             body {
