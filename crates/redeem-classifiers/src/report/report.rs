@@ -86,6 +86,8 @@ impl Report {
                     script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.4/jquery.min.js" {}
                     script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js" {}
                     link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css" {}
+                    script src="https://cdn.datatables.net/colresize/1.0.0/dataTables.colResize.min.js" {}
+                    link rel="stylesheet" href="https://cdn.datatables.net/colresize/1.0.0/    colResize.dataTables.css" {}
                     script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js" {}
     
                     // JavaScript for DataTables and CSV export
@@ -97,6 +99,9 @@ impl Report {
                                     searching: true,
                                     ordering: true,
                                     scrollX: true  // Enable horizontal scrolling
+                                    colResize: {
+                                        resizeTable: true
+                                    }
                                 });
                     
                                 $('#downloadCsv').on('click', function() {
