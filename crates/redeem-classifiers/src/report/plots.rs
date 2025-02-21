@@ -1,6 +1,6 @@
 use ndarray::{Array1, Array2};
 use plotly::box_plot::BoxMean;
-use plotly::common::{DashType, HoverInfo, Label, Line, Marker, Mode};
+use plotly::common::{DashType, HoverInfo, Label, Line, Marker, Mode, Orientation};
 use plotly::{Plot, Histogram, Scatter, BoxPlot};
 use plotly::layout::{Axis, Layout, Legend};
 use itertools_num::linspace;
@@ -183,7 +183,8 @@ pub fn plot_scatter(x: &Vec<Vec<f64>>, y: &Vec<Vec<f64>>, labels: Vec<String>, t
     let layout = Layout::new()
         .title(title)
         .x_axis(Axis::new().title(x_title))
-        .y_axis(Axis::new().title(y_title));
+        .y_axis(Axis::new().title(y_title))
+        .legend(Legend::new().orientation(Orientation::Horizontal));
 
     plot.set_layout(layout);
 
