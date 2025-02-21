@@ -87,7 +87,7 @@ impl Report {
                     script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js" {}
                     link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css" {}
                     script src="https://cdn.datatables.net/colresize/1.0.0/dataTables.colResize.min.js" {}
-                    link rel="stylesheet" href="https://cdn.datatables.net/colresize/1.0.0/    colResize.dataTables.css" {}
+                    link rel="stylesheet" href="https://cdn.datatables.net/colResize/1.0.0/css/colResize.dataTables.min.css" {}
                     script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js" {}
     
                     // JavaScript for DataTables and CSV export
@@ -98,12 +98,12 @@ impl Report {
                                     paging: true,
                                     searching: true,
                                     ordering: true,
-                                    scrollX: true  // Enable horizontal scrolling
+                                    scrollX: true,
                                     colResize: {
-                                        resizeTable: true
+                                        enable: true  // Corrected initialization
                                     }
                                 });
-                    
+
                                 $('#downloadCsv').on('click', function() {
                                     let csv = [];
                                     let headers = [];
@@ -111,7 +111,7 @@ impl Report {
                                         headers.push($(this).text());
                                     });
                                     csv.push(headers.join(','));
-                    
+
                                     $('#dataTable tbody tr').each(function() {
                                         let row = [];
                                         $(this).find('td').each(function() {
@@ -119,7 +119,7 @@ impl Report {
                                         });
                                         csv.push(row.join(','));
                                     });
-                    
+
                                     let csvContent = csv.join('\n');
                                     let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
                                     saveAs(blob, 'table_data.csv');
