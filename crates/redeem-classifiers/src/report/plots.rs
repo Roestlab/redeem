@@ -187,7 +187,7 @@ pub fn plot_scatter(x: &Vec<Vec<f64>>, y: &Vec<Vec<f64>>, labels: Vec<String>, t
         .title(title)
         .x_axis(Axis::new().title(x_title))
         .y_axis(Axis::new().title(y_title))
-        .legend(Legend::new().orientation(Orientation::Horizontal));
+        .legend(Legend::new().orientation(Orientation::Vertical));
 
     plot.set_layout(layout);
 
