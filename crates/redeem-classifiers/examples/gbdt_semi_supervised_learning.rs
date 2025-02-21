@@ -128,7 +128,7 @@ fn main() -> Result<()> {
     // convert the y to Array1<i32> to Vec<i32>
     let y = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
 
-    let plot = plot_score_histogram(&predictions, &y, "GBDT Score").unwrap();
+    let plot = plot_score_histogram(&predictions, &y, "GBDT Score", "Score").unwrap();
     let pp_plot = plot_pp(&predictions, &y, "GBDT Score").unwrap();
 
     let mut plot_section = ReportSection::new("Score Distribution");
