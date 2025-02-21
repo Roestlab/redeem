@@ -1,6 +1,7 @@
 use ndarray::{Array1, Array2};
+use plotly::box_plot::BoxMean;
 use plotly::common::{DashType, Line, Mode};
-use plotly::{Plot, Histogram, Scatter};
+use plotly::{Plot, Histogram, Scatter, BoxPlot};
 use plotly::layout::{Layout, Axis};
 use itertools_num::linspace;
 
@@ -128,4 +129,75 @@ pub fn plot_pp(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot
     );
 
     Ok(plot)
+}
+
+pub fn plot_boxplot(scores: &Vec<Vec<f64>>, filenames: Vec<String>, title: &str, x_title: &str, y_title: &str) -> Result<Plot, String> {
+    assert_eq!(scores.len(), filenames.len(), "Scores and filenames must have the same length");
+
+    let mut plot = Plot::new();
+    for (i, s) in scores.iter().enumerate() {
+        let trace = BoxPlot::new_xy(
+            vec![filenames[i].clone(); s.len()],
+            s.to_vec()).name(filenames[i].clone()).box_mean(BoxMean::True);
+        plot.add_trace(trace);
+    }
+    
+    let layout = Layout::new()
+        .title(title)
+        .x_axis(Axis::new().title(x_title).tick_angle(45.0))
+        .y_axis(Axis::new().title(y_title));
+    
+    plot.set_layout(layout);
+
+    Ok(plot)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plot_boxplot() {
+        let scores = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![6.0, 7.0, 8.0, 9.0, 10.0],
+            vec![11.0, 12.0, 13.0, 14.0, 15.0],
+        ];
+        let filenames = vec![
+            "file1".to_string(),
+            "file2".to_string(),
+            "file3".to_string(),
+        ];
+        let title = "Box Plot";
+        let x_title = "Filenames";
+        let y_title = "Scores";
+
+        let plot = plot_boxplot(&scores, filenames, title, x_title, y_title).unwrap();
+
+        // plot.write_html("test_plot_boxplot.html");
+
+        // assert_eq!(plot.
+        // assert_eq!(plot.layout.title, Some(title.to_string()));
+        // assert_eq!(plot.layout.x_axis, Some(Axis::new().title(x_title).tick_angle(45.0)));
+        // assert_eq!(plot.layout.y_axis, Some(Axis::new().title(y_title)));
+    }
+
+    #[test]
+    #[should_panic(expected = "Scores and filenames must have the same length")]
+    fn test_plot_boxplot_mismatched_lengths() {
+        let scores = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![6.0, 7.0, 8.0, 9.0, 10.0],
+        ];
+        let filenames = vec![
+            "file1".to_string(),
+            "file2".to_string(),
+            "file3".to_string(),
+        ];
+        let title = "Box Plot";
+        let x_title = "Filenames";
+        let y_title = "Scores";
+
+        plot_boxplot(&scores, filenames, title, x_title, y_title).unwrap();
+    }
 }
