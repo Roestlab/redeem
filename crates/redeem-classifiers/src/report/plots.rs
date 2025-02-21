@@ -1,8 +1,8 @@
 use ndarray::{Array1, Array2};
 use plotly::box_plot::BoxMean;
-use plotly::common::{DashType, Line, Mode};
+use plotly::common::{DashType, HoverInfo, Label, Line, Marker, Mode};
 use plotly::{Plot, Histogram, Scatter, BoxPlot};
-use plotly::layout::{Layout, Axis};
+use plotly::layout::{Axis, Layout, Legend};
 use itertools_num::linspace;
 
 /// Plot a histogram of the scores for the targets and decoys
@@ -59,6 +59,7 @@ fn interpolate_ecdf(x: &Vec<f64>, y: &Vec<f64>, x_seq: &Vec<f64>) -> Vec<f64> {
 //     count_above_lambda / ((1.0 - lambda) * n)
 // }
 
+/// Estimate the proportion of null hypotheses (π₀).
 fn estimate_pi0(labels: &Vec<i32>) -> f64 {
     let count_decoys = labels.iter().filter(|&&l| l == -1).count() as f64;
     let count_targets = labels.iter().filter(|&&l| l == 1).count() as f64;
@@ -73,6 +74,9 @@ fn estimate_pi0(labels: &Vec<i32>) -> f64 {
 /// * `top_decoys` - The top scores for the decoys
 /// * `title` - The title of the plot
 /// 
+/// # Returns
+/// 
+/// A Plot object containing the P-P plot
 pub fn plot_pp(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot, String> {
     assert_eq!(scores.len(), labels.len(), "Scores and labels must have the same length");
     assert!(labels.iter().all(|&l| l == 1 || l == -1), "Labels must be 1 for targets and -1 for decoys");
@@ -131,6 +135,19 @@ pub fn plot_pp(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot
     Ok(plot)
 }
 
+/// Generate a box plot of the scores/intensities for each file
+/// 
+/// # Arguments
+/// 
+/// * `scores` - A vector of vectors where each inner vector contains the scores/intensities for a file
+/// * `filenames` - A vector of filenames corresponding to the scores
+/// * `title` - The title of the plot
+/// * `x_title` - The title of the x-axis
+/// * `y_title` - The title of the y-axis
+/// 
+/// # Returns
+/// 
+/// A Plot object containing the box plot
 pub fn plot_boxplot(scores: &Vec<Vec<f64>>, filenames: Vec<String>, title: &str, x_title: &str, y_title: &str) -> Result<Plot, String> {
     assert_eq!(scores.len(), filenames.len(), "Scores and filenames must have the same length");
 
@@ -145,8 +162,29 @@ pub fn plot_boxplot(scores: &Vec<Vec<f64>>, filenames: Vec<String>, title: &str,
     let layout = Layout::new()
         .title(title)
         .x_axis(Axis::new().title(x_title).tick_angle(45.0))
-        .y_axis(Axis::new().title(y_title));
+        .y_axis(Axis::new().title(y_title))
+        .show_legend(false);
     
+    plot.set_layout(layout);
+
+    Ok(plot)
+}
+
+
+pub fn plot_scatter(x: &Vec<Vec<f64>>, y: &Vec<Vec<f64>>, labels: Vec<String>, title: &str, x_title: &str, y_title: &str) -> Result<Plot, String> {
+    assert_eq!(x.len(), y.len(), "X and Y must have the same length");
+
+    let mut plot = Plot::new();
+    for (i, (x_i, y_i)) in x.iter().zip(y.iter()).enumerate() {
+        let trace = Scatter::new(x_i.to_vec(), y_i.to_vec()).name(labels[i].clone()).mode(Mode::Markers).marker(Marker::new().size(10));
+        plot.add_trace(trace);
+    }
+
+    let layout = Layout::new()
+        .title(title)
+        .x_axis(Axis::new().title(x_title))
+        .y_axis(Axis::new().title(y_title));
+
     plot.set_layout(layout);
 
     Ok(plot)
@@ -174,7 +212,7 @@ mod tests {
 
         let plot = plot_boxplot(&scores, filenames, title, x_title, y_title).unwrap();
 
-        // plot.write_html("test_plot_boxplot.html");
+        plot.write_html("test_plot_boxplot.html");
 
         // assert_eq!(plot.
         // assert_eq!(plot.layout.title, Some(title.to_string()));
@@ -200,4 +238,31 @@ mod tests {
 
         plot_boxplot(&scores, filenames, title, x_title, y_title).unwrap();
     }
+
+    #[test]
+    fn test_plot_scatter() {
+        let x = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![2.0, 7.0, 3.0, 9.0, 10.0],
+            vec![1.0, 12.0, 13.0, 14.0, 15.0],
+        ];
+        let y = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![6.0, 7.0, 8.0, 9.0, 10.0],
+            vec![11.0, 12.0, 13.0, 14.0, 15.0],
+        ];
+        let labels = vec![
+            "file1".to_string(),
+            "file2".to_string(),
+            "file3".to_string(),
+        ];
+        let title = "Scatter Plot";
+        let x_title = "X";
+        let y_title = "Y";
+
+        let plot = plot_scatter(&x, &y, labels, title, x_title, y_title).unwrap();
+
+        plot.write_html("test_plot_scatter.html");
+    }
+
 }
