@@ -25,12 +25,30 @@ impl ReportSection {
 
     /// Add a plot to the section
     pub fn add_plot(&mut self, plot: Plot) {
+        let plot_id = format!("plot{}", self.content_blocks.len()); // Unique ID for the plot
+    
         self.content_blocks.push(html! {
-            div style="width: 800px; height: 500px;" {
-                (PreEscaped(plot.to_inline_html(None)))
+            div class="plot-wrapper" {
+                div id=(plot_id) class="plot-container" {
+                    (PreEscaped(plot.to_inline_html(Some(&plot_id))))
+                }
+            }
+            script {
+                (PreEscaped(format!(r#"
+                    function resizePlot() {{
+                        let plotDiv = document.getElementById('{plot_id}');
+                        if (plotDiv) {{
+                            let width = window.innerWidth * 0.8;
+                            Plotly.relayout(plotDiv, {{ width: width }});
+                        }}
+                    }}
+                    window.addEventListener('resize', resizePlot);
+                    resizePlot(); // Call initially
+                "#)))
             }
         });
-    }
+    }    
+    
 
     /// Render the section as HTML
     fn render(&self) -> Markup {
@@ -150,7 +168,7 @@ impl Report {
                     
 
                     // CSS styles
-
+                    // CSS for the table container
                     style {
                         (PreEscaped("
                             .table-container {
@@ -175,7 +193,30 @@ impl Report {
                             }
                         "))
                     }
-                    
+
+                    // CSS for the plot container
+                    style {
+                        (PreEscaped("
+                            .plot-wrapper {
+                                width: 100%;
+                                display: flex;
+                                justify-content: center;
+                                align-items: center;
+                                position: relative;
+                            }
+
+                            .plot-container {
+                                width: 100%;
+                                // max-width: 1200px; /* Prevents it from getting too large */
+                                height: 600px; /* Adjust as needed */
+                                position: relative;
+                                overflow: hidden; /* Prevents content from spilling */
+                                // border: 1px solid #ccc; /* Optional: Helps visualize layout */
+                            }
+                        "))
+                    }
+
+                    // CSS for the report
                     style {
                         (PreEscaped("
                             body {
@@ -282,6 +323,7 @@ impl Report {
 
 mod tests {
     use super::*;
+    use crate::report::plots::plot_scatter;
 
     #[test]
     fn test_report() {
@@ -340,9 +382,48 @@ mod tests {
                 }
             }
         };
-        section1.add_content(table);
+        section1.add_content(table.clone());
 
         report.add_section(section1);
+
+        // Add a scatter plot
+        let x = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![2.0, 7.0, 3.0, 9.0, 10.0],
+            vec![1.0, 12.0, 13.0, 14.0, 15.0],
+        ];
+        let y = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![6.0, 7.0, 8.0, 9.0, 10.0],
+            vec![11.0, 12.0, 13.0, 14.0, 15.0],
+        ];
+        let labels = vec![
+            "file1".to_string(),
+            "file2".to_string(),
+            "file3".to_string(),
+        ];
+        let title = "Scatter Plot";
+        let x_title = "X";
+        let y_title = "Y";
+
+        let plot = plot_scatter(&x, &y, labels, title, x_title, y_title).unwrap();
+        
+        let mut section2 = ReportSection::new("Section 2");
+        section2.add_plot(plot.clone());
+
+        // add some content latin
+        section2.add_content(html! {
+            p { "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac nisl..." }
+        });
+
+        section2.add_content(table);
+
+        // add another plot (the same one)
+        section2.add_plot(plot);
+
+        report.add_section(section2);
+
+        
 
         report.save_to_file("report.html").unwrap();
     }
