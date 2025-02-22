@@ -1,4 +1,5 @@
 use std::io::Write;
+use rand::{distributions::Alphanumeric, Rng};
 use chrono::Local;
 use maud::{html, Markup, PreEscaped};
 use plotly::Plot;
@@ -25,11 +26,15 @@ impl ReportSection {
 
     /// Add a plot to the section
     pub fn add_plot(&mut self, plot: Plot) {
-        let plot_id = format!("plot{}", self.content_blocks.len()); // Unique ID for the plot
+        let plot_id: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)  
+            .map(char::from)
+            .collect();
     
         self.content_blocks.push(html! {
             div class="plot-wrapper" {
-                div id=(plot_id) class="plot-container" {
+                div id=(plot_id.clone()) class="plot-container" {
                     (PreEscaped(plot.to_inline_html(Some(&plot_id))))
                 }
             }
@@ -47,7 +52,7 @@ impl ReportSection {
                 "#)))
             }
         });
-    }    
+    } 
     
 
     /// Render the section as HTML
