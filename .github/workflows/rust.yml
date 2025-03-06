@@ -28,8 +28,5 @@ jobs:
     - name: Update dependencies
       run: cargo update
 
-    - name: Apply fixes
-      run: cargo fix --lib -p redeem-properties
-
     - name: Build
       run: cargo build --verbose
