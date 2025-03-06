@@ -18,14 +18,17 @@ statrs = "0.17.1"
 ndarray = "0.15"
 #ndarray = "0.16.1"
 ndarray-stats = "0.6.0"
-xgboost = "0.1.4"
-linfa-svm = "0.7.2"
-linfa = "0.7.1"
+# xgboost = "0.1.4"
+# xgboost-rs = "0.3.0"
+xgboost = { git = "https://github.com/singjc/rust-xgboost.git", branch = "master" }
 gbdt = "0.1.3"
+linfa = "0.7.1"
+# linfa-logistic = "0.7.1"
+linfa-svm = "0.7.2"
 rayon = "1.5"
 sage-core = { git = "https://github.com/lazear/sage", branch = "master" }
 csv = "1.3.1"
-
+# linfa-datasets = { version = "0.7.1", features = ["winequality"] }
 plotly = "0.12.1"
 maud = "0.27.0"
 chrono = "0.4.39"
