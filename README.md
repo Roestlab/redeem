@@ -50,3 +50,13 @@ The ReDeeM project consists of two primary crates:
     XGBoost Classifier | `redeem_classifiers::XGBoostClassifier` | XGBoost | :heavy_check_mark:
     GBDT Classifier | `redeem_classifiers::GBDTClassifier` | GBDT | :heavy_check_mark:
     SVM Classifier | `redeem_classifiers::SVMClassifier` | SVM | :heavy_check_mark:
+
+    > [!IMPORTANT] 
+    > The XGBoost crate is a wrapper around the original XGBoost library, which requires clang/c++ to be installed on the system. On Ubuntu, you can do the following:
+    
+    ```bash
+    sudo apt update
+    sudo apt install build-essential
+    sudo apt install clang
+    sudo apt install libstdc++-12-dev
+    ```
