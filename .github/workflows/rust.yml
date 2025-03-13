@@ -22,8 +22,11 @@ jobs:
     - name: Set up Rust
       uses: actions-rs/toolchain@v1
       with:
-        toolchain: stable
+        toolchain: 1.81.0 
         override: true
+
+    - name: Verify Rust version
+      run: rustc --version
 
     - name: Update dependencies
       run: cargo update
