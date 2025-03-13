@@ -6,8 +6,11 @@ use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 
 use crate::data_handling::Experiment;
+
 use crate::models::utils::{ModelParams, ModelType};
+#[cfg(feature = "xgboost")]
 use crate::models::xgboost::XGBoostClassifier;
+#[cfg(feature = "linfa")]
 use crate::models::svm::SVMClassifier;
 use crate::models::gbdt::GBDTClassifier;
 
@@ -52,6 +55,20 @@ impl SemiSupervisedLearner {
         class_pct: Option<(f64, f64)>,
     ) -> Self {
         let model: Box<dyn SemiSupervisedModel> = match model_type {
+            ModelType::GBDT { max_depth, num_boost_round, debug, training_optimization_level, loss_type } => {
+                let params = ModelParams {
+                    learning_rate,
+                    model_type: ModelType::GBDT {
+                        max_depth,
+                        num_boost_round,
+                        debug,
+                        training_optimization_level,
+                        loss_type
+                    },
+                };
+                Box::new(GBDTClassifier::new(params))
+            }
+            #[cfg(feature = "xgboost")]
             ModelType::XGBoost { max_depth, num_boost_round } => {
                 let params = ModelParams {
                     learning_rate,
@@ -59,6 +76,7 @@ impl SemiSupervisedLearner {
                 };
                 Box::new(XGBoostClassifier::new(params))
             }
+            #[cfg(feature = "linfa")]
             ModelType::SVM { eps, c, kernel, gaussian_kernel_eps, polynomial_kernel_constant, polynomial_kernel_degree } => {
                 let params = ModelParams {
                     learning_rate,
@@ -73,19 +91,8 @@ impl SemiSupervisedLearner {
                 };
                 Box::new(SVMClassifier::new(params))
             }
-            ModelType::GBDT { max_depth, num_boost_round, debug, training_optimization_level, loss_type } => {
-                let params = ModelParams {
-                    learning_rate,
-                    model_type: ModelType::GBDT {
-                        max_depth,
-                        num_boost_round,
-                        debug,
-                        training_optimization_level,
-                        loss_type
-                    },
-                };
-                Box::new(GBDTClassifier::new(params))
-            }
+            #[cfg(not(any(feature = "xgboost", feature = "linfa")))]
+            _ => panic!("No model selected. Please enable the 'xgboost' or 'linfa' feature."),
         };
 
         SemiSupervisedLearner {

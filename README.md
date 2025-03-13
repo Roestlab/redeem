@@ -51,6 +51,9 @@ The ReDeeM project consists of two primary crates:
     GBDT Classifier | `redeem_classifiers::GBDTClassifier` | GBDT | :heavy_check_mark:
     SVM Classifier | `redeem_classifiers::SVMClassifier` | SVM | :heavy_check_mark:
 
+> [!NOTE]
+> To use the XGBoost classifier, or the SVM classifier, you need to compile with the `--features xgboost` or `--features linfa` flag respectively.
+
 > [!IMPORTANT]
 > The XGBoost crate is a wrapper around the original XGBoost library, which requires clang/c++ to be installed on the system. On Ubuntu, you can do the following:
     
