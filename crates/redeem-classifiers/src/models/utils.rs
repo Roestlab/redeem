@@ -13,10 +13,12 @@ pub struct ModelParams {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 // #[serde(tag = "model")]
 pub enum ModelType {
+    #[cfg(feature = "xgboost")]
     XGBoost {
         max_depth: u32,
         num_boost_round: u32,
     },
+    #[cfg(feature = "linfa")]
     SVM {
         eps: f64,
         c: (f64, f64),
@@ -36,9 +38,12 @@ pub enum ModelType {
 
 impl Default for ModelType {
     fn default() -> Self {
-        ModelType::XGBoost {
+        ModelType::GBDT {
             max_depth: 6,
             num_boost_round: 3,
+            debug: false,
+            training_optimization_level: 2,
+            loss_type:"LogLikelyhood".to_string(),
         }
     }
 }
@@ -85,9 +90,12 @@ impl Default for ModelParams {
     fn default() -> Self {
         Self {
             learning_rate: 0.1,
-            model_type: ModelType::XGBoost {
+            model_type: ModelType::GBDT {
                 max_depth: 6,
                 num_boost_round: 3,
+                debug: false,
+                training_optimization_level: 2,
+                loss_type:"LogLikelyhood".to_string(),
             },
         }
     }
