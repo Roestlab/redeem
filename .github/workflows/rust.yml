@@ -33,3 +33,6 @@ jobs:
 
     - name: Build
       run: cargo build --verbose
+
+    - name: Build with xgboost features
+      run: cargo build --verbose --features xgboost
