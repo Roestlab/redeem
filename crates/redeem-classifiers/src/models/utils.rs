@@ -32,15 +32,39 @@ pub enum ModelType {
         training_optimization_level: u8,
         loss_type: String,
     },
+    Logistic {
+        fit_intercept: bool,
+        alpha: f64,
+        max_iter: u64,
+        gradient_tolerance: f64,
+    },
+}
+
+impl Default for ModelType {
+    fn default() -> Self {
+        ModelType::XGBoost {
+            max_depth: 6,
+            num_boost_round: 3,
+        }
+    }
 }
 
 impl ModelType {
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
+            "gbdt" => Ok(ModelType::GBDT {
+                max_depth: 6,
+                num_boost_round: 3,
+                debug: false,
+                training_optimization_level: 2,
+                loss_type:"LogLikelyhood".to_string(),
+            }),
+            #[cfg(feature = "xgboost")]
             "xgboost" => Ok(ModelType::XGBoost {
                 max_depth: 6,
                 num_boost_round: 3,
             }),
+            #[cfg(feature = "linfa")]
             "svm" => Ok(ModelType::SVM {
                 eps: 0.1,
                 c: (1.0, 1.0),
@@ -49,14 +73,7 @@ impl ModelType {
                 polynomial_kernel_constant: 1.0,
                 polynomial_kernel_degree: 3.0,
             }),
-            "gbdt" => Ok(ModelType::GBDT {
-                max_depth: 6,
-                num_boost_round: 3,
-                debug: false,
-                training_optimization_level: 2,
-                loss_type:"LogLikelyhood".to_string(),
-            }),
-            _ => Err(format!("Unknown model type: {}", s)),
+            _ => Err(format!("Unknown model type: {}. To use xgboost or svm, please compile with `--features xgboost` or `--features linfa`", s)),
         }
     }
 }
