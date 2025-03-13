@@ -32,12 +32,6 @@ pub enum ModelType {
         training_optimization_level: u8,
         loss_type: String,
     },
-    Logistic {
-        fit_intercept: bool,
-        alpha: f64,
-        max_iter: u64,
-        gradient_tolerance: f64,
-    },
 }
 
 impl Default for ModelType {
