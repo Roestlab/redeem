@@ -39,7 +39,7 @@ linfa = ["dep:linfa", "dep:linfa-svm"]
 
 [dependencies.xgboost]
 #version = "0.1.4"
-git = "https://github.com/postgresml/rust-xgboost.git"
+git = "https://github.com/singjc/rust-xgboost.git"
 optional = true  
 
 [dependencies.linfa]
