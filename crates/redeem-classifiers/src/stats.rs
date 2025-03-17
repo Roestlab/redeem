@@ -1,5 +1,5 @@
 use ndarray::{s, Array1, Axis};
-use ndarray_stats::QuantileExt;
+// use ndarray_stats::QuantileExt;
 
 /// Estimate q-values using target-decoy competition.
 ///
