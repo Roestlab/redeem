@@ -39,8 +39,8 @@ linfa = ["dep:linfa", "dep:linfa-svm"]
 
 [dependencies.xgboost]
 #version = "0.1.4"
-# git = "https://github.com/singjc/rust-xgboost.git"
-path = "/home/singjc/Documents/github/rust-xgboost"
+git = "https://github.com/singjc/rust-xgboost.git"
+# path = "/home/singjc/Documents/github/rust-xgboost"
 optional = true  
 
 [dependencies.linfa]
