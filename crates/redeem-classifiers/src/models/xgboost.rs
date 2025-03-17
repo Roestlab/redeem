@@ -48,6 +48,8 @@ impl SemiSupervisedModel for XGBoostClassifier {
         // Convert feature matrix into DMatrix
         let mut dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
         dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>()).unwrap();
+
+        // println!("TRAIN dmat: {:?}", dmat);
     
         let mut eval_matrix = None;
         let dmat_eval = if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
@@ -70,6 +72,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
             // Configure learning objective
             let learning_params = LearningTaskParametersBuilder::default()
                 .objective(Objective::BinaryLogisticRaw)
+                // .num_feature(x.ncols())
                 .build()
                 .unwrap();
     
@@ -107,6 +110,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
 
     fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
         let dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
+        // println!("PREDICT: dmat: {:?}", dmat);
         self.booster.as_ref().unwrap().predict(&dmat).unwrap()
     }
 
@@ -145,7 +149,11 @@ mod tests {
         println!("y.to_vec(): {:?}", y.to_vec());
 
         // Initialize the XGBoost classifier
-        let mut classifier = XGBoostClassifier::new(ModelParams::default());
+        let params = ModelParams {
+            learning_rate: 0.3,
+            model_type: ModelType::XGBoost { max_depth: 6, num_boost_round: 100 },
+        };
+        let mut classifier = XGBoostClassifier::new(params);
 
         // Fit the classifier
         classifier.fit(&x, &y.to_vec(), None, None);
