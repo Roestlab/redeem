@@ -306,32 +306,64 @@ impl MetaEmbedding {
         Ok(Self { nn })
     }
 
-    fn one_hot(&self, indices: &Tensor, num_classes: usize) -> AnyHowResult<Tensor> {
-        let batch_size = indices.dim(0)?;
+    // fn one_hot(&self, indices: &Tensor, num_classes: usize) -> AnyHowResult<Tensor> {
+    //     let batch_size = indices.dim(0)?;
 
+    //     let mut one_hot_data = vec![0.0f32; batch_size * num_classes];
+
+    //     for i in 0..batch_size {
+    //         let index = indices.get(i)?.to_scalar::<i64>()?;
+    //         let class_idx = index as usize;
+
+    //         if class_idx < num_classes {
+    //             one_hot_data[i * num_classes + class_idx] = 1.0;
+    //         } else {
+    //             return Err(anyhow::anyhow!(
+    //                 "Index {} out of bounds for one-hot encoding",
+    //                 class_idx
+    //             ));
+    //         }
+    //     }
+
+    //     log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), indices.device());
+
+    //     log::trace!("one hot encoded data: {:?}", Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
+    //     .context("Failed to create tensor from one-hot data"));
+
+    //     Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
+    //         .context("Failed to create tensor from one-hot data")
+    // }
+
+    fn one_hot(&self, indices: &Tensor, num_classes: usize) -> Result<Tensor> {
+        let batch_size = indices.dim(0)?;
+        let device = indices.device();
+
+        // Create a zeros vector for one-hot encoding
         let mut one_hot_data = vec![0.0f32; batch_size * num_classes];
 
-        for i in 0..batch_size {
-            let index = indices.get(i)?.to_scalar::<i64>()?;
-            let class_idx = index as usize;
+        // Convert indices to a 1D vector of i64
+        let indices = indices.to_dtype(DType::I64)?.to_vec1::<i64>()?;
 
-            if class_idx < num_classes {
-                one_hot_data[i * num_classes + class_idx] = 1.0;
+        // Iterate over the batch and set the appropriate indices to 1.0
+        for (i, &index) in indices.iter().enumerate() {
+            if index >= 0 && (index as usize) < num_classes {
+                one_hot_data[i * num_classes + index as usize] = 1.0;
             } else {
-                return Err(anyhow::anyhow!(
+                return Err(candle_core::Error::Msg(format!(
                     "Index {} out of bounds for one-hot encoding",
-                    class_idx
-                ));
+                    index
+                )));
             }
         }
 
-        log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), indices.device());
+        log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), device);
 
-        log::trace!("one hot encoded data: {:?}", Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
-        .context("Failed to create tensor from one-hot data"));
+        // Create a tensor from the one-hot data
+        let one_hot = Tensor::from_slice(&one_hot_data, (batch_size, num_classes), device)?;
 
-        Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
-            .context("Failed to create tensor from one-hot data")
+        log::trace!("one hot encoded data: {:?}", one_hot);
+
+        Ok(one_hot)
     }
 
     pub fn forward(
@@ -340,13 +372,11 @@ impl MetaEmbedding {
         nces: &Tensor,
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
+        log::trace!("[MetaEmbedding::forward] instrument_indices: {:?}", instrument_indices.to_vec1::<i64>()?);
+        log::trace!("[MetaEmbedding::forward] MAX_INSTRUMENT_NUM: {:?}", MAX_INSTRUMENT_NUM);
+
         // One-hot encode the instrument indices
-        let inst_x = self
-            .one_hot(
-                &instrument_indices.to_dtype(DType::I64)?,
-                MAX_INSTRUMENT_NUM,
-            )
-            .unwrap();
+        let inst_x = self.one_hot(&instrument_indices.to_dtype(DType::I64)?, MAX_INSTRUMENT_NUM)?;
 
         // Concatenate the one-hot encoded instrument indices with NCEs
         let combined_input = Tensor::cat(&[&inst_x, nces], 1)?;
