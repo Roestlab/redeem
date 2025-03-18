@@ -325,6 +325,11 @@ impl MetaEmbedding {
             }
         }
 
+        log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), indices.device());
+
+        log::trace!("one hot encoded data: {:?}", Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
+        .context("Failed to create tensor from one-hot data"));
+
         Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
             .context("Failed to create tensor from one-hot data")
     }

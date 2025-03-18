@@ -206,10 +206,18 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         let nce_out = nce_out.squeeze(2)?; // Squeeze to remove dimensions of size 1 if needed
         let instrument_out = instrument_out.squeeze(2)?.squeeze(1)?; // Squeeze to remove dimensions of size 1 if needed
 
+        log::trace!("aa_indices_out device: {:?}", aa_indices_out.device());
+        log::trace!("mod_x_out device: {:?}", mod_x_out.device());
+        log::trace!("charge_out device: {:?}", charge_out.device());
+        log::trace!("nce_out device: {:?}", nce_out.device());
+        log::trace!("instrument_out device: {:?}", instrument_out.device());
+
         // Forward pass through input_nn with dropout
         let in_x = self
             .dropout
             .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
+
+        log::trace!("in_x device: {:?}", in_x.device());
 
         // Prepare metadata for meta_nn
         let meta_x = self
