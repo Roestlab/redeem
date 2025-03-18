@@ -372,7 +372,7 @@ impl MetaEmbedding {
         nces: &Tensor,
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
-        log::trace!("[MetaEmbedding::forward] instrument_indices: {:?}", instrument_indices.to_vec1::<i64>()?);
+        log::trace!("[MetaEmbedding::forward] instrument_indices: {:?}", instrument_indices.to_vec1::<f64>()?);
         log::trace!("[MetaEmbedding::forward] MAX_INSTRUMENT_NUM: {:?}", MAX_INSTRUMENT_NUM);
 
         // One-hot encode the instrument indices
