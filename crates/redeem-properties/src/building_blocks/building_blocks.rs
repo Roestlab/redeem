@@ -372,20 +372,41 @@ impl MetaEmbedding {
         nces: &Tensor,
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
+        // Log input tensors
+        log::trace!("[MetaEmbedding::forward] charges shape: {:?}, device: {:?}", charges.shape(), charges.device());
+        log::trace!("[MetaEmbedding::forward] nces shape: {:?}, device: {:?}", nces.shape(), nces.device());
+        log::trace!("[MetaEmbedding::forward] instrument_indices shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
+        log::trace!("[MetaEmbedding::forward] charges: {:?}", charges.to_vec1::<f32>()?);
+        log::trace!("[MetaEmbedding::forward] nces: {:?}", nces.to_vec1::<f32>()?);
         log::trace!("[MetaEmbedding::forward] instrument_indices: {:?}", instrument_indices.to_vec1::<f32>()?);
         log::trace!("[MetaEmbedding::forward] MAX_INSTRUMENT_NUM: {:?}", MAX_INSTRUMENT_NUM);
+
+        log::trace!("[MetaEmbedding::forward] charges device: {:?}", charges.device());
+        log::trace!("[MetaEmbedding::forward] nces device: {:?}", nces.device());
+        log::trace!("[MetaEmbedding::forward] instrument_indices device: {:?}", instrument_indices.device());
 
         // One-hot encode the instrument indices
         let inst_x = self.one_hot(&instrument_indices.to_dtype(DType::I64)?, MAX_INSTRUMENT_NUM)?;
 
+        log::trace!("[MetaEmbedding::forward] inst_x shape: {:?}, device: {:?}", inst_x.shape(), inst_x.device());
+
+        // Ensure all tensors are on the same device
+        let charges = &charges.to_device(inst_x.device())?;
+        let nces = &nces.to_device(inst_x.device())?;
+        log::trace!("[MetaEmbedding::forward] charges (after to_device) shape: {:?}, device: {:?}", charges.shape(), charges.device());
+        log::trace!("[MetaEmbedding::forward] nces (after to_device) shape: {:?}, device: {:?}", nces.shape(), nces.device());
+
         // Concatenate the one-hot encoded instrument indices with NCEs
         let combined_input = Tensor::cat(&[&inst_x, nces], 1)?;
+        log::trace!("[MetaEmbedding::forward] combined_input shape: {:?}, device: {:?}", combined_input.shape(), combined_input.device());
 
         // Pass through the linear layer
         let meta_x = self.nn.forward(&combined_input)?;
+        log::trace!("[MetaEmbedding::forward] meta_x shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         // Concatenate the output with charges
         let meta_x = Tensor::cat(&[&meta_x, charges], 1)?;
+        log::trace!("[MetaEmbedding::forward] final meta_x shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         Ok(meta_x)
     }
