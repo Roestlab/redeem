@@ -108,8 +108,14 @@ impl AAEmbedding {
 
 impl Module for AAEmbedding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        log::trace!("[AAEmbedding::forward] x shape: {:?}, device: {:?}", x.shape(), x.device());
-        self.embeddings.forward(&x.to_dtype(DType::I64)?)
+        log::trace!("[AAEmbedding::forward] x shape: {:?}, device: {:?}, min: {:?}, max: {:?}",
+                    x.shape(), x.device(), x.min_all(), x.max_all());
+
+        let x = x.to_dtype(DType::I64)?;
+        log::trace!("[AAEmbedding::forward] x (converted to i64) shape: {:?}, device: {:?}, min: {:?}, max: {:?}",
+                    x.shape(), x.device(), x.min_all(), x.max_all());
+
+        self.embeddings.forward(&x)
     }
 }
 
@@ -272,8 +278,11 @@ impl Input26aaModPositionalEncoding {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-        log::trace!("[Input26aaModPositionalEncoding::forward] aa_indices shape: {:?}, device: {:?}", aa_indices.shape(), aa_indices.device());
+        log::trace!("[Input26aaModPositionalEncoding::forward] aa_indices shape: {:?}, device: {:?}, min: {:?}, max: {:?}", 
+                aa_indices.shape(), aa_indices.device(), aa_indices.min_all()aa_indices.max_all());
+    
         log::trace!("[Input26aaModPositionalEncoding::forward] mod_x shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
+
         let mod_x = self.mod_nn.forward(mod_x)?;
         log::trace!("[Input26aaModPositionalEncoding::forward] mod_x (after mod_nn) shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
         let x = self.aa_emb.forward(aa_indices)?;
