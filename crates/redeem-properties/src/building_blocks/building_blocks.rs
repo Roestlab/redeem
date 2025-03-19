@@ -279,7 +279,7 @@ impl Input26aaModPositionalEncoding {
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
         log::trace!("[Input26aaModPositionalEncoding::forward] aa_indices shape: {:?}, device: {:?}, min: {:?}, max: {:?}", 
-                aa_indices.shape(), aa_indices.device(), aa_indices.min_all()aa_indices.max_all());
+                aa_indices.shape(), aa_indices.device(), aa_indices.min_all(),aa_indices.max_all());
     
         log::trace!("[Input26aaModPositionalEncoding::forward] mod_x shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
 
