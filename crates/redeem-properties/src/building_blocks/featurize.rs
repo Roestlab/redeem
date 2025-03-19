@@ -9,10 +9,19 @@ use crate::building_blocks::building_blocks::AA_EMBEDDING_SIZE;
 /// 
 /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L88
 pub fn get_aa_indices(seq: &str) -> Result<Array2<i64>> {
-    let seq_len = seq.len();
+    let valid_aa = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // amino acids as defined in alphabase: https://github.com/MannLabs/alphabase/blob/main/alphabase/constants/const_files/amino_acid.tsv
+    let filtered_seq: String = seq.chars().filter(|c| valid_aa.contains(*c)).collect();
+
+    // TODO: Maybe this should be done higher up in the pipeline, and this should panic here instead.
+    // But for now this is done to deal with cases like: -MQPLSKL
+    if seq.len() != filtered_seq.len() {
+        log::warn!("Invalid amino acid characters found in sequence: {:?}, stripping them out to {:?}", seq, filtered_seq);
+    }
+
+    let seq_len = filtered_seq.len();
     let mut result = Array2::<i64>::zeros((1, seq_len + 2));
 
-    for (j, c) in seq.chars().enumerate() {
+    for (j, c) in filtered_seq.chars().enumerate() {
         let aa_index = (c as i64) - ('A' as i64) + 1;
         result[[0, j + 1]] = aa_index;
     }
