@@ -354,7 +354,22 @@ pub trait ModelInterface: Send + Sync {
         nce: Option<i32>,
         instrument: Option<&str>,
     ) -> Result<Tensor> {
+        log::trace!(
+            "[ModelInterface::encode_peptide] Encoding peptide: {:?}, mods: {:?}, mod_sites: {:?}, charge: {:?}, nce: {:?}, instrument: {:?}",
+            peptide_sequence,
+            mods,
+            mod_sites,
+            charge,
+            nce,
+            instrument
+        );
         let aa_indices = get_aa_indices(peptide_sequence)?;
+        log::trace!(
+            "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
+            aa_indices.shape(),
+            aa_indices.iter().min(),
+            aa_indices.iter().max()
+        );
 
         // Convert ndarray to Tensor (F32)
         let aa_indices_tensor = Tensor::from_slice(
@@ -366,6 +381,13 @@ pub trait ModelInterface: Send + Sync {
 
         let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
         let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?; // Shape: batch_size x seq_len x 1
+
+        log::trace!(
+            "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
+            aa_indices_tensor.shape(),
+            aa_indices_tensor.min_all(),
+            aa_indices_tensor.max_all() 
+        );
 
         // Get modification features
         let mod_x = get_mod_features(
