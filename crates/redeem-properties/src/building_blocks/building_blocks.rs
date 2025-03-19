@@ -376,8 +376,8 @@ impl MetaEmbedding {
         log::trace!("[MetaEmbedding::forward] charges shape: {:?}, device: {:?}", charges.shape(), charges.device());
         log::trace!("[MetaEmbedding::forward] nces shape: {:?}, device: {:?}", nces.shape(), nces.device());
         log::trace!("[MetaEmbedding::forward] instrument_indices shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
-        log::trace!("[MetaEmbedding::forward] charges: {:?}", charges.to_vec1::<f32>()?);
-        log::trace!("[MetaEmbedding::forward] nces: {:?}", nces.to_vec1::<f32>()?);
+        log::trace!("[MetaEmbedding::forward] charges: {:?}", charges.to_vec2::<f32>()?);
+        log::trace!("[MetaEmbedding::forward] nces: {:?}", nces.to_vec2::<f32>()?);
         log::trace!("[MetaEmbedding::forward] instrument_indices: {:?}", instrument_indices.to_vec1::<f32>()?);
         log::trace!("[MetaEmbedding::forward] MAX_INSTRUMENT_NUM: {:?}", MAX_INSTRUMENT_NUM);
 
