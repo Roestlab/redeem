@@ -385,9 +385,9 @@ impl MetaEmbedding {
         log::trace!("[MetaEmbedding::forward] nces device: {:?}", nces.device());
         log::trace!("[MetaEmbedding::forward] instrument_indices device: {:?}", instrument_indices.device());
 
-         // Ensure instrument_indices is a 1D tensor
-        let instrument_indices = instrument_indices.squeeze(1)?; // Remove the second dimension
-        log::trace!("[MetaEmbedding::forward] instrument_indices (after squeeze) shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
+        //  // Ensure instrument_indices is a 1D tensor
+        // let instrument_indices = instrument_indices.squeeze(1)?; // Remove the second dimension
+        // log::trace!("[MetaEmbedding::forward] instrument_indices (after squeeze) shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
 
 
         // One-hot encode the instrument indices
