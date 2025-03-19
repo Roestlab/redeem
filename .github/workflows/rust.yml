@@ -17,12 +17,12 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install system dependencies
-      run: sudo apt-get install -y libxgboost-dev libgomp1 build-essential clang libstdc++-12-dev
+      run: sudo apt-get install -y libgomp1 build-essential clang libstdc++-12-dev
 
     - name: Set up Rust
       uses: actions-rs/toolchain@v1
       with:
-        toolchain: 1.81.0 
+        toolchain: "nightly"
         override: true
 
     - name: Verify Rust version
