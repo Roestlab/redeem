@@ -99,14 +99,16 @@ impl AAEmbedding {
     }
 
     fn from_varstore(varstore: &nn::VarBuilder, hidden_size: usize, name: &str) -> Result<Self> {
-        let weight = varstore.get((AA_EMBEDDING_SIZE, hidden_size), name);
-        let embeddings = nn::Embedding::new(weight.unwrap(), hidden_size);
+        let weight = varstore.get((AA_EMBEDDING_SIZE, hidden_size), name)?;
+        log::trace!("[AAEmbedding::from_varstore] weight shape (AA_EMBEDDING_SIZE, hidden_size): {:?}, device: {:?}", weight.shape(), weight.device());
+        let embeddings = nn::Embedding::new(weight, hidden_size);
         Ok(Self { embeddings })
     }
 }
 
 impl Module for AAEmbedding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        log::trace!("[AAEmbedding::forward] x shape: {:?}, device: {:?}", x.shape(), x.device());
         self.embeddings.forward(&x.to_dtype(DType::I64)?)
     }
 }
