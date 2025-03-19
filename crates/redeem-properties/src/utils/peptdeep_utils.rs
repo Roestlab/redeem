@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn test_ion_mobility_to_ccs_bruker() {
         let mobility = 8.078969627454307e-05;
-        let charge = 2.0;
+        let charge = 2;
         let precursor_mz = 762.329553;
 
         let result = ion_mobility_to_ccs_bruker(mobility, charge, precursor_mz);
