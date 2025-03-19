@@ -270,11 +270,16 @@ impl Input26aaModPositionalEncoding {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
+        log::trace!("[Input26aaModPositionalEncoding::forward] aa_indices shape: {:?}, device: {:?}", aa_indices.shape(), aa_indices.device());
+        log::trace!("[Input26aaModPositionalEncoding::forward] mod_x shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
         let mod_x = self.mod_nn.forward(mod_x)?;
+        log::trace!("[Input26aaModPositionalEncoding::forward] mod_x (after mod_nn) shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
         let x = self.aa_emb.forward(aa_indices)?;
+        log::trace!("[Input26aaModPositionalEncoding::forward] x (after aa_emb) shape: {:?}, device: {:?}", x.shape(), x.device());
 
         // Concatenate x and mod_x along the last dimension
         let concatenated = Tensor::cat(&[&x, &mod_x], 2)?;
+        log::trace!("[Input26aaModPositionalEncoding::forward] concatenated shape: {:?}, device: {:?}", concatenated.shape(), concatenated.device());
         self.pos_encoder.forward(&concatenated)
     }
 }
@@ -356,12 +361,10 @@ impl MetaEmbedding {
             }
         }
 
-        log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), device);
-
         // Create a tensor from the one-hot data
         let one_hot = Tensor::from_slice(&one_hot_data, (batch_size, num_classes), device)?;
 
-        log::trace!("one hot encoded data: {:?}", one_hot);
+        log::trace!("[MetaEmbedding::one_hot] one hot encoded data shape: {:?}, device: {:?}", one_hot.shape(), one_hot.device());
 
         Ok(one_hot)
     }
@@ -377,13 +380,6 @@ impl MetaEmbedding {
         log::trace!("[MetaEmbedding::forward] nces shape: {:?}, device: {:?}", nces.shape(), nces.device());
         log::trace!("[MetaEmbedding::forward] instrument_indices shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
         log::trace!("[MetaEmbedding::forward] charges: {:?}", charges.to_vec2::<f32>()?);
-        log::trace!("[MetaEmbedding::forward] nces: {:?}", nces.to_vec2::<f32>()?);
-        log::trace!("[MetaEmbedding::forward] instrument_indices: {:?}", instrument_indices.to_vec1::<f32>()?);
-        log::trace!("[MetaEmbedding::forward] MAX_INSTRUMENT_NUM: {:?}", MAX_INSTRUMENT_NUM);
-
-        log::trace!("[MetaEmbedding::forward] charges device: {:?}", charges.device());
-        log::trace!("[MetaEmbedding::forward] nces device: {:?}", nces.device());
-        log::trace!("[MetaEmbedding::forward] instrument_indices device: {:?}", instrument_indices.device());
 
         //  // Ensure instrument_indices is a 1D tensor
         // let instrument_indices = instrument_indices.squeeze(1)?; // Remove the second dimension

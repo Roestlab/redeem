@@ -480,6 +480,8 @@ pub trait ModelInterface: Send + Sync {
                 let instruments = if instruments.len() == batch_data.len() { Some(instruments) } else { None };
     
                 let input_batch = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
+
+                log::trace!("[ModelInterface::fine_tune] input_batch shape: {:?}, device: {:?}", input_batch.shape(), input_batch.device());
     
                 let batch_targets = match self.property_type() {
                     PropertyType::RT => PredictionResult::RTResult(

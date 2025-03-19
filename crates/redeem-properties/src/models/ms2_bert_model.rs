@@ -206,18 +206,18 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         let nce_out = nce_out.squeeze(2)?; // Squeeze to remove dimensions of size 1 if needed
         let instrument_out = instrument_out.squeeze(2)?.squeeze(1)?; // Squeeze to remove dimensions of size 1 if needed
 
-        log::trace!("aa_indices_out device: {:?}", aa_indices_out.device());
-        log::trace!("mod_x_out device: {:?}", mod_x_out.device());
-        log::trace!("charge_out device: {:?}", charge_out.device());
-        log::trace!("nce_out device: {:?}", nce_out.device());
-        log::trace!("instrument_out device: {:?}", instrument_out.device());
+        log::trace!("[MS2BertModel::forwad] aa_indices_out shape: {:?}, device: {:?}", aa_indices_out.shape(), aa_indices_out.device());
+        log::trace!("[MS2BertModel::forwad] mod_x_out shape: {:?}, device: {:?}", mod_x_out.shape(), mod_x_out.device());
+        log::trace!("[MS2BertModel::forwad] charge_out shape: {:?}, device: {:?}", charge_out.shape(), charge_out.device());
+        log::trace!("[MS2BertModel::forwad] nce_out shape: {:?}, device: {:?}", nce_out.shape(), nce_out.device());
+        log::trace!("[MS2BertModel::forwad] instrument_out shape: {:?}, device: {:?}", instrument_out.shape(), instrument_out.device());
 
         // Forward pass through input_nn with dropout
         let in_x = self
             .dropout
             .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
 
-        log::trace!("in_x device: {:?}", in_x.device());
+        log::trace!("[MS2BertModel::forwad] in_x shape (post dropout-input_nn): {:?}, device: {:?}", in_x.shape(), in_x.device());
 
         // Prepare metadata for meta_nn
         let meta_x = self
@@ -225,14 +225,17 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
             .forward(&charge_out, &nce_out, &instrument_out)?
             .unsqueeze(1)?
             .repeat(vec![1, seq_len as usize, 1])?;
+        log::trace!("[MS2BertModel::forwad] meta_x (post meta_nn) shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         // Concatenate in_x and meta_x along dimension 2
         let combined_input = Tensor::cat(&[in_x.clone(), meta_x], 2)?;
+        log::trace!("[MS2BertModel::forwad] combined_input shape: {:?}, device: {:?}", combined_input.shape(), combined_input.device());
 
         // Forward pass through hidden_nn
         let hidden_x = self
             .hidden_nn
             .forward(&combined_input.clone(), None)?;
+        log::trace!("[MS2BertModel::forwad] hidden_x shape: {:?}, device: {:?}", hidden_x.shape(), hidden_x.device());
 
         // // Handle attentions if needed (similar to PyTorch)
         // if self.output_attentions {
@@ -244,9 +247,11 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         // Apply dropout and combine with input
         let x_tmp = (hidden_x + combined_input * 0.2)?;
         let hidden_output = self.dropout.forward(&x_tmp, true)?;
+        log::trace!("[MS2BertModel::forwad] hidden_output shape: {:?}, device: {:?}", hidden_output.shape(), hidden_output.device());
 
         // Forward pass through output_nn
         let mut out_x = self.output_nn.forward(&hidden_output)?;
+        log::trace!("[MS2BertModel::forwad] out_x shape: {:?}, device: {:?}", out_x.shape(), out_x.device());
 
         // Handle modloss if applicable (similar logic as PyTorch)
         if self.num_modloss_types > 0 {
