@@ -15,7 +15,7 @@ pub fn get_aa_indices(seq: &str) -> Result<Array2<i64>> {
     // TODO: Maybe this should be done higher up in the pipeline, and this should panic here instead.
     // But for now this is done to deal with cases like: -MQPLSKL
     if seq.len() != filtered_seq.len() {
-        log::warn!("Invalid amino acid characters found in sequence: {:?}, stripping them out to {:?}", seq, filtered_seq);
+        log::trace!("Invalid amino acid characters found in sequence: {:?}, stripping them out to {:?}", seq, filtered_seq);
     }
 
     let seq_len = filtered_seq.len();
