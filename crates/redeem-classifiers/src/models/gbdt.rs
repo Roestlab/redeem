@@ -80,7 +80,7 @@ impl SemiSupervisedModel for GBDTClassifier {
             }
             test_x.push(Data::new_training_data(test_row, 1.0, 0.0, None));
         }
-        let predictions = self.model.as_ref().unwrap().predict(&test_x);
+        let predictions = self.model.as_ref().unwrap().decision_function(&test_x);
         predictions
     }
 
