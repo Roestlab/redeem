@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use csv::ReaderBuilder;
+use machine_info::Machine;
 use ndarray::{Array1, Array2};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::process;
 
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
 use redeem_classifiers::models::utils::ModelType;
@@ -68,6 +70,10 @@ fn save_predictions_to_csv(
 
 fn main() -> Result<()> {
     env_logger::init();
+
+    let mut m = Machine::new();
+    m.track_process(process::id() as i32).unwrap();
+    
     // Load the test data from the TSV files
     let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
     // Select first 10 columns of data
@@ -82,15 +88,15 @@ fn main() -> Result<()> {
     let xgb_params = ModelType::XGBoost {
             max_depth: 6,
             num_boost_round: 100,
-            early_stopping_rounds: 50,
-            verbose_eval: true,
+            early_stopping_rounds: 10,
+            verbose_eval: false,
         };
     let mut learner = SemiSupervisedLearner::new(
         xgb_params,
-        0.3,
+        0.01,
         1.0,
         5,
-        Some((0.15, 1.0))
+        Some((1.0, 1.0))
     );
     let predictions = learner.fit(x, y.clone());
 
@@ -98,6 +104,12 @@ fn main() -> Result<()> {
 
     // Evaluate the predictions
     println!("Predictions: {:?}", predictions);
+
+    let processes = m.processes_status();
+    let system = m.system_status();
+    let graphics = m.graphics_status();
+    println!("{:?} {:?} {:?}", processes, system, graphics);
+
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
     Ok(())
 }
