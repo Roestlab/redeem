@@ -43,7 +43,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
         // Note: we set targets (original 1) as 1 and decoys (original -1) as 0, so that the scores are positive for targets and negative for decoys
         // TODO: this maybe should be done outside of the model
         let y = y.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>();
-        let y_eval = y_eval.map(|y_e| y_e.iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>());
+        let y_eval = Some(y_eval.unwrap().iter().map(|&l| if l == 1 { 1 } else { 0 }).collect::<Vec<i32>>());
     
         // Convert feature matrix into DMatrix
         let mut dmat = DMatrix::from_dense(x.as_slice().unwrap(), x.nrows()).unwrap();
@@ -58,7 +58,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
             eval_matrix = Some(matrix);
             Some(vec![
                 (&dmat, "train"),
-                (eval_matrix.as_ref().unwrap(), "test"),
+                (eval_matrix.as_ref().unwrap(), "eval"),
             ])
         } else {
             None
