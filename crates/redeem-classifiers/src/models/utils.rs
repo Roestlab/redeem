@@ -17,6 +17,8 @@ pub enum ModelType {
     XGBoost {
         max_depth: u32,
         num_boost_round: u32,
+        early_stopping_rounds: u32,
+        verbose_eval: bool,
     },
     #[cfg(feature = "linfa")]
     SVM {
@@ -61,7 +63,9 @@ impl ModelType {
             #[cfg(feature = "xgboost")]
             "xgboost" => Ok(ModelType::XGBoost {
                 max_depth: 6,
-                num_boost_round: 3,
+                num_boost_round: 200,
+                early_stopping_rounds: 10,
+                verbose_eval: false,
             }),
             #[cfg(feature = "linfa")]
             "svm" => Ok(ModelType::SVM {
@@ -92,7 +96,7 @@ impl Default for ModelParams {
             learning_rate: 0.1,
             model_type: ModelType::GBDT {
                 max_depth: 6,
-                num_boost_round: 3,
+                num_boost_round: 50,
                 debug: false,
                 training_optimization_level: 2,
                 loss_type:"LogLikelyhood".to_string(),

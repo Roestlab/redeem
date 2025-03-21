@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use sage_core::ml::matrix::Matrix;
 use xgboost::{
     parameters::{
-        learning::{LearningTaskParametersBuilder, Objective},
+        learning::{LearningTaskParametersBuilder, Objective, Metrics, EvaluationMetric},
         tree::{TreeBoosterParametersBuilder, TreeMethod},
         BoosterParametersBuilder, BoosterType, TrainingParametersBuilder,
     },
@@ -66,18 +66,22 @@ impl SemiSupervisedModel for XGBoostClassifier {
     
         if let ModelType::XGBoost {
             max_depth,
-            num_boost_round
+            num_boost_round,
+            early_stopping_rounds,
+            verbose_eval,
         } = &self.params.model_type
         {
             // Configure learning objective
             let learning_params = LearningTaskParametersBuilder::default()
                 .objective(Objective::BinaryLogisticRaw)
+                .eval_metrics(Metrics::Custom(vec![EvaluationMetric::LogLoss]))
                 // .num_feature(x.ncols())
                 .build()
                 .unwrap();
     
             // Configure the tree-based learning model's parameters
             let tree_params = TreeBoosterParametersBuilder::default()
+                .tree_method(TreeMethod::Hist)
                 .max_depth(*max_depth)
                 .eta(self.params.learning_rate)
                 .build()
@@ -87,7 +91,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
             let booster_params = BoosterParametersBuilder::default()
                 .booster_type(BoosterType::Tree(tree_params))
                 .learning_params(learning_params)
-                .verbose(false)
+                .verbose(*verbose_eval)
                 .build()
                 .unwrap();
     
@@ -95,6 +99,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
             let training_params = TrainingParametersBuilder::default()
                 .dtrain(&dmat)
                 .boost_rounds(*num_boost_round)
+                .early_stopping_rounds(Some(*early_stopping_rounds))
                 .booster_params(booster_params)
                 .evaluation_sets(dmat_eval.as_deref())
                 .build()
@@ -151,18 +156,18 @@ mod tests {
         // Initialize the XGBoost classifier
         let params = ModelParams {
             learning_rate: 0.3,
-            model_type: ModelType::XGBoost { max_depth: 6, num_boost_round: 100 },
+            model_type: ModelType::XGBoost { max_depth: 6, num_boost_round: 100, early_stopping_rounds: 10, verbose_eval: true },
         };
         let mut classifier = XGBoostClassifier::new(params);
 
         // Fit the classifier
-        classifier.fit(&x, &y.to_vec(), None, None);
+        classifier.fit(&x, &y.to_vec(), Some(&x), Some(&y.to_vec()));
 
         // Make predictions
         let predictions = classifier.predict(&x);
 
         println!("Predictions: {:?}", predictions);
-        println!("y: {:?}", y.to_vec());
+        // println!("y: {:?}", y.to_vec());
 
         // Check that predictions are reasonable
         // assert_eq!(predictions.len(), y.len());
@@ -187,7 +192,7 @@ mod tests {
             .unwrap()
             .predict_contributions(&dmat)
             .unwrap();
-        println!("Contributions: {:?}", contributions);
+        // println!("Contributions: {:?}", contributions);
 
         let interactions = classifier
             .booster
@@ -195,6 +200,6 @@ mod tests {
             .unwrap()
             .predict_interactions(&dmat)
             .unwrap();
-        println!("Interactions: {:?}", interactions);
+        // println!("Interactions: {:?}", interactions);
     }
 }

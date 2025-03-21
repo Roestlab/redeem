@@ -80,14 +80,16 @@ fn main() -> Result<()> {
 
     // Create and train your SemiSupervisedLearner
     let xgb_params = ModelType::XGBoost {
-            max_depth: 8,
-            num_boost_round: 10,
+            max_depth: 6,
+            num_boost_round: 100,
+            early_stopping_rounds: 50,
+            verbose_eval: true,
         };
     let mut learner = SemiSupervisedLearner::new(
         xgb_params,
-        0.001,
+        0.3,
         1.0,
-        10,
+        5,
         Some((0.15, 1.0))
     );
     let predictions = learner.fit(x, y.clone());

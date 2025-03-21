@@ -69,10 +69,10 @@ impl SemiSupervisedLearner {
                 Box::new(GBDTClassifier::new(params))
             }
             #[cfg(feature = "xgboost")]
-            ModelType::XGBoost { max_depth, num_boost_round } => {
+            ModelType::XGBoost { max_depth, num_boost_round, early_stopping_rounds, verbose_eval } => {
                 let params = ModelParams {
                     learning_rate,
-                    model_type: ModelType::XGBoost { max_depth, num_boost_round },
+                    model_type: ModelType::XGBoost { max_depth, num_boost_round, early_stopping_rounds, verbose_eval },
                 };
                 Box::new(XGBoostClassifier::new(params))
             }
@@ -346,8 +346,23 @@ impl SemiSupervisedLearner {
 
             self.remove_unlabeled_psms(&mut train_exp);
 
+            train_exp.split_for_xval(0.80, false);
+
+            let train_indices: Vec<usize> = train_exp.is_train
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &val)| if val { Some(i) } else { None })
+            .collect();
+
+            let test_indices: Vec<usize> = train_exp.is_train
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &val)| if !val { Some(i) } else { None })  
+            .collect();
+            
+
             self.model
-                .fit(&train_exp.x, &train_exp.y.to_vec(), None, None);
+                .fit(&train_exp.x.select(ndarray::Axis(0), &train_indices), &train_exp.y.select(ndarray::Axis(0), &train_indices).to_vec(), Some(&train_exp.x.select(ndarray::Axis(0), &test_indices)), Some(&train_exp.y.select(ndarray::Axis(0), &test_indices).to_vec()));
             
             let fold_predictions = Array1::from(self.model.predict_proba(&test_exp.x));
 
@@ -449,7 +464,9 @@ mod tests {
         // Create and train your SemiSupervisedLearner
         let xgb_params = ModelType::XGBoost {
                 max_depth: 8,
-                num_boost_round: 10,
+                num_boost_round: 100,
+                early_stopping_rounds: 10,
+                verbose_eval: false,
             };
         let mut learner = SemiSupervisedLearner::new(
             xgb_params,
