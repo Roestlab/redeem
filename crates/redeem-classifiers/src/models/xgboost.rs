@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ndarray::{Array1, Array2};
+use ndarray::{ArrayView1, Array2};
 use rayon::prelude::*;
 use sage_core::ml::matrix::Matrix;
 use xgboost::{
@@ -16,6 +16,58 @@ use sage_core::scoring::Feature;
 
 use crate::models::utils::{ModelType, ModelParams};
 use crate::psm_scorer::SemiSupervisedModel;
+
+fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
+    let labels = dtrain.get_labels().unwrap();
+    
+    // Convert to ndarray views for easier manipulation
+    let preds_array = ArrayView1::from(preds);
+    let labels_array = ArrayView1::from(&labels);
+    
+    // Calculate AUC using the trapezoidal rule
+    let mut auc = 0.0;
+    
+    // Sort predictions and labels by prediction score (ascending)
+    let mut combined: Vec<_> = preds_array.iter()
+        .zip(labels_array.iter())
+        .collect();
+    combined.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
+    
+    // Count positive and negative examples
+    let total_pos = labels_array.iter().filter(|&&x| x == 1.0).count() as f32;
+    let total_neg = labels_array.len() as f32 - total_pos;
+    
+    if total_pos == 0.0 || total_neg == 0.0 {
+        return 0.5; // Return 0.5 (random) if all labels are the same
+    }
+    
+    let mut cum_pos = 0.0;
+    let mut cum_neg = 0.0;
+    let mut prev_pred = f32::NEG_INFINITY;
+    let mut prev_pos = 0.0;
+    let mut prev_neg = 0.0;
+    
+    for (&pred, &label) in combined.iter() {
+        if pred != prev_pred {
+            auc += (cum_pos - prev_pos) * (cum_neg + prev_neg) / 2.0;
+            prev_pred = pred;
+            prev_pos = cum_pos;
+            prev_neg = cum_neg;
+        }
+        
+        if label == 1.0 {
+            cum_pos += 1.0;
+        } else {
+            cum_neg += 1.0;
+        }
+    }
+    
+    // Add the last rectangle
+    auc += (total_pos - prev_pos) * (total_neg + prev_neg) / 2.0;
+    
+    // Normalize AUC to [0, 1]
+    auc / (total_pos * total_neg)
+}
 
 pub struct XGBoostClassifier {
     booster: Option<Booster>,
@@ -74,7 +126,7 @@ impl SemiSupervisedModel for XGBoostClassifier {
             // Configure learning objective
             let learning_params = LearningTaskParametersBuilder::default()
                 .objective(Objective::BinaryLogisticRaw)
-                .eval_metrics(Metrics::Custom(vec![EvaluationMetric::LogLoss]))
+                // .eval_metrics(Metrics::Custom(vec![EvaluationMetric::LogLoss, EvaluationMetric::MAE]))
                 // .num_feature(x.ncols())
                 .build()
                 .unwrap();
@@ -102,6 +154,8 @@ impl SemiSupervisedModel for XGBoostClassifier {
                 .early_stopping_rounds(Some(*early_stopping_rounds))
                 .booster_params(booster_params)
                 .evaluation_sets(dmat_eval.as_deref())
+                .evaluation_score_direction(Some("high"))
+                .custom_evaluation_fn(Some(eval_auc))
                 .build()
                 .unwrap();
     
