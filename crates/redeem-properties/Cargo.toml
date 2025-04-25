@@ -25,18 +25,17 @@ rayon = "1.5"
 sysinfo = "0.33.1"
 
 [dependencies.candle-core]
-git = "https://github.com/huggingface/candle.git"
-version = "0.8.2"
+version = "0.8.4"
 default-features = false
 features = []
 
 [dependencies.candle-nn]
-git = "https://github.com/huggingface/candle.git"
+version = "0.8.4"
 default-features = false
 features = []
 
 [dependencies.candle-transformers]
-git = "https://github.com/huggingface/candle.git"
+version = "0.8.4"
 default-features = false
 features = []
 
