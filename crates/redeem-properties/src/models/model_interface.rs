@@ -689,13 +689,13 @@ pub struct DLModels {
     pub params: Option<Parameters>,
 
     /// Optional retention time prediction model.
-    pub rt_model: Option<Arc<Mutex<RTModelWrapper>>>,
+    pub rt_model: Option<RTModelWrapper>,
 
     /// Optional collision cross-section prediction model.
-    pub ccs_model: Option<Arc<Mutex<CCSModelWrapper>>>,
+    pub ccs_model: Option<CCSModelWrapper>,
 
     /// Optional MS2 intensity prediction model.
-    pub ms2_model: Option<Arc<Mutex<MS2ModelWrapper>>>,
+    pub ms2_model: Option<MS2ModelWrapper>,
 }
 
 impl DLModels {
@@ -710,7 +710,7 @@ impl DLModels {
     /// ```
     /// let mut models = DLModels::new();
     ///
-    /// models.rt_model = Some(Arc::new(Mutex::new(RTModelWrapper::new())));
+    /// models.rt_model = Some(RTModelWrapper::new());
     ///
     /// ```
     pub fn new() -> Self {
@@ -734,7 +734,7 @@ impl DLModels {
     /// let mut models = DLModels::new();
     /// assert!(!models.is_not_empty());
     ///
-    /// models.rt_model = Some(Arc::new(Mutex::new(RTModelWrapper::new())));
+    /// models.rt_model = Some(RTModelWrapper::new());
     /// assert!(models.is_not_empty());
     /// ```
     pub fn is_not_empty(&self) -> bool {
