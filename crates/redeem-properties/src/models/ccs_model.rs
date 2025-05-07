@@ -17,9 +17,16 @@ pub enum CCSModelArch {
 pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm"];
 
 // A wrapper struct for CCS models
-#[derive(Clone)]
 pub struct CCSModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
+}
+
+impl Clone for CCSModelWrapper {
+    fn clone(&self) -> Self {
+        CCSModelWrapper {
+            model: self.model.clone(), 
+        }
+    }
 }
 
 impl CCSModelWrapper {

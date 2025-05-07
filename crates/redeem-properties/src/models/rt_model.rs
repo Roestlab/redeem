@@ -19,10 +19,18 @@ pub enum RTModelArch {
 pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm"];
 
 // A wrapper struct for RT models
-#[derive(Clone)]
 pub struct RTModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
+
+impl Clone for RTModelWrapper {
+    fn clone(&self) -> Self {
+        RTModelWrapper {
+            model: self.model.clone(), // uses clone_box() behind the scenes
+        }
+    }
+}
+
 
 impl RTModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
