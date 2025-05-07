@@ -177,24 +177,25 @@ pub fn create_var_map(
 
 
 pub trait ModelClone {
-    fn clone_box(&self) -> Box<dyn ModelInterface>;
+    fn clone_box(&self) -> Box<dyn ModelInterface + Send + Sync>;
 }
+
 
 impl<T> ModelClone for T
 where
-    T: 'static + ModelInterface + Clone,
+    T: 'static + ModelInterface + Clone + Send + Sync,
 {
-    fn clone_box(&self) -> Box<dyn ModelInterface> {
+    fn clone_box(&self) -> Box<dyn ModelInterface + Send + Sync> {
         Box::new(self.clone())
     }
 }
 
-impl Clone for Box<dyn ModelInterface> {
-    fn clone(&self) -> Box<dyn ModelInterface> {
+
+impl Clone for Box<dyn ModelInterface + Send + Sync> {
+    fn clone(&self) -> Self {
         self.clone_box()
     }
 }
-
 
 /// Represents an abstract deep learning model interface.
 /// 
