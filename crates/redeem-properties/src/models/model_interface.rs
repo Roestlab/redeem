@@ -625,6 +625,7 @@ pub trait ModelInterface: Send + Sync {
 }
 
 /// Parameters for the `predict` method of a `ModelInterface` implementation.
+#[derive(Clone)]
 pub struct Parameters {
     /// The instrument data was acquired on. Refer to list of supported instruments in const yaml file.
     pub instrument: String,
