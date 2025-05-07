@@ -25,8 +25,8 @@ use crate::utils::logging::Progress;
 
 #[derive(Clone)]
 /// Represents an AlphaPeptDeep CNN-LSTM Retention Time model.
-pub struct RTCNNLSTMModel<'a> {
-    var_store: VarBuilder<'a>,
+pub struct RTCNNLSTMModel {
+    var_store: VarBuilder<'static>,
     varmap: VarMap,
     constants: ModelConstants,
     device: Device,
@@ -38,12 +38,12 @@ pub struct RTCNNLSTMModel<'a> {
 }
 
 // Automatically implement Send and Sync if all fields are Send and Sync
-unsafe impl<'a> Send for RTCNNLSTMModel<'a> {}
-unsafe impl<'a> Sync for RTCNNLSTMModel<'a> {}
+unsafe impl Send for RTCNNLSTMModel {}
+unsafe impl Sync for RTCNNLSTMModel {}
 
 // Core Model Implementation
 
-impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
+impl ModelInterface for RTCNNLSTMModel {
     fn property_type(&self) -> PropertyType {
         PropertyType::RT
     }
@@ -268,7 +268,7 @@ impl<'a> ModelInterface for RTCNNLSTMModel<'a> {
 
 // Module Trait Implementation
 
-// impl<'a> Module for RTCNNLSTMModel<'a> {
+// impl Module for RTCNNLSTMModel {
 //     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
 //         ModelInterface::forward(self, input)
 //     }

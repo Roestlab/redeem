@@ -32,8 +32,8 @@ const NCE_FACTOR: f64 = 0.01;
 // Main Model Struct
 #[derive(Clone)]
 /// Represents an AlphaPeptDeep MS2BERT model.
-pub struct CCSCNNLSTMModel<'a> {
-    var_store: VarBuilder<'a>,
+pub struct CCSCNNLSTMModel {
+    var_store: VarBuilder<'static>,
     varmap: VarMap,
     constants: ModelConstants,
     mod_to_feature: HashMap<String, Vec<f32>>,
@@ -52,11 +52,11 @@ pub struct CCSCNNLSTMModel<'a> {
 }
 
 // Automatically implement Send and Sync if all fields are Send and Sync
-unsafe impl<'a> Send for CCSCNNLSTMModel<'a> {}
-unsafe impl<'a> Sync for CCSCNNLSTMModel<'a> {}
+unsafe impl Send for CCSCNNLSTMModel {}
+unsafe impl Sync for CCSCNNLSTMModel {}
 
 // Code Model Implementation
-impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
+impl ModelInterface for CCSCNNLSTMModel {
     fn property_type(&self) -> PropertyType {
         PropertyType::CCS
     }
@@ -217,13 +217,13 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
 
 
 // // Forward Module Trait Implementation
-// impl <'a> Module for CCSCNNLSTMModel<'a> {
+// impl  Module for CCSCNNLSTMModel {
 //     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
 //         ModelInterface::forward(self, input)
 //     }    
 // }
 
-impl<'a> fmt::Debug for CCSCNNLSTMModel<'a> {
+impl fmt::Debug for CCSCNNLSTMModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "ModelCCS_LSTM(")?;
         writeln!(f, "  (dropout): Dropout(p={}, inplace={})", 0.1, false)?;
