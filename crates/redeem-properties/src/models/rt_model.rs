@@ -19,6 +19,7 @@ pub enum RTModelArch {
 pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm"];
 
 // A wrapper struct for RT models
+#[derive(Clone)]
 pub struct RTModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }

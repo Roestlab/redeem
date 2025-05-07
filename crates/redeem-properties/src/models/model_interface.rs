@@ -176,10 +176,30 @@ pub fn create_var_map(
 }
 
 
+pub trait ModelClone {
+    fn clone_box(&self) -> Box<dyn ModelInterface>;
+}
+
+impl<T> ModelClone for T
+where
+    T: 'static + ModelInterface + Clone,
+{
+    fn clone_box(&self) -> Box<dyn ModelInterface> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn ModelInterface> {
+    fn clone(&self) -> Box<dyn ModelInterface> {
+        self.clone_box()
+    }
+}
+
+
 /// Represents an abstract deep learning model interface.
 /// 
 /// This trait defines the methods and properties that a deep learning model must implement to be used for property prediction tasks.
-pub trait ModelInterface: Send + Sync {
+pub trait ModelInterface: Send + Sync + ModelClone {
 
     /// Get the property type of the model.
     fn property_type(&self) -> PropertyType;

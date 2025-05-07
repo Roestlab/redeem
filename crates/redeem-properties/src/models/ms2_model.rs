@@ -17,6 +17,7 @@ pub enum MS2ModelArch {
 pub const MS2MODEL_ARCHS: &[&str] = &["ms2_bert"];
 
 // A wrapper struct for MS2 models
+#[derive(Clone)]
 pub struct MS2ModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
