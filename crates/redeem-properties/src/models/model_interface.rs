@@ -1,5 +1,5 @@
 use crate::{
-    building_blocks::featurize::{self, get_aa_indices, get_mod_features},
+    building_blocks::featurize::{self, aa_indices_tensor, get_aa_indices, get_mod_features, get_mod_features_from_parsed},
     models::{ccs_model::CCSModelWrapper, ms2_model::MS2ModelWrapper, rt_model::RTModelWrapper},
     utils::{
         data_handling::PeptideData,
@@ -19,6 +19,7 @@ use std::ops::{Index, IndexMut};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, path::PathBuf};
+use itertools::izip;
 
 // Constants
 const CHARGE_FACTOR: f64 = 0.1;
@@ -274,98 +275,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         }
     }
 
-    /// Encode a batch of peptide sequences (plus modifications) into a tensor.
-    /// 
-    /// # Arguments
-    /// * `peptide_sequences` - A vector of peptide sequences.
-    /// * `mods` - A vector of strings representing the modifications for each peptide.
-    /// * `mod_sites` - A vector of strings representing the modification site indices for each peptide.
-    /// * `charge` - An optional vector of charge states for each peptide.
-    /// * `nce` - An optional vector of nominal collision energies for each peptide.
-    /// * `instruments` - An optional vector of instrument names for each peptide.
-    /// 
-    /// # Returns
-    /// A tensor containing the encoded peptide sequences.
-    fn encode_peptides(
-        &self,
-        peptide_sequences: &[String],
-        mods: &[String],
-        mod_sites: &[String],
-        charges: Option<Vec<i32>>,
-        nces: Option<Vec<i32>>,
-        instruments: Option<Vec<String>>,
-    ) -> Result<Tensor> {
-        if peptide_sequences.len() != mods.len() || peptide_sequences.len() != mod_sites.len() {
-            return Err(anyhow::anyhow!(
-                "Mismatch in input lengths: peptide_sequences, mods, and mod_sites must have the same length."
-            ));
-        }
-
-        // Encode peptides in parallel using Rayon
-        let encoded_tensors: Vec<Tensor> = peptide_sequences
-            .par_iter() // Use Rayon's parallel iterator
-            .enumerate()
-            .map(|(i, peptide)| {
-                self.encode_peptide(
-                    peptide,
-                    &mods[i],
-                    &mod_sites[i],
-                    charges.as_ref().map(|c| c[i]),
-                    nces.as_ref().map(|n| n[i]),
-                    instruments.as_ref().map(|ins| ins[i].as_str()),
-                )
-            })
-            .collect::<Result<Vec<Tensor>>>()?; // Collect results and propagate errors if any
-
-        // Determine the maximum sequence length
-        let max_seq_len = encoded_tensors
-            .par_iter()
-            .map(|t| t.shape().dims3().unwrap().1) // Get sequence length (dimension 1)
-            .max()
-            .unwrap_or(0);
-
-        // Pad tensors to the max_seq_len
-        let padded_tensors: Result<Vec<Tensor>> = encoded_tensors
-            .into_par_iter() // Use Rayon's parallel iterator
-            .map(|t| {
-                let (_, seq_len, feature_size) = t.shape().dims3()?; // Extract feature dimension
-                if seq_len < max_seq_len {
-                    let pad_size = max_seq_len - seq_len;
-                    // Create a padding tensor with the correct shape and type
-                    let pad = Tensor::zeros(
-                        &[1, pad_size, feature_size], // Use the correct feature dimension
-                        t.dtype(),
-                        t.device(),
-                    )?;
-                    // Concatenate padding along sequence length
-                    Tensor::cat(&[&t, &pad], 1)
-                } else {
-                    Ok(t)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into);
-
-        let padded_tensors = padded_tensors?;
-
-        // Concatenate all padded tensors along the batch dimension
-        let batch_tensor = Tensor::cat(&padded_tensors, 0)?;
-
-        Ok(batch_tensor)
-    }
-
     /// Encode peptide sequence (plus modifications) into a tensor.
-    /// 
-    /// # Arguments
-    /// * `peptide_sequence` - The peptide sequence.
-    /// * `mods` - A string representing the modifications for the peptide.
-    /// * `mod_sites` - A string representing the modification site indices for the peptide.
-    /// * `charge` - An optional charge state for the peptide.
-    /// * `nce` - An optional nominal collision energy for the peptide.
-    /// * `instrument` - An optional instrument name for the peptide.
-    /// 
-    /// # Returns
-    /// A tensor containing the encoded peptide sequence.
     fn encode_peptide(
         &self,
         peptide_sequence: &str,
@@ -375,89 +285,296 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         nce: Option<i32>,
         instrument: Option<&str>,
     ) -> Result<Tensor> {
-        log::trace!(
-            "[ModelInterface::encode_peptide] Encoding peptide: {:?}, mods: {:?}, mod_sites: {:?}, charge: {:?}, nce: {:?}, instrument: {:?}",
-            peptide_sequence,
-            mods,
-            mod_sites,
-            charge,
-            nce,
-            instrument
-        );
-        let aa_indices = get_aa_indices(peptide_sequence)?;
-        log::trace!(
-            "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
-            aa_indices.shape(),
-            aa_indices.iter().min(),
-            aa_indices.iter().max()
-        );
+        let device = self.get_device();
+        let mod_feature_size = self.get_mod_element_count();
+        let mod_to_feature = self.get_mod_to_feature().clone();
 
-        // Convert ndarray to Tensor (F32)
-        let aa_indices_tensor = Tensor::from_slice(
-            &aa_indices.as_slice().unwrap(),
-            (aa_indices.shape()[0], aa_indices.shape()[1]),
-            &self.get_device(),
-        )?
-        .to_dtype(DType::F32)?;
+        let aa_tensor = aa_indices_tensor(peptide_sequence, &device)?;
+        let (batch_size, seq_len, _) = aa_tensor.shape().dims3()?;
 
-        let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
-        let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?; // Shape: batch_size x seq_len x 1
+        let mod_names: Vec<&str> = mods.split(';').filter(|s| !s.is_empty()).collect();
+        let mod_indices: Vec<usize> = mod_sites
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<usize>().unwrap())
+            .collect();
 
-        log::trace!(
-            "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
-            aa_indices_tensor.shape(),
-            aa_indices_tensor.min_all(),
-            aa_indices_tensor.max_all() 
-        );
-
-        // Get modification features
-        let mod_x = get_mod_features(
-            mods,
-            mod_sites,
+        let mod_tensor = get_mod_features_from_parsed(
+            &mod_names,
+            &mod_indices,
             seq_len,
-            self.get_mod_element_count(),
-            self.get_mod_to_feature().clone(),
-            self.get_device().clone(),
+            mod_feature_size,
+            &mod_to_feature,
+            &device,
         )?;
 
-        let mut features = vec![aa_indices_tensor, mod_x];
+        let mut features = vec![aa_tensor, mod_tensor];
 
-        // Conditionally add charge
         if let Some(c) = charge {
             let charge_tensor = Tensor::from_slice(
                 &vec![c as f64 * CHARGE_FACTOR; seq_len],
                 &[batch_size, seq_len, 1],
-                &self.get_device(),
-            )?
-            .to_dtype(DType::F32)?;
+                &device,
+            )?.to_dtype(DType::F32)?;
             features.push(charge_tensor);
         }
 
-        // Conditionally add NCE
         if let Some(n) = nce {
             let nce_tensor = Tensor::from_slice(
                 &vec![n as f64 * NCE_FACTOR; seq_len],
                 &[batch_size, seq_len, 1],
-                &self.get_device(),
-            )?
-            .to_dtype(DType::F32)?;
+                &device,
+            )?.to_dtype(DType::F32)?;
             features.push(nce_tensor);
         }
 
-        // Conditionally add instrument
         if let Some(instr) = instrument {
-            let instrument_tensor = Tensor::from_slice(
-                &vec![parse_instrument_index(instr) as u32; seq_len],
+            let instr_idx = parse_instrument_index(instr) as u32;
+            let instr_tensor = Tensor::from_slice(
+                &vec![instr_idx; seq_len],
                 &[batch_size, seq_len, 1],
-                &self.get_device(),
-            )?
-            .to_dtype(DType::F32)?;
-            features.push(instrument_tensor);
+                &device,
+            )?.to_dtype(DType::F32)?;
+            features.push(instr_tensor);
         }
 
-        // Concatenate features
         Ok(Tensor::cat(&features, 2)?)
     }
+
+    /// Encode a batch of peptide sequences into a tensor
+    fn encode_peptides(
+        &self,
+        peptide_sequences: &[String],
+        mods: &[String],
+        mod_sites: &[String],
+        charges: Option<Vec<i32>>,
+        nces: Option<Vec<i32>>,
+        instruments: Option<Vec<String>>,
+    ) -> Result<Tensor> {
+        let len = peptide_sequences.len();
+    
+        let tensors: Vec<_> = (0..len)
+            .into_par_iter()
+            .map(|i| {
+                self.encode_peptide(
+                    &peptide_sequences[i],
+                    &mods[i],
+                    &mod_sites[i],
+                    charges.as_ref().map(|v| v[i]),
+                    nces.as_ref().map(|v| v[i]),
+                    instruments.as_ref().map(|v| v[i].as_str()),
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?; // Propagate errors
+    
+        let max_len = tensors
+            .iter()
+            .map(|t| t.shape().dims3().unwrap().1)
+            .max()
+            .unwrap_or(0);
+    
+            let padded = tensors
+            .into_par_iter()
+            .map(|t| {
+                let (_, seq_len, feat_dim) = t.shape().dims3()?;
+                if seq_len < max_len {
+                    let pad = Tensor::zeros(&[1, max_len - seq_len, feat_dim], t.dtype(), t.device())?;
+                    Tensor::cat(&[&t, &pad], 1)
+                } else {
+                    Ok(t)
+                }
+            })
+            .map(|res| res.map_err(anyhow::Error::from)) 
+            .collect::<Result<Vec<_>, _>>()?;
+    
+        Ok(Tensor::cat(&padded, 0)?)
+    }
+    
+
+    // /// Encode a batch of peptide sequences (plus modifications) into a tensor.
+    // /// 
+    // /// # Arguments
+    // /// * `peptide_sequences` - A vector of peptide sequences.
+    // /// * `mods` - A vector of strings representing the modifications for each peptide.
+    // /// * `mod_sites` - A vector of strings representing the modification site indices for each peptide.
+    // /// * `charge` - An optional vector of charge states for each peptide.
+    // /// * `nce` - An optional vector of nominal collision energies for each peptide.
+    // /// * `instruments` - An optional vector of instrument names for each peptide.
+    // /// 
+    // /// # Returns
+    // /// A tensor containing the encoded peptide sequences.
+    // fn encode_peptides(
+    //     &self,
+    //     peptide_sequences: &[String],
+    //     mods: &[String],
+    //     mod_sites: &[String],
+    //     charges: Option<Vec<i32>>,
+    //     nces: Option<Vec<i32>>,
+    //     instruments: Option<Vec<String>>,
+    // ) -> Result<Tensor> {
+    //     if peptide_sequences.len() != mods.len() || peptide_sequences.len() != mod_sites.len() {
+    //         return Err(anyhow::anyhow!(
+    //             "Mismatch in input lengths: peptide_sequences, mods, and mod_sites must have the same length."
+    //         ));
+    //     }
+
+    //     // Encode peptides in parallel using Rayon
+    //     let encoded_tensors: Vec<Tensor> = peptide_sequences
+    //         .par_iter() // Use Rayon's parallel iterator
+    //         .enumerate()
+    //         .map(|(i, peptide)| {
+    //             self.encode_peptide(
+    //                 peptide,
+    //                 &mods[i],
+    //                 &mod_sites[i],
+    //                 charges.as_ref().map(|c| c[i]),
+    //                 nces.as_ref().map(|n| n[i]),
+    //                 instruments.as_ref().map(|ins| ins[i].as_str()),
+    //             )
+    //         })
+    //         .collect::<Result<Vec<Tensor>>>()?; // Collect results and propagate errors if any
+
+    //     // Determine the maximum sequence length
+    //     let max_seq_len = encoded_tensors
+    //         .par_iter()
+    //         .map(|t| t.shape().dims3().unwrap().1) // Get sequence length (dimension 1)
+    //         .max()
+    //         .unwrap_or(0);
+
+    //     // Pad tensors to the max_seq_len
+    //     let padded_tensors: Result<Vec<Tensor>> = encoded_tensors
+    //         .into_par_iter() // Use Rayon's parallel iterator
+    //         .map(|t| {
+    //             let (_, seq_len, feature_size) = t.shape().dims3()?; // Extract feature dimension
+    //             if seq_len < max_seq_len {
+    //                 let pad_size = max_seq_len - seq_len;
+    //                 // Create a padding tensor with the correct shape and type
+    //                 let pad = Tensor::zeros(
+    //                     &[1, pad_size, feature_size], // Use the correct feature dimension
+    //                     t.dtype(),
+    //                     t.device(),
+    //                 )?;
+    //                 // Concatenate padding along sequence length
+    //                 Tensor::cat(&[&t, &pad], 1)
+    //             } else {
+    //                 Ok(t)
+    //             }
+    //         })
+    //         .collect::<Result<Vec<_>, _>>()
+    //         .map_err(Into::into);
+
+    //     let padded_tensors = padded_tensors?;
+
+    //     // Concatenate all padded tensors along the batch dimension
+    //     let batch_tensor = Tensor::cat(&padded_tensors, 0)?;
+
+    //     Ok(batch_tensor)
+    // }
+
+    // /// Encode peptide sequence (plus modifications) into a tensor.
+    // /// 
+    // /// # Arguments
+    // /// * `peptide_sequence` - The peptide sequence.
+    // /// * `mods` - A string representing the modifications for the peptide.
+    // /// * `mod_sites` - A string representing the modification site indices for the peptide.
+    // /// * `charge` - An optional charge state for the peptide.
+    // /// * `nce` - An optional nominal collision energy for the peptide.
+    // /// * `instrument` - An optional instrument name for the peptide.
+    // /// 
+    // /// # Returns
+    // /// A tensor containing the encoded peptide sequence.
+    // fn encode_peptide(
+    //     &self,
+    //     peptide_sequence: &str,
+    //     mods: &str,
+    //     mod_sites: &str,
+    //     charge: Option<i32>,
+    //     nce: Option<i32>,
+    //     instrument: Option<&str>,
+    // ) -> Result<Tensor> {
+    //     log::trace!(
+    //         "[ModelInterface::encode_peptide] Encoding peptide: {:?}, mods: {:?}, mod_sites: {:?}, charge: {:?}, nce: {:?}, instrument: {:?}",
+    //         peptide_sequence,
+    //         mods,
+    //         mod_sites,
+    //         charge,
+    //         nce,
+    //         instrument
+    //     );
+    //     let aa_indices = get_aa_indices(peptide_sequence)?;
+    //     log::trace!(
+    //         "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
+    //         aa_indices.shape(),
+    //         aa_indices.iter().min(),
+    //         aa_indices.iter().max()
+    //     );
+
+    //     // Convert ndarray to Tensor (F32)
+    //     let aa_indices_tensor = Tensor::from_slice(
+    //         &aa_indices.as_slice().unwrap(),
+    //         (aa_indices.shape()[0], aa_indices.shape()[1]),
+    //         &self.get_device(),
+    //     )?
+    //     .to_dtype(DType::F32)?;
+
+    //     let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
+    //     let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?; // Shape: batch_size x seq_len x 1
+
+    //     log::trace!(
+    //         "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
+    //         aa_indices_tensor.shape(),
+    //         aa_indices_tensor.min_all(),
+    //         aa_indices_tensor.max_all() 
+    //     );
+
+    //     // Get modification features
+    //     let mod_x = get_mod_features(
+    //         mods,
+    //         mod_sites,
+    //         seq_len,
+    //         self.get_mod_element_count(),
+    //         self.get_mod_to_feature().clone(),
+    //         self.get_device().clone(),
+    //     )?;
+
+    //     let mut features = vec![aa_indices_tensor, mod_x];
+
+    //     // Conditionally add charge
+    //     if let Some(c) = charge {
+    //         let charge_tensor = Tensor::from_slice(
+    //             &vec![c as f64 * CHARGE_FACTOR; seq_len],
+    //             &[batch_size, seq_len, 1],
+    //             &self.get_device(),
+    //         )?
+    //         .to_dtype(DType::F32)?;
+    //         features.push(charge_tensor);
+    //     }
+
+    //     // Conditionally add NCE
+    //     if let Some(n) = nce {
+    //         let nce_tensor = Tensor::from_slice(
+    //             &vec![n as f64 * NCE_FACTOR; seq_len],
+    //             &[batch_size, seq_len, 1],
+    //             &self.get_device(),
+    //         )?
+    //         .to_dtype(DType::F32)?;
+    //         features.push(nce_tensor);
+    //     }
+
+    //     // Conditionally add instrument
+    //     if let Some(instr) = instrument {
+    //         let instrument_tensor = Tensor::from_slice(
+    //             &vec![parse_instrument_index(instr) as u32; seq_len],
+    //             &[batch_size, seq_len, 1],
+    //             &self.get_device(),
+    //         )?
+    //         .to_dtype(DType::F32)?;
+    //         features.push(instrument_tensor);
+    //     }
+
+    //     // Concatenate features
+    //     Ok(Tensor::cat(&features, 2)?)
+    // }
 
     /// Fine-tune the model on a batch of training data.
     /// 

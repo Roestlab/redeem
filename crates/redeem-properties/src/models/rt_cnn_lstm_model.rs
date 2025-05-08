@@ -309,12 +309,85 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_peptides() {
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device).unwrap(); 
+
+        let peptide_sequences = "AGHCEWQMKYR";
+        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let mod_sites = "0;4;8";
+        // let charge = Some(2);
+        // let nce = Some(20);
+        // let instrument = Some("QE");
+
+        let result =
+            model.encode_peptide(&peptide_sequences, mods, mod_sites, None, None, None);
+
+        println!("{:?}", result);
+
+        // assert!(result.is_ok());
+        // let encoded_peptides = result.unwrap();
+        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+    }
+
+    #[test]
+    fn test_encode_peptides_batch() {
+
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+        let device = Device::Cpu;
+
+        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device.clone()).unwrap();
+
+        // Batched input
+        let peptide_sequences = vec![
+            "ACDEFGHIK".to_string(),
+            "AGHCEWQMKYR".to_string(),
+        ];
+        let mods = vec![
+            "Carbamidomethyl@C".to_string(),
+            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
+        ];
+        let mod_sites = vec![
+            "1".to_string(),
+            "0;4;8".to_string(),
+        ];
+
+        println!("Peptides: {:?}", peptide_sequences);
+        println!("Mods: {:?}", mods);
+        println!("Mod sites: {:?}", mod_sites);
+
+
+        let result = model.encode_peptides(
+            &peptide_sequences,
+            &mods,
+            &mod_sites,
+            None,
+            None,
+            None,
+        );
+
+        assert!(result.is_ok());
+        let tensor = result.unwrap();
+        println!("Batched encoded tensor shape: {:?}", tensor.shape());
+
+        let (batch, seq_len, feat_dim) = tensor.shape().dims3().unwrap();
+        assert_eq!(batch, 2); // two peptides
+        assert!(seq_len >= 11); // padded to max length
+        assert!(feat_dim > 1); // includes aa + mod features
+    }
+
+
+    #[test]
     fn test_prediction() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = /* Assuming Device is defined */ Device::new_cuda(0).unwrap_or(/* assuming Device::Cpu is defined */ Device::Cpu); // Replace with actual Device code.
-        let result = /* Assuming RTCNNLSTMModel is defined */ RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device); // Replace with actual RTCNNLSTMModel code
+        let result =  RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device); 
         let mut model = result.unwrap();
     
         // Test prediction with a few peptides after fine-tuning
