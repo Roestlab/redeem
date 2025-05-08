@@ -184,48 +184,76 @@ pub fn load_mod_to_feature(constants: &ModelConstants) -> Result<HashMap<String,
 }
 
 
-// #[derive(Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ModificationMap {
     pub name: String,
     pub amino_acid: Option<char>, // Optional if not applicable
+    pub unimod_id: Option<u32>
 }
 
 
+/// Loads a unified modification map where the key is either:
+/// - ("57.0215", Some('C')) for mass-based lookup
+/// - ("UniMod:4", Some('C')) for UniMod ID–based lookup
 pub fn load_modifications() -> Result<HashMap<(String, Option<char>), ModificationMap>> {
     let path: PathBuf = ensure_mod_tsv_exists().context("Failed to ensure TSV exists")?;
 
     let mut rdr = ReaderBuilder::new()
         .delimiter(b'\t')
-        .from_path(path).context("Failed to read TSV file")?;
+        .from_path(&path)
+        .context("Failed to read modification TSV file")?;
 
     let mut modifications = HashMap::new();
-    
+
     for result in rdr.records() {
         let record = result.context("Failed to read record")?;
         let mod_name = record.get(0).unwrap_or("").to_string();
         let unimod_mass: f64 = record.get(1).unwrap_or("0").parse().unwrap_or(0.0);
-        
-        // Convert mass to string with 4 decimal places
+        let unimod_id: Option<u32> = record.get(7).and_then(|s| s.parse().ok());
+
         let mass_key = format!("{:.4}", unimod_mass);
-        
-        // Extract amino acid from mod_name
+        let unimod_key = unimod_id.map(|id| format!("UniMod:{}", id));
+
         let amino_acid = mod_name.split('@').nth(1).and_then(|aa| aa.chars().next());
 
-        // Create Modification struct
         let modification = ModificationMap {
             name: mod_name,
             amino_acid,
+            unimod_id,
         };
 
-        // Insert into HashMap
-        modifications.insert((mass_key, amino_acid), modification);
+        // Insert mass-based key
+        modifications.insert((mass_key.clone(), amino_acid), modification.clone());
+
+        // Insert unimod-id based key if available
+        if let Some(key) = unimod_key {
+            modifications.insert((key, amino_acid), modification.clone());
+        }
     }
 
     Ok(modifications)
 }
 
+
+
+
+/// Removes mass shifts and UniMod annotations from a modified peptide sequence.
+///
+/// Supports both bracketed mass shifts (e.g., `[+57.0215]`) and UniMod-style
+/// annotations (e.g., `(UniMod:4)`).
+///
+/// # Example
+/// ```
+/// use easypqp_core::data_handling::remove_mass_shift;
+/// 
+/// let peptide = "MGC[+57.0215]AAR";
+/// assert_eq!(remove_mass_shift(peptide), "MGCAAR");
+/// let peptide = "MGC(UniMod:4)AAR";
+/// assert_eq!(remove_mass_shift(peptide), "MGCAAR");
+/// ```
 pub fn remove_mass_shift(peptide: &str) -> String {
-    let re = Regex::new(r"\[.*?\]").unwrap();
+    // Regex to remove either [mass shift] or (UniMod:x) patterns
+    let re = Regex::new(r"(\[.*?\]|\(UniMod:\d+\))").unwrap();
     re.replace_all(peptide, "").to_string()
 }
 
@@ -283,36 +311,150 @@ pub fn get_modification_indices(peptide: &str) -> String {
     indices.join(";")
 }
 
+
+
+/// Extracts mass shift annotations (e.g., [+57.0215]) from a peptide string and returns them
+/// as a vector of (mass_string, position) where position is the index of the annotated amino acid.
+///
+/// # Example
+/// ```
+/// use redeem_properties::utils::peptdeep_utils::extract_mass_annotations;
+/// let result = extract_mass_annotations("AC[+57.0215]DE");
+/// assert_eq!(result, vec![("57.0215".to_string(), 2)]);
+/// ```
+pub fn extract_mass_annotations(peptide: &str) -> Vec<(String, usize)> {
+    let re_mass = Regex::new(r"\[([+-]?\d*\.?\d+)\]").unwrap();
+    let mut results = Vec::new();
+    let mut offset = 0;
+    let mut idx = 0;
+
+    while idx < peptide.len() {
+        if let Some(mat) = re_mass.find_at(peptide, idx) {
+            if mat.start() == idx {
+                let cap = re_mass.captures(&peptide[idx..mat.end()]).unwrap();
+                let mass_str = format!("{:.4}", cap[1].parse::<f64>().unwrap_or(0.0));
+                let pos = idx - offset;
+                results.push((mass_str, pos));
+                offset += mat.end() - mat.start();
+                idx = mat.end();
+                continue;
+            }
+        }
+        idx += peptide[idx..].chars().next().unwrap().len_utf8();
+    }
+
+    results
+}
+
+
+/// Extracts UniMod annotations (e.g., (UniMod:4)) from a peptide string and returns them
+/// as a vector of (unimod_id_string, position) where position is the index of the annotated amino acid.
+///
+/// # Example
+/// ```
+/// use redeem_properties::utils::peptdeep_utils::extract_unimod_annotations;
+/// let result = extract_unimod_annotations("AC(UniMod:4)DE");
+/// assert_eq!(result, vec![("UniMod:4".to_string(), 2)]);
+/// ```
+pub fn extract_unimod_annotations(peptide: &str) -> Vec<(String, usize)> {
+    let re_unimod = Regex::new(r"\(UniMod:(\d+)\)").unwrap();
+    let mut results = Vec::new();
+    let mut offset = 0;
+    let mut idx = 0;
+
+    while idx < peptide.len() {
+        if let Some(mat) = re_unimod.find_at(peptide, idx) {
+            if mat.start() == idx {
+                let cap = re_unimod.captures(&peptide[idx..mat.end()]).unwrap();
+                let unimod_str = format!("UniMod:{}", &cap[1]);
+                let pos = idx - offset;
+                results.push((unimod_str, pos));
+                offset += mat.end() - mat.start();
+                idx = mat.end();
+                continue;
+            }
+        }
+        idx += peptide[idx..].chars().next().unwrap().len_utf8();
+    }
+
+    results
+}
+
+
+/// Attempts to look up a modification name from a map using the provided key and amino acid.
+/// Falls back to a key with `None` if the exact amino acid is not matched.
+///
+/// # Example
+/// ```
+/// use redeem_properties::utils::peptdeep_utils::{ModificationMap, lookup_modification};
+/// let mut map = std::collections::HashMap::new();
+/// map.insert(("57.0215".to_string(), Some('C')), ModificationMap { name: "Carbamidomethyl@C".to_string(), amino_acid: Some('C'), unimod_id: Some(4) });
+///
+/// let result = lookup_modification("57.0215".to_string(), 'C', &map);
+/// assert_eq!(result, Some("Carbamidomethyl@C".to_string()));
+/// ```
+pub fn lookup_modification(
+    key: String,
+    aa: char,
+    map: &HashMap<(String, Option<char>), ModificationMap>,
+) -> Option<String> {
+    map.get(&(key.clone(), Some(aa)))
+        .or_else(|| map.get(&(key, None)))
+        .map(|m| m.name.clone())
+}
+
+
+
+/// Generates a standardized modification string (e.g., "Carbamidomethyl@C")
+/// for a peptide sequence based on mass shifts (e.g., `[+57.0215]`) or
+/// UniMod annotations (e.g., `(UniMod:4)`), using a preloaded modification map.
+///
+/// The function supports both mass-shift format and UniMod notation,
+/// matching entries from the `modification_map` using mass or UniMod ID along
+/// with the local amino acid context.
+///
+/// # Arguments
+/// * `peptide` - A modified peptide sequence string (e.g., `"MGC[+57.0215]AAR"` or `"MGC(UniMod:4)AAR"`).
+/// * `modification_map` - A HashMap mapping (key, amino_acid) to `ModificationMap`.
+///   - For `[+mass]`, key is formatted as a mass string (e.g., `"57.0215"`).
+///   - For `(UniMod:ID)`, key is the UniMod ID as string (e.g., `"4"`).
+///
+/// # Returns
+/// A `String` containing semicolon-separated modification names (e.g., `"Carbamidomethyl@C"`).
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use redeem_properties::utils::peptdeep_utils::{load_modifications, get_modification_string};
+///
+/// let mod_map = load_modifications().unwrap();
+/// let peptide1 = "MGC[+57.0215]AAR";
+/// let result1 = get_modification_string(peptide1, &mod_map);
+/// assert_eq!(result1, "Carbamidomethyl@C");
+///
+/// let peptide2 = "MGC(UniMod:4)AAR";
+/// let result2 = get_modification_string(peptide2, &mod_map);
+/// assert_eq!(result2, "Carbamidomethyl@C");
+/// ```
 pub fn get_modification_string(
     peptide: &str,
     modification_map: &HashMap<(String, Option<char>), ModificationMap>,
 ) -> String {
     let naked_peptide = remove_mass_shift(peptide);
+    let mut found_mods = Vec::new();
 
-    let extracted_masses_and_indices = extract_masses_and_indices(&peptide.to_string());
-
-    let mut found_modifications = Vec::new();
-
-    // Map modifications based on extracted masses and indices
-    for (mass, index) in extracted_masses_and_indices {
-        // Subtract 1 from index to get 0-based index, ensure it's within bounds
-        let index = index.saturating_sub(1);
-        let amino_acid = naked_peptide.chars().nth(index).unwrap_or('\0');
-
-        if let Some(modification) = modification_map
-            .get(&(format!("{:.4}", mass), Some(amino_acid)))
-        {
-            found_modifications.push(modification.name.clone());
-        } else if let Some(modification) =
-            modification_map.get(&(format!("{:.4}", mass), None))
-        {
-            found_modifications.push(modification.name.clone());
+    for (key, pos) in extract_mass_annotations(peptide)
+        .into_iter()
+        .chain(extract_unimod_annotations(peptide))
+    {
+        let aa = naked_peptide.chars().nth(pos.saturating_sub(1)).unwrap_or('\0');
+        if let Some(name) = lookup_modification(key, aa, modification_map) {
+            found_mods.push(name);
         }
     }
 
-    found_modifications.join(";")
+    found_mods.join(";")
 }
-
 
 
 // TODO: Derive from PeptDep constants yaml
