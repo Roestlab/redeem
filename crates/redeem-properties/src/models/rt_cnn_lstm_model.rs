@@ -1,25 +1,20 @@
-use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
-use candle_nn::{ops, Dropout, Module, Optimizer, VarBuilder, VarMap};
-use ndarray::Array2;
-use serde::Deserialize;
+use anyhow::Result;
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::path::Path;
-use log::info;
 
-// use crate::models::rt_model::RTModel;
-use crate::building_blocks::bilstm::BidirectionalLSTM;
+
+
 use crate::building_blocks::building_blocks::{
-    DecoderLinear, Encoder26aaModCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
+    DecoderLinear, Encoder26aaModCnnLstmAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::models::model_interface::{ModelInterface, PropertyType, PredictionResult, load_tensors_from_model, create_var_map};
-use crate::utils::data_handling::PeptideData;
+use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
 use crate::utils::peptdeep_utils::{
-    extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
-    parse_model_constants, remove_mass_shift, ModelConstants, ModificationMap,
+    load_mod_to_feature,
+    parse_model_constants, ModelConstants,
 };
-use crate::utils::logging::Progress;
+
 
 // Main Model Struct
 
@@ -115,17 +110,16 @@ impl ModelInterface for RTCNNLSTMModel {
 
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
-
-        let start_mod_x = 1;
+        let (_batch_size, _seq_len, _) = xs.shape().dims3()?;
+    
         let aa_indices_out = xs.i((.., .., 0))?;
-        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
-
+        let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;
         let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
         let x = self.dropout.forward(&x, self.is_training)?;
         let x = self.rt_decoder.forward(&x)?;
+        let result = x.squeeze(1)?;
 
-        Ok(x.squeeze(1)?)
+        Ok(result)
     }
 
     /// Set model to evaluation mode for inference
@@ -279,11 +273,8 @@ impl ModelInterface for RTCNNLSTMModel {
 mod tests {
     use crate::models::model_interface::ModelInterface;
     use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
-    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
     use std::path::PathBuf;
-    use std::time::Instant;
-    // use itertools::izip;
 
     use super::*;
 
@@ -392,6 +383,7 @@ mod tests {
     
         // Test prediction with a few peptides after fine-tuning
         let test_peptides = vec![
+            ("AGHCEWQMKYR", "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M", "0;4;8", 0.2945),
             ("QPYAVSELAGHQTSAESWGTGR", "", "", 0.4328955),
             ("GMSVSDLADKLSTDDLNSLIAHAHR", "Oxidation@M", "1", 0.6536107),
             (
