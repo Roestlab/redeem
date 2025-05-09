@@ -14,6 +14,7 @@ pub struct PropertyTrainConfig {
     pub batch_size: usize,
     pub learning_rate: f32,
     pub epochs: usize,
+    pub early_stopping_patience: usize,
     pub instrument: String,
     pub nce: i32,
 }
@@ -29,6 +30,7 @@ impl Default for PropertyTrainConfig {
             batch_size: 64,
             learning_rate: 1e-3,
             epochs: 10,
+            early_stopping_patience: 5,
             instrument: String::from("QE"),
             nce: 20,
         }

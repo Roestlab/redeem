@@ -416,6 +416,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         batch_size: usize,
         learning_rate: f64,
         epochs: usize,
+        early_stopping_patience: usize,
     ) -> Result<()> {
         let num_batches = (training_data.len() + batch_size - 1) / batch_size;
 
@@ -432,6 +433,9 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             ..Default::default()
         };
         let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
+
+        let mut best_val_loss = f32::INFINITY;
+        let mut epochs_without_improvement = 0;
 
         for epoch in 0..epochs {
             let progress = Progress::new(num_batches, &format!("[training] Epoch {}: ", epoch));
@@ -488,54 +492,77 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
             // Optional validation evaluation
             if let Some(val_data) = validation_data {
-                let peptides: Vec<String> = val_data.iter().map(|p| remove_mass_shift(&p.sequence)).collect();
-                let mods: Vec<String> = val_data.iter().map(|p| get_modification_string(&p.sequence, &modifications)).collect();
-                let mod_sites: Vec<String> = val_data.iter().map(|p| get_modification_indices(&p.sequence)).collect();
+                let val_batches = (val_data.len() + batch_size - 1) / batch_size;
+                use rayon::prelude::*;
 
-                let charges = val_data.iter().filter_map(|p| p.charge).collect::<Vec<_>>();
-                let charges = if charges.len() == val_data.len() { Some(charges) } else { None };
+                let total_val_loss: f32 = val_data
+                    .par_chunks(batch_size)
+                    .map(|batch_data| {
+                        let peptides: Vec<String> = batch_data.iter().map(|p| remove_mass_shift(&p.sequence)).collect();
+                        let mods: Vec<String> = batch_data.iter().map(|p| get_modification_string(&p.sequence, &modifications)).collect();
+                        let mod_sites: Vec<String> = batch_data.iter().map(|p| get_modification_indices(&p.sequence)).collect();
 
-                let nces = val_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
-                let nces = if nces.len() == val_data.len() { Some(nces) } else { None };
+                        let charges = batch_data.iter().filter_map(|p| p.charge).collect::<Vec<_>>();
+                        let charges = if charges.len() == batch_data.len() { Some(charges) } else { None };
 
-                let instruments = val_data.iter().filter_map(|p| p.instrument.clone()).collect::<Vec<_>>();
-                let instruments = if instruments.len() == val_data.len() { Some(instruments) } else { None };
+                        let nces = batch_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
+                        let nces = if nces.len() == batch_data.len() { Some(nces) } else { None };
 
-                let input_val = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
+                        let instruments = batch_data.iter().filter_map(|p| p.instrument.clone()).collect::<Vec<_>>();
+                        let instruments = if instruments.len() == batch_data.len() { Some(instruments) } else { None };
 
-                let val_targets = match self.property_type() {
-                    PropertyType::RT => PredictionResult::RTResult(
-                        val_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
-                    ),
-                    PropertyType::CCS => PredictionResult::IMResult(
-                        val_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
-                    ),
-                    PropertyType::MS2 => {
-                        return Err(anyhow::anyhow!("Validation not supported for MS2 yet"));
-                    }
-                };
+                        let input_val = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments);
+                        let input_val = match input_val {
+                            Ok(x) => x,
+                            Err(e) => return Err(e),
+                        };
 
-                let target_val = match val_targets {
-                    PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
-                        Tensor::new(values.clone(), &self.get_device())?
-                    }
-                    PredictionResult::MS2Result(_) => unreachable!(),
-                };
+                        let val_targets = match self.property_type() {
+                            PropertyType::RT => PredictionResult::RTResult(
+                                batch_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
+                            ),
+                            PropertyType::CCS => PredictionResult::IMResult(
+                                batch_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
+                            ),
+                            PropertyType::MS2 => {
+                                return Err(anyhow::anyhow!("Validation not supported for MS2 yet"));
+                            }
+                        };
 
-                let predicted = self.forward(&input_val)?;
-                let val_loss = candle_nn::loss::mse(&predicted, &target_val)?;
-                let val_loss_val = val_loss.to_vec0::<f32>()?;
+                        let target_val = match val_targets {
+                            PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                                Tensor::new(values.clone(), &self.get_device())?
+                            }
+                            PredictionResult::MS2Result(_) => unreachable!(),
+                        };
 
-                info!("[validation] Epoch {}: Validation Loss: {:.4}", epoch, val_loss_val);
+                        let predicted = self.forward(&input_val)?;
+                        let val_loss = candle_nn::loss::mse(&predicted, &target_val)?;
+                        Ok(val_loss.to_vec0::<f32>()?)
+                    })
+                    .collect::<Result<Vec<f32>>>()?
+                    .into_iter()
+                    .sum();
 
+                let avg_val_loss = total_val_loss / val_batches as f32;
                 let avg_loss = total_loss / num_batches as f32;
-                progress.update_description(&format!("[training] Epoch {}: Avg. Loss: {:.4} | Val. Loss: {:.4}", epoch, avg_loss, val_loss_val));
+
+                progress.update_description(&format!("Epoch {}: Avg. Train Loss: {:.4} | Avg. Val. Loss: {:.4}", epoch, avg_loss, avg_val_loss));
                 progress.finish();
-            }
-            else 
-            {
+
+                if avg_val_loss < best_val_loss {
+                    best_val_loss = avg_val_loss;
+                    epochs_without_improvement = 0;
+                } else {
+                    epochs_without_improvement += 1;
+                    if epochs_without_improvement >= early_stopping_patience {
+                        info!("Early stopping triggered after {} epochs without validation loss improvement.", early_stopping_patience);
+                        break;
+                    }
+                }
+            } else {
                 let avg_loss = total_loss / num_batches as f32;
-                progress.update_description(&format!("[training] Epoch {}: Avg. Loss: {:.4}", epoch, avg_loss));
+                progress.update_description(&format!("Epoch {}: Avg. Train Loss: {:.4}", epoch, avg_loss));
                 progress.finish();
             }
         }

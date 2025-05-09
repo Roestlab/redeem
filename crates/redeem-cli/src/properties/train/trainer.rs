@@ -17,7 +17,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
 
     // Load training data
     let train_peptides: Vec<PeptideData> = load_peptide_data(&config.train_data)?;
-    println!("Loaded {} training peptides", train_peptides.len());
+    log::info!("Loaded {} training peptides", train_peptides.len());
 
     // Load validation data if specified
     let val_peptides = if let Some(ref val_path) = config.validation_data {
@@ -27,9 +27,9 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
     };
 
     if let Some(ref val_data) = val_peptides {
-        println!("Loaded {} validation peptides", val_data.len());
+        log::info!("Loaded {} validation peptides", val_data.len());
     } else {
-        println!("No validation data provided.");
+        log::warn!("No validation data provided.");
     }
 
     // Dispatch model training based on architecture
@@ -44,6 +44,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
 
     let modifications = load_modifications().context("Failed to load modifications")?;
 
+    let start_time = std::time::Instant::now();
     model.train(
         &train_peptides,
         val_peptides.as_ref(),
@@ -51,10 +52,12 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         config.batch_size,
         config.learning_rate as f64,
         config.epochs,
+        config.early_stopping_patience,
     )?;
+    log::info!("Training completed in {:?}", start_time.elapsed());
 
     model.save(&config.output_file)?;
-    println!("Model saved to: {}", config.output_file);
+    log::info!("Model saved to: {}", config.output_file);
 
     Ok(())
 }
