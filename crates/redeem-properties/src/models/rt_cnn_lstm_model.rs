@@ -1,25 +1,20 @@
-use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
-use candle_nn::{ops, Dropout, Module, Optimizer, VarBuilder, VarMap};
-use ndarray::Array2;
-use serde::Deserialize;
+use anyhow::Result;
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::path::Path;
-use log::info;
 
-// use crate::models::rt_model::RTModel;
-use crate::building_blocks::bilstm::BidirectionalLSTM;
+
+
 use crate::building_blocks::building_blocks::{
-    DecoderLinear, Encoder26aaModCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
+    DecoderLinear, Encoder26aaModCnnLstmAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::models::model_interface::{ModelInterface, PropertyType, PredictionResult, load_tensors_from_model, create_var_map};
-use crate::utils::data_handling::PeptideData;
+use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
 use crate::utils::peptdeep_utils::{
-    extract_masses_and_indices, get_modification_indices, load_mod_to_feature, load_modifications,
-    parse_model_constants, remove_mass_shift, ModelConstants, ModificationMap,
+    load_mod_to_feature,
+    parse_model_constants, ModelConstants,
 };
-use crate::utils::logging::Progress;
+
 
 // Main Model Struct
 
@@ -50,6 +45,11 @@ impl ModelInterface for RTCNNLSTMModel {
 
     fn model_arch(&self) -> &'static str {
         "rt_cnn_lstm"   
+    }
+
+    fn new_untrained(_device: Device) -> Result<Self>
+    {
+        unimplemented!("Untrained model creation is not implemented for this architecture.");
     }
 
     /// Create a new RTCNNLSTMModel from the given model and constants files.
@@ -115,17 +115,16 @@ impl ModelInterface for RTCNNLSTMModel {
 
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
-
-        let start_mod_x = 1;
+        let (_batch_size, _seq_len, _) = xs.shape().dims3()?;
+    
         let aa_indices_out = xs.i((.., .., 0))?;
-        let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
-
+        let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;
         let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
         let x = self.dropout.forward(&x, self.is_training)?;
         let x = self.rt_decoder.forward(&x)?;
+        let result = x.squeeze(1)?;
 
-        Ok(x.squeeze(1)?)
+        Ok(result)
     }
 
     /// Set model to evaluation mode for inference
@@ -277,13 +276,10 @@ impl ModelInterface for RTCNNLSTMModel {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::model_interface::ModelInterface;
+    use crate::models::model_interface::{ModelInterface, PredictionResult};
     use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
-    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
     use std::path::PathBuf;
-    use std::time::Instant;
-    // use itertools::izip;
 
     use super::*;
 
@@ -309,16 +305,90 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_peptides() {
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+        let device = Device::Cpu;
+        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device).unwrap(); 
+
+        let peptide_sequences = "AGHCEWQMKYR";
+        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let mod_sites = "0;4;8";
+        // let charge = Some(2);
+        // let nce = Some(20);
+        // let instrument = Some("QE");
+
+        let result =
+            model.encode_peptide(&peptide_sequences, mods, mod_sites, None, None, None);
+
+        println!("{:?}", result);
+
+        // assert!(result.is_ok());
+        // let encoded_peptides = result.unwrap();
+        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+    }
+
+    #[test]
+    fn test_encode_peptides_batch() {
+
+        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+        let device = Device::Cpu;
+
+        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device.clone()).unwrap();
+
+        // Batched input
+        let peptide_sequences = vec![
+            "ACDEFGHIK".to_string(),
+            "AGHCEWQMKYR".to_string(),
+        ];
+        let mods = vec![
+            "Carbamidomethyl@C".to_string(),
+            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
+        ];
+        let mod_sites = vec![
+            "1".to_string(),
+            "0;4;8".to_string(),
+        ];
+
+        println!("Peptides: {:?}", peptide_sequences);
+        println!("Mods: {:?}", mods);
+        println!("Mod sites: {:?}", mod_sites);
+
+
+        let result = model.encode_peptides(
+            &peptide_sequences,
+            &mods,
+            &mod_sites,
+            None,
+            None,
+            None,
+        );
+
+        assert!(result.is_ok());
+        let tensor = result.unwrap();
+        println!("Batched encoded tensor shape: {:?}", tensor.shape());
+
+        let (batch, seq_len, feat_dim) = tensor.shape().dims3().unwrap();
+        assert_eq!(batch, 2); // two peptides
+        assert!(seq_len >= 11); // padded to max length
+        assert!(feat_dim > 1); // includes aa + mod features
+    }
+
+
+    #[test]
     fn test_prediction() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = /* Assuming Device is defined */ Device::new_cuda(0).unwrap_or(/* assuming Device::Cpu is defined */ Device::Cpu); // Replace with actual Device code.
-        let result = /* Assuming RTCNNLSTMModel is defined */ RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device); // Replace with actual RTCNNLSTMModel code
+        let result =  RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device); 
         let mut model = result.unwrap();
     
         // Test prediction with a few peptides after fine-tuning
         let test_peptides = vec![
+            ("AGHCEWQMKYR", "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M", "0;4;8", 0.2945),
             ("QPYAVSELAGHQTSAESWGTGR", "", "", 0.4328955),
             ("GMSVSDLADKLSTDDLNSLIAHAHR", "Oxidation@M", "1", 0.6536107),
             (

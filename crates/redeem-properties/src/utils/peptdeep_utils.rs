@@ -113,6 +113,36 @@ struct ModFeature {
     // Add other fields if needed
 }
 
+impl Default for ModelConstants {
+    fn default() -> Self {
+        Self {
+            aa_embedding_size: Some(27),
+            charge_factor: Some(0.1),
+            instruments: vec![
+                "QE".into(),
+                "Lumos".into(),
+                "timsTOF".into(),
+                "SciexTOF".into(),
+            ],
+            max_instrument_num: 8,
+            mod_elements: vec![
+                "C", "H", "N", "O", "P", "S", "B", "F", "I", "K", "U", "V", "W", "X", "Y", "Ac",
+                "Ag", "Al", "Am", "Ar", "As", "At", "Au", "Ba", "Be", "Bi", "Bk", "Br", "Ca", "Cd",
+                "Ce", "Cf", "Cl", "Cm", "Co", "Cr", "Cs", "Cu", "Dy", "Er", "Es", "Eu", "Fe", "Fm",
+                "Fr", "Ga", "Gd", "Ge", "He", "Hf", "Hg", "Ho", "In", "Ir", "Kr", "La", "Li", "Lr",
+                "Lu", "Md", "Mg", "Mn", "Mo", "Na", "Nb", "Nd", "Ne", "Ni", "No", "Np", "Os", "Pa",
+                "Pb", "Pd", "Pm", "Po", "Pr", "Pt", "Pu", "Ra", "Rb", "Re", "Rh", "Rn", "Ru", "Sb",
+                "Sc", "Se", "Si", "Sm", "Sn", "Sr", "Ta", "Tb", "Tc", "Te", "Th", "Ti", "Tl", "Tm",
+                "Xe", "Yb", "Zn", "Zr", "2H", "13C", "15N", "18O", "?"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            nce_factor: Some(0.01),
+        }
+    }
+}
+
 /// Parse the model constants from a YAML file.
 pub fn parse_model_constants(path: &str) -> Result<ModelConstants> {
     let f = std::fs::File::open(path).map_err(|e| Error::msg(e.to_string()))?;

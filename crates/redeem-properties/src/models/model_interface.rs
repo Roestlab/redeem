@@ -1,49 +1,51 @@
 use crate::{
-    building_blocks::featurize::{self, get_aa_indices, get_mod_features},
+    building_blocks::featurize::{self, aa_indices_tensor, get_mod_features_from_parsed},
     models::{ccs_model::CCSModelWrapper, ms2_model::MS2ModelWrapper, rt_model::RTModelWrapper},
     utils::{
         data_handling::PeptideData,
         logging::Progress,
         peptdeep_utils::{
             get_modification_indices, get_modification_string, parse_instrument_index,
-            remove_mass_shift, ModificationMap,
-        }
+            remove_mass_shift,
+        },
     },
 };
 use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor, Var};
-use candle_nn::{Module, Optimizer, VarMap};
+use candle_nn::{Optimizer, VarMap};
 use log::info;
 use rayon::prelude::*;
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, path::PathBuf};
 
 // Constants
 const CHARGE_FACTOR: f64 = 0.1;
 const NCE_FACTOR: f64 = 0.01;
 
-
 /// Load tensors from a model file.
-/// 
+///
 /// Supported model formats include:
 /// - PyTorch (.pt, .pth, .pkl)
 /// - SafeTensors (.safetensors)
-/// 
+///
 /// # Arguments
 /// * `model_path` - Path to the model file.
 /// * `device` - Device to load the tensors on.
-/// 
+///
 /// # Returns
 /// A vector of tuples containing the tensor names and their corresponding tensors.
-pub fn load_tensors_from_model<P: AsRef<Path>>(model_path: P, device: &Device) -> Result<Vec<(String, Tensor)>> {
+pub fn load_tensors_from_model<P: AsRef<Path>>(
+    model_path: P,
+    device: &Device,
+) -> Result<Vec<(String, Tensor)>> {
     let path: &Path = model_path.as_ref();
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_lowercase();
-    
+
     match extension.as_str() {
         "pt" | "pth" | "pkl" => {
             log::trace!("Loading tensors from PyTorch model: {:?}", path);
@@ -65,7 +67,6 @@ pub fn load_tensors_from_model<P: AsRef<Path>>(model_path: P, device: &Device) -
     }
 }
 
-
 /// Represents the type of property to predict.
 #[derive(Clone)]
 pub enum PropertyType {
@@ -85,7 +86,7 @@ impl PropertyType {
 }
 
 /// Represents a single prediction value or a matrix of prediction values.
-/// 
+///
 /// This enum is used to store the output of a model prediction, which can be a single value or a matrix of values. For example, retention time (RT) and collision cross-section (CCS) predictions are single values, while MS2 intensity predictions are matrices.
 #[derive(Clone)]
 pub enum PredictionValue {
@@ -97,11 +98,10 @@ impl PredictionValue {
     // Returns a reference to the element at position (i, j) if it exists
     pub fn get(&self, i: usize, j: usize) -> Option<&f32> {
         match self {
-            PredictionValue::Single(_) => None,  
+            PredictionValue::Single(_) => None,
             PredictionValue::Matrix(vec) => vec.get(i).and_then(|row| row.get(j)),
         }
     }
-
 }
 
 impl Index<usize> for PredictionValue {
@@ -126,9 +126,8 @@ impl Index<(usize, usize)> for PredictionValue {
     }
 }
 
-
 /// Represents the output of a model prediction.
-/// 
+///
 /// This enum is used to store the output of a model prediction, which can be a vector of retention times (RT), collision cross-sections (CCS), or a vector matrices of MS2 intensities.
 #[derive(Debug, Clone)]
 pub enum PredictionResult {
@@ -150,13 +149,13 @@ impl PredictionResult {
         match self {
             PredictionResult::RTResult(vec) => PredictionValue::Single(vec[index].clone()),
             PredictionResult::IMResult(vec) => PredictionValue::Single(vec[index].clone()),
-            PredictionResult::MS2Result(vec) => PredictionValue::Matrix(vec[index].clone()), 
+            PredictionResult::MS2Result(vec) => PredictionValue::Matrix(vec[index].clone()),
         }
     }
 }
 
 /// Populates a mutable `VarMap` instance with tensors.
-/// 
+///
 /// # Arguments
 /// * `var_map` - A mutable reference to a `VarMap` instance.
 /// * `tensor_data` - A vector of tuples containing the tensor names and their corresponding tensors.
@@ -175,11 +174,9 @@ pub fn create_var_map(
     Ok(())
 }
 
-
 pub trait ModelClone {
     fn clone_box(&self) -> Box<dyn ModelInterface + Send + Sync>;
 }
-
 
 impl<T> ModelClone for T
 where
@@ -190,7 +187,6 @@ where
     }
 }
 
-
 impl Clone for Box<dyn ModelInterface + Send + Sync> {
     fn clone(&self) -> Self {
         self.clone_box()
@@ -198,17 +194,22 @@ impl Clone for Box<dyn ModelInterface + Send + Sync> {
 }
 
 /// Represents an abstract deep learning model interface.
-/// 
+///
 /// This trait defines the methods and properties that a deep learning model must implement to be used for property prediction tasks.
 pub trait ModelInterface: Send + Sync + ModelClone {
-
     /// Get the property type of the model.
     fn property_type(&self) -> PropertyType;
 
     /// Get the model architecture name.
     fn model_arch(&self) -> &'static str;
 
-    /// Create a new instance of the model.
+    /// Create a new model instance from scratch (no pretrained weights).
+    /// This is typically used when training a new model from scratch.
+    fn new_untrained(device: Device) -> Result<Self>
+    where
+        Self: Sized;
+
+    /// Create a new instance of the model (given a pretrained model (.pth or .safetensors and constants file).
     fn new<P: AsRef<Path>>(
         model_path: P,
         constants_path: P,
@@ -274,98 +275,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         }
     }
 
-    /// Encode a batch of peptide sequences (plus modifications) into a tensor.
-    /// 
-    /// # Arguments
-    /// * `peptide_sequences` - A vector of peptide sequences.
-    /// * `mods` - A vector of strings representing the modifications for each peptide.
-    /// * `mod_sites` - A vector of strings representing the modification site indices for each peptide.
-    /// * `charge` - An optional vector of charge states for each peptide.
-    /// * `nce` - An optional vector of nominal collision energies for each peptide.
-    /// * `instruments` - An optional vector of instrument names for each peptide.
-    /// 
-    /// # Returns
-    /// A tensor containing the encoded peptide sequences.
-    fn encode_peptides(
-        &self,
-        peptide_sequences: &[String],
-        mods: &[String],
-        mod_sites: &[String],
-        charges: Option<Vec<i32>>,
-        nces: Option<Vec<i32>>,
-        instruments: Option<Vec<String>>,
-    ) -> Result<Tensor> {
-        if peptide_sequences.len() != mods.len() || peptide_sequences.len() != mod_sites.len() {
-            return Err(anyhow::anyhow!(
-                "Mismatch in input lengths: peptide_sequences, mods, and mod_sites must have the same length."
-            ));
-        }
-
-        // Encode peptides in parallel using Rayon
-        let encoded_tensors: Vec<Tensor> = peptide_sequences
-            .par_iter() // Use Rayon's parallel iterator
-            .enumerate()
-            .map(|(i, peptide)| {
-                self.encode_peptide(
-                    peptide,
-                    &mods[i],
-                    &mod_sites[i],
-                    charges.as_ref().map(|c| c[i]),
-                    nces.as_ref().map(|n| n[i]),
-                    instruments.as_ref().map(|ins| ins[i].as_str()),
-                )
-            })
-            .collect::<Result<Vec<Tensor>>>()?; // Collect results and propagate errors if any
-
-        // Determine the maximum sequence length
-        let max_seq_len = encoded_tensors
-            .par_iter()
-            .map(|t| t.shape().dims3().unwrap().1) // Get sequence length (dimension 1)
-            .max()
-            .unwrap_or(0);
-
-        // Pad tensors to the max_seq_len
-        let padded_tensors: Result<Vec<Tensor>> = encoded_tensors
-            .into_par_iter() // Use Rayon's parallel iterator
-            .map(|t| {
-                let (_, seq_len, feature_size) = t.shape().dims3()?; // Extract feature dimension
-                if seq_len < max_seq_len {
-                    let pad_size = max_seq_len - seq_len;
-                    // Create a padding tensor with the correct shape and type
-                    let pad = Tensor::zeros(
-                        &[1, pad_size, feature_size], // Use the correct feature dimension
-                        t.dtype(),
-                        t.device(),
-                    )?;
-                    // Concatenate padding along sequence length
-                    Tensor::cat(&[&t, &pad], 1)
-                } else {
-                    Ok(t)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into);
-
-        let padded_tensors = padded_tensors?;
-
-        // Concatenate all padded tensors along the batch dimension
-        let batch_tensor = Tensor::cat(&padded_tensors, 0)?;
-
-        Ok(batch_tensor)
-    }
-
     /// Encode peptide sequence (plus modifications) into a tensor.
-    /// 
-    /// # Arguments
-    /// * `peptide_sequence` - The peptide sequence.
-    /// * `mods` - A string representing the modifications for the peptide.
-    /// * `mod_sites` - A string representing the modification site indices for the peptide.
-    /// * `charge` - An optional charge state for the peptide.
-    /// * `nce` - An optional nominal collision energy for the peptide.
-    /// * `instrument` - An optional instrument name for the peptide.
-    /// 
-    /// # Returns
-    /// A tensor containing the encoded peptide sequence.
     fn encode_peptide(
         &self,
         peptide_sequence: &str,
@@ -375,92 +285,266 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         nce: Option<i32>,
         instrument: Option<&str>,
     ) -> Result<Tensor> {
-        log::trace!(
-            "[ModelInterface::encode_peptide] Encoding peptide: {:?}, mods: {:?}, mod_sites: {:?}, charge: {:?}, nce: {:?}, instrument: {:?}",
-            peptide_sequence,
-            mods,
-            mod_sites,
-            charge,
-            nce,
-            instrument
-        );
-        let aa_indices = get_aa_indices(peptide_sequence)?;
-        log::trace!(
-            "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
-            aa_indices.shape(),
-            aa_indices.iter().min(),
-            aa_indices.iter().max()
-        );
+        let device = self.get_device();
+        let mod_feature_size = self.get_mod_element_count();
+        let mod_to_feature = self.get_mod_to_feature();
 
-        // Convert ndarray to Tensor (F32)
-        let aa_indices_tensor = Tensor::from_slice(
-            &aa_indices.as_slice().unwrap(),
-            (aa_indices.shape()[0], aa_indices.shape()[1]),
-            &self.get_device(),
-        )?
-        .to_dtype(DType::F32)?;
+        let aa_tensor = aa_indices_tensor(peptide_sequence, device)?;
+        let (batch_size, seq_len, _) = aa_tensor.shape().dims3()?;
 
-        let (batch_size, seq_len) = aa_indices_tensor.shape().dims2()?;
-        let aa_indices_tensor = aa_indices_tensor.unsqueeze(2)?; // Shape: batch_size x seq_len x 1
+        let mod_names: Vec<&str> = mods.split(';').filter(|s| !s.is_empty()).collect();
+        let mod_indices: Vec<usize> = mod_sites
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<usize>().unwrap())
+            .collect();
 
-        log::trace!(
-            "[ModelInterface::encode_peptide] aa_indices_tensor shape: {:?}, min: {:?}, max: {:?}",
-            aa_indices_tensor.shape(),
-            aa_indices_tensor.min_all(),
-            aa_indices_tensor.max_all() 
-        );
-
-        // Get modification features
-        let mod_x = get_mod_features(
-            mods,
-            mod_sites,
+        let mod_tensor = get_mod_features_from_parsed(
+            &mod_names,
+            &mod_indices,
             seq_len,
-            self.get_mod_element_count(),
-            self.get_mod_to_feature().clone(),
-            self.get_device().clone(),
+            mod_feature_size,
+            mod_to_feature,
+            device,
         )?;
 
-        let mut features = vec![aa_indices_tensor, mod_x];
+        let mut features = vec![aa_tensor, mod_tensor];
 
-        // Conditionally add charge
         if let Some(c) = charge {
             let charge_tensor = Tensor::from_slice(
                 &vec![c as f64 * CHARGE_FACTOR; seq_len],
                 &[batch_size, seq_len, 1],
-                &self.get_device(),
+                device,
             )?
             .to_dtype(DType::F32)?;
             features.push(charge_tensor);
         }
 
-        // Conditionally add NCE
         if let Some(n) = nce {
             let nce_tensor = Tensor::from_slice(
                 &vec![n as f64 * NCE_FACTOR; seq_len],
                 &[batch_size, seq_len, 1],
-                &self.get_device(),
+                device,
             )?
             .to_dtype(DType::F32)?;
             features.push(nce_tensor);
         }
 
-        // Conditionally add instrument
         if let Some(instr) = instrument {
-            let instrument_tensor = Tensor::from_slice(
-                &vec![parse_instrument_index(instr) as u32; seq_len],
-                &[batch_size, seq_len, 1],
-                &self.get_device(),
-            )?
-            .to_dtype(DType::F32)?;
-            features.push(instrument_tensor);
+            let instr_idx = parse_instrument_index(instr) as u32;
+            let instr_tensor =
+                Tensor::from_slice(&vec![instr_idx; seq_len], &[batch_size, seq_len, 1], device)?
+                    .to_dtype(DType::F32)?;
+            features.push(instr_tensor);
         }
 
-        // Concatenate features
-        Ok(Tensor::cat(&features, 2)?)
+        if features.len() == 1 {
+            Ok(features.remove(0))
+        } else {
+            Ok(Tensor::cat(&features, 2)?)
+        }
+    }
+
+    /// Encode a batch of peptide sequences into a tensor
+    fn encode_peptides(
+        &self,
+        peptide_sequences: &[String],
+        mods: &[String],
+        mod_sites: &[String],
+        charges: Option<Vec<i32>>,
+        nces: Option<Vec<i32>>,
+        instruments: Option<Vec<String>>,
+    ) -> Result<Tensor> {
+        let len = peptide_sequences.len();
+
+        let tensors: Vec<_> = (0..len)
+            .into_par_iter()
+            .map(|i| {
+                self.encode_peptide(
+                    &peptide_sequences[i],
+                    &mods[i],
+                    &mod_sites[i],
+                    charges.as_ref().map(|v| v[i]),
+                    nces.as_ref().map(|v| v[i]),
+                    instruments.as_ref().map(|v| v[i].as_str()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if tensors.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Encoding batch of peptides failed, the resulting tesnor batch is empty."
+            ));
+        }
+
+        let max_len = tensors
+            .iter()
+            .map(|t| t.shape().dims3().unwrap().1)
+            .max()
+            .unwrap_or(0);
+
+        let padded = tensors
+            .into_par_iter()
+            .map(|t| {
+                let (_, seq_len, feat_dim) = t.shape().dims3()?;
+                if seq_len < max_len {
+                    let pad =
+                        Tensor::zeros(&[1, max_len - seq_len, feat_dim], t.dtype(), t.device())?;
+                    Tensor::cat(&[&t, &pad], 1)
+                } else {
+                    Ok(t)
+                }
+            })
+            .map(|res| res.map_err(anyhow::Error::from))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Tensor::cat(&padded, 0)?)
+    }
+
+    /// Train the model from scratch using a batch of training data.
+    ///
+    /// This method is similar to `fine_tune`, but assumes that the model was created from `new_untrained`
+    /// and has no pre-existing learned weights.
+    fn train(
+        &mut self,
+        training_data: &Vec<PeptideData>,
+        validation_data: Option<&Vec<PeptideData>>,
+        modifications: HashMap<
+            (String, Option<char>),
+            crate::utils::peptdeep_utils::ModificationMap,
+        >,
+        batch_size: usize,
+        learning_rate: f64,
+        epochs: usize,
+    ) -> Result<()> {
+        let num_batches = (training_data.len() + batch_size - 1) / batch_size;
+
+        info!(
+            "Training {} model from scratch on {} peptide features ({} batches) for {} epochs",
+            self.get_model_arch(),
+            training_data.len(),
+            num_batches,
+            epochs
+        );
+
+        let params = candle_nn::ParamsAdamW {
+            lr: learning_rate,
+            ..Default::default()
+        };
+        let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
+
+        for epoch in 0..epochs {
+            let progress = Progress::new(num_batches, &format!("[training] Epoch {}: ", epoch));
+            let mut total_loss = 0.0;
+
+            training_data
+                .chunks(batch_size)
+                .enumerate()
+                .try_for_each(|(batch_idx, batch_data)| {
+                    let peptides: Vec<String> = batch_data.iter().map(|p| remove_mass_shift(&p.sequence)).collect();
+                    let mods: Vec<String> = batch_data.iter().map(|p| get_modification_string(&p.sequence, &modifications)).collect();
+                    let mod_sites: Vec<String> = batch_data.iter().map(|p| get_modification_indices(&p.sequence)).collect();
+
+                    let charges = batch_data.iter().filter_map(|p| p.charge).collect::<Vec<_>>();
+                    let charges = if charges.len() == batch_data.len() { Some(charges) } else { None };
+
+                    let nces = batch_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
+                    let nces = if nces.len() == batch_data.len() { Some(nces) } else { None };
+
+                    let instruments = batch_data.iter().filter_map(|p| p.instrument.clone()).collect::<Vec<_>>();
+                    let instruments = if instruments.len() == batch_data.len() { Some(instruments) } else { None };
+
+                    let input_batch = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
+
+                    let batch_targets = match self.property_type() {
+                        PropertyType::RT => PredictionResult::RTResult(
+                            batch_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
+                        ),
+                        PropertyType::CCS => PredictionResult::IMResult(
+                            batch_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
+                        ),
+                        PropertyType::MS2 => {
+                            return Err(anyhow::anyhow!("Training from scratch is not yet implemented for MS2"));
+                        }
+                    };
+
+                    let target_batch = match batch_targets {
+                        PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                            Tensor::new(values.clone(), &self.get_device())?
+                        }
+                        PredictionResult::MS2Result(_) => unreachable!(),
+                    };
+
+                    let predicted = self.forward(&input_batch)?;
+                    let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
+                    opt.backward_step(&loss)?;
+
+                    total_loss += loss.to_vec0::<f32>().unwrap_or(999.0);
+                    progress.update_description(&format!("[training] Epoch {}: Loss: {:.4}", epoch, loss.to_vec0::<f32>()?));
+                    progress.inc();
+
+                    Ok(())
+                })?;
+
+            // Optional validation evaluation
+            if let Some(val_data) = validation_data {
+                let peptides: Vec<String> = val_data.iter().map(|p| remove_mass_shift(&p.sequence)).collect();
+                let mods: Vec<String> = val_data.iter().map(|p| get_modification_string(&p.sequence, &modifications)).collect();
+                let mod_sites: Vec<String> = val_data.iter().map(|p| get_modification_indices(&p.sequence)).collect();
+
+                let charges = val_data.iter().filter_map(|p| p.charge).collect::<Vec<_>>();
+                let charges = if charges.len() == val_data.len() { Some(charges) } else { None };
+
+                let nces = val_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
+                let nces = if nces.len() == val_data.len() { Some(nces) } else { None };
+
+                let instruments = val_data.iter().filter_map(|p| p.instrument.clone()).collect::<Vec<_>>();
+                let instruments = if instruments.len() == val_data.len() { Some(instruments) } else { None };
+
+                let input_val = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
+
+                let val_targets = match self.property_type() {
+                    PropertyType::RT => PredictionResult::RTResult(
+                        val_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
+                    ),
+                    PropertyType::CCS => PredictionResult::IMResult(
+                        val_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
+                    ),
+                    PropertyType::MS2 => {
+                        return Err(anyhow::anyhow!("Validation not supported for MS2 yet"));
+                    }
+                };
+
+                let target_val = match val_targets {
+                    PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                        Tensor::new(values.clone(), &self.get_device())?
+                    }
+                    PredictionResult::MS2Result(_) => unreachable!(),
+                };
+
+                let predicted = self.forward(&input_val)?;
+                let val_loss = candle_nn::loss::mse(&predicted, &target_val)?;
+                let val_loss_val = val_loss.to_vec0::<f32>()?;
+
+                info!("[validation] Epoch {}: Validation Loss: {:.4}", epoch, val_loss_val);
+
+                let avg_loss = total_loss / num_batches as f32;
+                progress.update_description(&format!("[training] Epoch {}: Avg. Loss: {:.4} | Val. Loss: {:.4}", epoch, avg_loss, val_loss_val));
+                progress.finish();
+            }
+            else 
+            {
+                let avg_loss = total_loss / num_batches as f32;
+                progress.update_description(&format!("[training] Epoch {}: Avg. Loss: {:.4}", epoch, avg_loss));
+                progress.finish();
+            }
+        }
+
+        Ok(())
     }
 
     /// Fine-tune the model on a batch of training data.
-    /// 
+    ///
     /// # Arguments
     /// * `training_data` - A vector of `PeptideData` instances representing the training data.
     /// * `modifications` - A map of modifications and their corresponding feature vectors.
@@ -488,86 +572,146 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 full_batches
             }
         };
-    
+
         info!(
             "Fine-tuning {} model on {} peptide features ({} batches) for {} epochs",
-            self.get_model_arch(), training_data.len(), num_batches, epochs
+            self.get_model_arch(),
+            training_data.len(),
+            num_batches,
+            epochs
         );
-    
+
         let params = candle_nn::ParamsAdamW {
             lr: learning_rate,
             ..Default::default()
         };
         let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
-    
+
         for epoch in 0..epochs {
             let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
             let mut total_loss = 0.0;
-    
+
             for batch_idx in 0..num_batches {
                 let start = batch_idx * batch_size;
                 let end = (start + batch_size).min(training_data.len());
                 let batch_data = &training_data[start..end];
-    
-                let peptides: Vec<String> = batch_data.iter().map(|p| remove_mass_shift(&p.sequence)).collect();
-                let mods: Vec<String> = batch_data.iter().map(|p| get_modification_string(&p.sequence, &modifications)).collect();
-                let mod_sites: Vec<String> = batch_data.iter().map(|p| get_modification_indices(&p.sequence)).collect();
-    
-                let charges = batch_data.iter().filter_map(|p| p.charge).collect::<Vec<_>>();
-                let charges = if charges.len() == batch_data.len() { Some(charges) } else { None };
-    
-                let nces = batch_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
-                let nces = if nces.len() == batch_data.len() { Some(nces) } else { None };
-    
-                let instruments = batch_data.iter().filter_map(|p| p.instrument.clone()).collect::<Vec<_>>();
-                let instruments = if instruments.len() == batch_data.len() { Some(instruments) } else { None };
-    
-                let input_batch = self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
 
-                log::trace!("[ModelInterface::fine_tune] input_batch shape: {:?}, device: {:?}", input_batch.shape(), input_batch.device());
-    
+                let peptides: Vec<String> = batch_data
+                    .iter()
+                    .map(|p| remove_mass_shift(&p.sequence))
+                    .collect();
+                let mods: Vec<String> = batch_data
+                    .iter()
+                    .map(|p| get_modification_string(&p.sequence, &modifications))
+                    .collect();
+                let mod_sites: Vec<String> = batch_data
+                    .iter()
+                    .map(|p| get_modification_indices(&p.sequence))
+                    .collect();
+
+                let charges = batch_data
+                    .iter()
+                    .filter_map(|p| p.charge)
+                    .collect::<Vec<_>>();
+                let charges = if charges.len() == batch_data.len() {
+                    Some(charges)
+                } else {
+                    None
+                };
+
+                let nces = batch_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
+                let nces = if nces.len() == batch_data.len() {
+                    Some(nces)
+                } else {
+                    None
+                };
+
+                let instruments = batch_data
+                    .iter()
+                    .filter_map(|p| p.instrument.clone())
+                    .collect::<Vec<_>>();
+                let instruments = if instruments.len() == batch_data.len() {
+                    Some(instruments)
+                } else {
+                    None
+                };
+
+                let input_batch =
+                    self.encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?;
+
+                log::trace!(
+                    "[ModelInterface::fine_tune] input_batch shape: {:?}, device: {:?}",
+                    input_batch.shape(),
+                    input_batch.device()
+                );
+
                 let batch_targets = match self.property_type() {
                     PropertyType::RT => PredictionResult::RTResult(
-                        batch_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
+                        batch_data
+                            .iter()
+                            .map(|p| p.retention_time.unwrap_or_default())
+                            .collect(),
                     ),
                     PropertyType::CCS => PredictionResult::IMResult(
-                        batch_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
+                        batch_data
+                            .iter()
+                            .map(|p| p.ion_mobility.unwrap_or_default())
+                            .collect(),
                     ),
                     PropertyType::MS2 => PredictionResult::MS2Result(
-                        batch_data.iter().map(|p| p.ms2_intensities.clone().unwrap_or_default()).collect(),
+                        batch_data
+                            .iter()
+                            .map(|p| p.ms2_intensities.clone().unwrap_or_default())
+                            .collect(),
                     ),
                 };
-    
+
                 let target_batch = match batch_targets {
-                    PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                    PredictionResult::RTResult(ref values)
+                    | PredictionResult::IMResult(ref values) => {
                         Tensor::new(values.clone(), &self.get_device())?
                     }
                     PredictionResult::MS2Result(ref spectra) => {
                         let max_len = spectra.iter().map(|s| s.len()).max().unwrap_or(1);
-                        let feature_dim = spectra.get(0).and_then(|s| s.get(0)).map(|v| v.len()).unwrap_or(1);
+                        let feature_dim = spectra
+                            .get(0)
+                            .and_then(|s| s.get(0))
+                            .map(|v| v.len())
+                            .unwrap_or(1);
                         let mut padded_spectra = spectra.clone();
                         for s in &mut padded_spectra {
                             s.resize(max_len, vec![0.0; feature_dim]);
                         }
-                        Tensor::new(padded_spectra.concat(), &self.get_device())?.reshape((batch_data.len(), max_len, feature_dim))?
+                        Tensor::new(padded_spectra.concat(), &self.get_device())?.reshape((
+                            batch_data.len(),
+                            max_len,
+                            feature_dim,
+                        ))?
                     }
                 };
-    
+
                 let predicted = self.forward(&input_batch)?;
                 let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
                 opt.backward_step(&loss)?;
-    
+
                 total_loss += loss.to_vec0::<f32>().unwrap_or(990.0);
 
-                progress.update_description(&format!("[fine-tuning] Epoch {}: Loss: {}", epoch, loss.to_vec0::<f32>()?));
+                progress.update_description(&format!(
+                    "[fine-tuning] Epoch {}: Loss: {}",
+                    epoch,
+                    loss.to_vec0::<f32>()?
+                ));
                 progress.inc();
             }
-    
+
             let avg_loss = total_loss / num_batches as f32;
-            progress.update_description(&format!("[fine-tuning] Epoch {}: Avg. Batch Loss: {}", epoch, avg_loss));
+            progress.update_description(&format!(
+                "[fine-tuning] Epoch {}: Avg. Batch Loss: {}",
+                epoch, avg_loss
+            ));
             progress.finish();
         }
-    
+
         Ok(())
     }
 

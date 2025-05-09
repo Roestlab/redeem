@@ -1,32 +1,19 @@
-use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
-use candle_nn::{
-    ops, Conv1d, Conv1dConfig, Dropout, Linear, Module, Optimizer, PReLU, VarBuilder, VarMap,
-};
-use log::info;
-use ndarray::Array2;
-use serde::Deserialize;
+use anyhow::Result;
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
 use crate::{
-    building_blocks::{
-        building_blocks::{
-            DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
-            ModLossNN, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
-        },
-        featurize::{aa_one_hot, get_aa_indices, get_mod_features},
+    building_blocks::building_blocks::{
+        DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
+        ModLossNN, MOD_FEATURE_SIZE,
     },
-    models::model_interface::{load_tensors_from_model, create_var_map, ModelInterface, PropertyType},
-    utils::{
-        data_handling::PeptideData,
-        logging::Progress,
-        peptdeep_utils::{
-            get_modification_indices, get_modification_string, load_mod_to_feature,
-            parse_model_constants, remove_mass_shift, ModelConstants,
-        },
+    models::model_interface::{
+        create_var_map, load_tensors_from_model, ModelInterface, PropertyType,
     },
+    utils::peptdeep_utils::{load_mod_to_feature, parse_model_constants, ModelConstants},
 };
 
 // Constants
@@ -71,6 +58,11 @@ impl ModelInterface for MS2BertModel {
 
     fn model_arch(&self) -> &'static str {
         "ms2_bert"
+    }
+
+    fn new_untrained(_device: Device) -> Result<Self>
+    {
+        unimplemented!("Untrained model creation is not implemented for this architecture.");
     }
 
     /// Create a new MS2BERT model from the given model and constants files.
@@ -183,7 +175,7 @@ impl ModelInterface for MS2BertModel {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
+        let (_batch_size, seq_len, _) = xs.shape().dims3()?;
 
         // Separate the input tensor into the different parts
 
@@ -206,18 +198,42 @@ impl ModelInterface for MS2BertModel {
         let nce_out = nce_out.squeeze(2)?; // Squeeze to remove dimensions of size 1 if needed
         let instrument_out = instrument_out.squeeze(2)?.squeeze(1)?; // Squeeze to remove dimensions of size 1 if needed
 
-        log::trace!("[MS2BertModel::forward] aa_indices_out shape: {:?}, device: {:?}", aa_indices_out.shape(), aa_indices_out.device());
-        log::trace!("[MS2BertModel::forward] mod_x_out shape: {:?}, device: {:?}", mod_x_out.shape(), mod_x_out.device());
-        log::trace!("[MS2BertModel::forward] charge_out shape: {:?}, device: {:?}", charge_out.shape(), charge_out.device());
-        log::trace!("[MS2BertModel::forward] nce_out shape: {:?}, device: {:?}", nce_out.shape(), nce_out.device());
-        log::trace!("[MS2BertModel::forward] instrument_out shape: {:?}, device: {:?}", instrument_out.shape(), instrument_out.device());
+        log::trace!(
+            "[MS2BertModel::forward] aa_indices_out shape: {:?}, device: {:?}",
+            aa_indices_out.shape(),
+            aa_indices_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] mod_x_out shape: {:?}, device: {:?}",
+            mod_x_out.shape(),
+            mod_x_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] charge_out shape: {:?}, device: {:?}",
+            charge_out.shape(),
+            charge_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] nce_out shape: {:?}, device: {:?}",
+            nce_out.shape(),
+            nce_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] instrument_out shape: {:?}, device: {:?}",
+            instrument_out.shape(),
+            instrument_out.device()
+        );
 
         // Forward pass through input_nn with dropout
         let in_x = self
             .dropout
             .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
 
-        log::trace!("[MS2BertModel::forward] in_x shape (post dropout-input_nn): {:?}, device: {:?}", in_x.shape(), in_x.device());
+        log::trace!(
+            "[MS2BertModel::forward] in_x shape (post dropout-input_nn): {:?}, device: {:?}",
+            in_x.shape(),
+            in_x.device()
+        );
 
         // Prepare metadata for meta_nn
         let meta_x = self
@@ -225,17 +241,27 @@ impl ModelInterface for MS2BertModel {
             .forward(&charge_out, &nce_out, &instrument_out)?
             .unsqueeze(1)?
             .repeat(vec![1, seq_len as usize, 1])?;
-        log::trace!("[MS2BertModel::forward] meta_x (post meta_nn) shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
+        log::trace!(
+            "[MS2BertModel::forward] meta_x (post meta_nn) shape: {:?}, device: {:?}",
+            meta_x.shape(),
+            meta_x.device()
+        );
 
         // Concatenate in_x and meta_x along dimension 2
         let combined_input = Tensor::cat(&[in_x.clone(), meta_x], 2)?;
-        log::trace!("[MS2BertModel::forward] combined_input shape: {:?}, device: {:?}", combined_input.shape(), combined_input.device());
+        log::trace!(
+            "[MS2BertModel::forward] combined_input shape: {:?}, device: {:?}",
+            combined_input.shape(),
+            combined_input.device()
+        );
 
         // Forward pass through hidden_nn
-        let hidden_x = self
-            .hidden_nn
-            .forward(&combined_input.clone(), None)?;
-        log::trace!("[MS2BertModel::forward] hidden_x shape: {:?}, device: {:?}", hidden_x.shape(), hidden_x.device());
+        let hidden_x = self.hidden_nn.forward(&combined_input.clone(), None)?;
+        log::trace!(
+            "[MS2BertModel::forward] hidden_x shape: {:?}, device: {:?}",
+            hidden_x.shape(),
+            hidden_x.device()
+        );
 
         // // Handle attentions if needed (similar to PyTorch)
         // if self.output_attentions {
@@ -247,11 +273,19 @@ impl ModelInterface for MS2BertModel {
         // Apply dropout and combine with input
         let x_tmp = (hidden_x + combined_input * 0.2)?;
         let hidden_output = self.dropout.forward(&x_tmp, true)?;
-        log::trace!("[MS2BertModel::forward] hidden_output shape: {:?}, device: {:?}", hidden_output.shape(), hidden_output.device());
+        log::trace!(
+            "[MS2BertModel::forward] hidden_output shape: {:?}, device: {:?}",
+            hidden_output.shape(),
+            hidden_output.device()
+        );
 
         // Forward pass through output_nn
         let mut out_x = self.output_nn.forward(&hidden_output)?;
-        log::trace!("[MS2BertModel::forward] out_x shape: {:?}, device: {:?}", out_x.shape(), out_x.device());
+        log::trace!(
+            "[MS2BertModel::forward] out_x shape: {:?}, device: {:?}",
+            out_x.shape(),
+            out_x.device()
+        );
 
         // Handle modloss if applicable (similar logic as PyTorch)
         if self.num_modloss_types > 0 {
@@ -338,7 +372,6 @@ impl ModelInterface for MS2BertModel {
     fn print_weights(&self) {
         todo!()
     }
-
 }
 
 // // Module Trait Implementation
@@ -403,12 +436,7 @@ mod tests {
     use super::*;
     use crate::models::model_interface::ModelInterface;
     use crate::models::ms2_bert_model::MS2BertModel;
-    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
-    use csv::Reader;
-    use rayon::vec;
-    use std::collections::HashMap;
-    use std::fs::File;
     use std::path::PathBuf;
 
     #[test]
