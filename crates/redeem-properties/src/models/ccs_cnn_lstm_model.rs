@@ -1,27 +1,20 @@
-use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
+use anyhow::Result;
+use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{
-    ops, Dropout, Module, Optimizer, VarBuilder, VarMap,
+    Dropout, Module, VarBuilder, VarMap,
 };
-use log::info;
-use ndarray::Array2;
-use serde::Deserialize;
+
 use std::collections::HashMap;
-use std::process::Output;
-use std::{char, fmt, vec};
+use std::{fmt, vec};
 use std::path::Path;
 
 use crate::building_blocks::building_blocks::{
-    DecoderLinear, Encoder26aaModChargeCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
+    DecoderLinear, Encoder26aaModChargeCnnLstmAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::utils::logging::Progress;
-use crate::utils::data_handling::PeptideData;
-use crate::utils::peptdeep_utils::{extract_masses_and_indices, get_modification_indices, remove_mass_shift};
 use crate::{
-    models::model_interface::{ModelInterface, PropertyType, PredictionResult,load_tensors_from_model, create_var_map},
+    models::model_interface::{ModelInterface, PropertyType,load_tensors_from_model, create_var_map},
     utils::peptdeep_utils::{
-        load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
+        load_mod_to_feature, parse_model_constants, ModelConstants,
     },
 };
 
@@ -144,7 +137,7 @@ impl ModelInterface for CCSCNNLSTMModel {
     
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
+        let (_batch_size, _seq_len, _) = xs.shape().dims3()?;
 
         // Separate input into aa_indices, mod_x, charge
         let start_mod_x = 1;
@@ -288,8 +281,6 @@ mod tests {
     use super::*;
     use crate::models::model_interface::ModelInterface;
     use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
-    use crate::utils::peptdeep_utils::load_modifications;
-    use crate::utils::data_handling::PeptideData;
     use candle_core::Device;
     use std::path::PathBuf;
 

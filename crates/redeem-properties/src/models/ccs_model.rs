@@ -1,5 +1,5 @@
 use std::path::Path;
-use candle_core::{Device, Tensor};
+use candle_core::Device;
 use anyhow::{Result, anyhow};
 use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
