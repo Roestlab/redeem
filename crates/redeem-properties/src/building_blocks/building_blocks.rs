@@ -4,11 +4,14 @@ use candle_nn as nn;
 use candle_transformers as transformers;
 use core::num;
 use std::fmt;
+use std::time::Instant;
 
 use crate::building_blocks::bilstm::BidirectionalLSTM;
 use crate::building_blocks::featurize::aa_one_hot;
 use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
 use crate::building_blocks::sequential::{seq, Sequential};
+
+use super::nn::TransformerEncoder;
 
 /// constants used by PeptDeep Models
 pub const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
@@ -302,7 +305,7 @@ pub struct MetaEmbedding {
 }
 
 impl MetaEmbedding {
-    fn new(out_features: usize, device: &Device) -> Result<Self> {
+    fn _new(out_features: usize, device: &Device) -> Result<Self> {
         let nn = nn::linear(
             MAX_INSTRUMENT_NUM + 1,
             out_features - 1,
@@ -432,13 +435,13 @@ pub struct HiddenHfaceTransformer {
 }
 
 impl HiddenHfaceTransformer {
-    fn new(
-        hidden_dim: usize,
-        hidden_expand: usize,
-        nheads: usize,
-        nlayers: usize,
-        dropout: f64,
-        output_attentions: bool
+    fn _new(
+        _hidden_dim: usize,
+        _hidden_expand: usize,
+        _nheads: usize,
+        _nlayers: usize,
+        _dropout: f64,
+        _output_attentions: bool
     ) -> Result<Self> {
         unimplemented!()
     }
@@ -450,7 +453,7 @@ impl HiddenHfaceTransformer {
         nheads: usize,
         nlayers: usize,
         dropout: f64,
-        output_attentions: bool
+        _output_attentions: bool
     ) -> Result<Self> {
         let config = transformers::models::bert::Config {
             hidden_size: hidden_dim,
@@ -583,8 +586,48 @@ struct SeqCNN {
 }
 
 impl SeqCNN {
-    fn new() -> Self {
-        unimplemented!();
+    pub fn new(embedding_hidden: usize, device: &Device) -> Result<Self> {
+        let varmap = nn::VarMap::new();
+        let varbuilder = nn::VarBuilder::from_varmap(&varmap, DType::F32, device);
+
+        let cnn_short = nn::conv1d(
+            embedding_hidden,
+            embedding_hidden,
+            3,
+            nn::Conv1dConfig {
+                padding: 1,
+                ..Default::default()
+            },
+            varbuilder.pp("cnn_short"),
+        )?;
+
+        let cnn_medium = nn::conv1d(
+            embedding_hidden,
+            embedding_hidden,
+            5,
+            nn::Conv1dConfig {
+                padding: 2,
+                ..Default::default()
+            },
+            varbuilder.pp("cnn_medium"),
+        )?;
+
+        let cnn_long = nn::conv1d(
+            embedding_hidden,
+            embedding_hidden,
+            7,
+            nn::Conv1dConfig {
+                padding: 3,
+                ..Default::default()
+            },
+            varbuilder.pp("cnn_long"),
+        )?;
+
+        Ok(Self {
+            cnn_short,
+            cnn_medium,
+            cnn_long,
+        })
     }
 
     pub fn from_varstore(
@@ -654,7 +697,7 @@ struct SeqLSTM {
 }
 
 impl SeqLSTM {
-    fn new() -> Self {
+    fn _new() -> Self {
         unimplemented!();
     }
 
@@ -675,6 +718,90 @@ impl Module for SeqLSTM {
     }
 }
 
+/// Transformer block applied on sequence input using a custom Transformer encoder implementation.
+/// This replaces the LSTM with a Transformer encoder for sequence modeling.
+#[derive(Debug, Clone)]
+pub struct SeqTransformer {
+    encoder: TransformerEncoder,
+    training: bool,
+}
+
+impl SeqTransformer {
+    /// Construct a new transformer encoder block for sequence modeling.
+    ///
+    /// # Arguments
+    /// * `input_dim` - The input embedding dimension (e.g., CNN output).
+    /// * `model_dim` - The internal model dimension of the transformer.
+    /// * `ff_dim` - The feedforward hidden layer dimension.
+    /// * `num_heads` - Number of attention heads.
+    /// * `num_layers` - Number of transformer encoder layers.
+    /// * `max_len` - Maximum input sequence length.
+    /// * `dropout_prob` - Dropout probability.
+    /// * `device` - The device to place the tensors on.
+    pub fn new(
+        input_dim: usize,
+        model_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        device: &Device,
+    ) -> Result<Self> {
+        let varmap = nn::VarMap::new();
+        let varbuilder = nn::VarBuilder::from_varmap(&varmap, DType::F32, device);
+        let encoder = TransformerEncoder::new(
+            &varbuilder,
+            input_dim,
+            model_dim,
+            ff_dim,
+            num_heads,
+            num_layers,
+            max_len,
+            dropout_prob,
+            device,
+        )?;
+        Ok(Self { encoder, training: true })
+    }
+
+    /// Load a transformer encoder from a varstore (used when loading from pre-trained weights).
+    pub fn from_varstore(
+        varstore: nn::VarBuilder,
+        input_dim: usize,
+        model_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        device: &Device,
+    ) -> Result<Self> {
+        let encoder = TransformerEncoder::new(
+            &varstore,
+            input_dim,
+            model_dim,
+            ff_dim,
+            num_heads,
+            num_layers,
+            max_len,
+            dropout_prob,
+            device,
+        )?;
+        Ok(Self { encoder, training: true })
+    }
+
+    pub fn set_training(&mut self, training: bool) {
+        self.training = training;
+    }
+}
+
+impl Module for SeqTransformer {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        self.encoder.forward_with_mask(x, None, self.training)
+    }
+}
+
+
 /// apply linear transformation and tensor rescaling with softmax
 #[derive(Debug, Clone)]
 struct SeqAttentionSum {
@@ -682,6 +809,16 @@ struct SeqAttentionSum {
 }
 
 impl SeqAttentionSum {
+    pub fn new(hidden_dim: usize, device: &Device) -> Result<Self> {
+        let varmap = nn::VarMap::new();
+        let varbuilder = nn::VarBuilder::from_varmap(&varmap, DType::F32, device);
+        let attention = nn::Linear::new(
+            varbuilder.get((1, hidden_dim), "attention.weight")?,
+            None,
+        );
+        Ok(Self { attention })
+    }
+
     pub fn from_varstore(varstore: nn::VarBuilder, hidden_dim: usize, name: &str) -> Result<Self> {
         let attention = nn::Linear::new(varstore.get((1, hidden_dim), name).unwrap(), None);
         Ok(Self { attention })
@@ -719,7 +856,7 @@ pub struct Encoder26aaModCnnLstmAttnSum {
 }
 
 impl Encoder26aaModCnnLstmAttnSum {
-    fn new() -> Self {
+    fn _new() -> Self {
         unimplemented!();
     }
 
@@ -764,14 +901,25 @@ impl Encoder26aaModCnnLstmAttnSum {
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
 
+        let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
+        println!("Encoder26aaModCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
+        println!("Encoder26aaModCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-
+        println!("Encoder26aaModCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
+        println!("Encoder26aaModCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = self.input_lstm.forward(&x)?;
+        println!("Encoder26aaModCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
+        println!("Encoder26aaModCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
         Ok(x)
     }
 }
@@ -786,7 +934,7 @@ pub struct Encoder26aaModChargeCnnLstmAttnSum {
 }
 
 impl Encoder26aaModChargeCnnLstmAttnSum {
-    fn new() -> Self {
+    fn _new() -> Self {
         unimplemented!();
     }
 
@@ -831,29 +979,156 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor, charges: &Tensor) -> Result<Tensor> {
 
+        let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - charges_repeated forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
 
+        let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = self.input_lstm.forward(&x)?;
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
+        let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
+        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
         Ok(x)
     }
 }
 
+
+/// Encode AAs (26 AA letters) and modifications using CNN + Transformer + AttentionSum.
+#[derive(Debug, Clone)]
+pub struct Encoder26aaModCnnTransformerAttnSum {
+    mod_nn: ModEmbeddingFixFirstK,
+    input_cnn: SeqCNN,
+    input_transformer: SeqTransformer,
+    attn_sum: SeqAttentionSum,
+}
+
+impl Encoder26aaModCnnTransformerAttnSum {
+    pub fn from_varstore(
+        varstore: &nn::VarBuilder,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        names_mod_nn: Vec<&str>,
+        names_input_cnn_weight: Vec<&str>,
+        names_input_cnn_bias: Vec<&str>,
+        transformer_pp: &str,
+        names_attn_sum: Vec<&str>,
+        device: &Device,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::from_varstore(
+                &varstore,
+                MOD_FEATURE_SIZE,
+                mod_hidden_dim,
+                names_mod_nn[0],
+            )?,
+            input_cnn: SeqCNN::from_varstore(
+                varstore.clone(),
+                input_dim,
+                names_input_cnn_weight,
+                names_input_cnn_bias,
+            )?,
+            input_transformer: SeqTransformer::from_varstore(
+                varstore.pp(transformer_pp).clone(),
+                input_dim * 4,
+                hidden_dim,
+                ff_dim,
+                num_heads,
+                num_layers,
+                max_len,
+                dropout_prob,
+                device,
+            )?,
+            attn_sum: SeqAttentionSum::from_varstore(
+                varstore.clone(),
+                hidden_dim,
+                names_attn_sum[0],
+            )?,
+        })
+    }
+
+    /// Construct a CNN+Transformer+Attention encoder from scratch (no pretrained weights).
+    pub fn new(
+        device: &Device,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, device)?,
+            input_cnn: SeqCNN::new(input_dim, device)?,
+            input_transformer: SeqTransformer::new(
+                input_dim * 4,
+                hidden_dim,
+                ff_dim,
+                num_heads,
+                num_layers,
+                max_len,
+                dropout_prob,
+                device,
+            )?,
+            attn_sum: SeqAttentionSum::new(hidden_dim, device)?,
+        })
+    }
+
+    pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
+        let start_time = Instant::now();
+        let mod_x = self.mod_nn.forward(mod_x)?;
+        println!("Encoder26aaModCnnTransformerAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
+
+        let additional_tensors: Vec<&Tensor> = vec![&mod_x];
+        let start_time = Instant::now();
+        let x = aa_one_hot(aa_indices, &additional_tensors)
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        println!("Encoder26aaModCnnTransformerAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+
+        let start_time = Instant::now();
+        let x = self.input_cnn.forward(&x)?;
+        println!("Encoder26aaModCnnTransformerAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+
+        let start_time = Instant::now();
+        let x = self.input_transformer.forward(&x)?;
+        println!("Encoder26aaModCnnTransformerAttnSum::forward - input_transformer forward time: {:.3?}", start_time.elapsed());
+
+        let start_time = Instant::now();
+        let x = self.attn_sum.forward(&x)?;
+        println!("Encoder26aaModCnnTransformerAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
+
+        Ok(x)
+    }
+}
+
+
+
 #[cfg(test)]
 mod tests {
-    use crate::models::model_interface::ModelInterface;
-    use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
-    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
     use candle_nn::VarBuilder;
     use std::path::PathBuf;
-    use std::time::Instant;
-    // use itertools::izip;
 
     use super::*;
 
