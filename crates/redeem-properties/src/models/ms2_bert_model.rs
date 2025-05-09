@@ -60,6 +60,11 @@ impl ModelInterface for MS2BertModel {
         "ms2_bert"
     }
 
+    fn new_untrained(_device: Device) -> Result<Self>
+    {
+        unimplemented!("Untrained model creation is not implemented for this architecture.");
+    }
+
     /// Create a new MS2BERT model from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,

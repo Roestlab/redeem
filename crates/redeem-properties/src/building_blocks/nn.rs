@@ -96,7 +96,6 @@ impl TransformerEncoder {
         for i in 0..num_layers {
             let layer = TransformerEncoderLayer::new(
                 &varbuilder.pp(&format!("layer_{}", i)),
-                input_dim,
                 model_dim,
                 ff_dim,
                 num_heads,
@@ -110,14 +109,26 @@ impl TransformerEncoder {
     }
 
     pub fn forward_with_mask(&self, x: &Tensor, padding_mask: Option<&Tensor>, training: bool) -> Result<Tensor> {
+        log::trace!("[TransformerEncoder] input x shape: {:?}", x.shape());
+
         let (b, t, _) = x.dims3()?;
-        let pe = self.pos_encoding.i((..t, ..))?.unsqueeze(0)?.broadcast_as((b, t, self.pos_encoding.dim(1)?))?;
-        let mut out = x + pe;
-        out = self.dropout.forward(&out?, training);
-        for layer in &self.layers {
-            out = layer.forward(&out?, padding_mask, training);
+        let pe = self.pos_encoding.i((..t, ..))?
+            .unsqueeze(0)?
+            .broadcast_as((b, t, self.pos_encoding.dim(1)?))?;
+
+        log::trace!("[TransformerEncoder] positional encoding shape: {:?}", pe.shape());
+
+        let mut out = x.broadcast_add(&pe)?;
+        out = self.dropout.forward(&out, training)?;
+
+        log::trace!("[TransformerEncoder] after dropout shape: {:?}", out.shape());
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            log::trace!("[TransformerEncoder] applying layer {}", i);
+            out = layer.forward(&out, padding_mask, training)?;
+            log::trace!("[TransformerEncoder] output shape after layer {}: {:?}", i, out.shape());
         }
-        Ok(out?)
+        Ok(out)
     }
 }
 
@@ -134,37 +145,40 @@ pub struct TransformerEncoderLayer {
 impl TransformerEncoderLayer {
     pub fn new(
         varbuilder: &VarBuilder,
-        input_dim: usize,
         model_dim: usize,
         ff_dim: usize,
         num_heads: usize,
         dropout_prob: f32,
     ) -> Result<Self> {
         Ok(Self {
-            self_attn: MultiHeadAttention::new(varbuilder, input_dim, model_dim, num_heads)?,
+            self_attn: MultiHeadAttention::new(varbuilder, model_dim, model_dim, num_heads)?,
             ff: FeedForward::new(varbuilder, model_dim, ff_dim)?,
             norm1: {
                 let weight = varbuilder.get((model_dim,), "norm1.weight")?;
                 let bias = varbuilder.get((model_dim,), "norm1.bias")?;
                 LayerNorm::new(weight, bias, 1e-5)
-            },            
+            },
             norm2: {
                 let weight = varbuilder.get((model_dim,), "norm2.weight")?;
                 let bias = varbuilder.get((model_dim,), "norm2.bias")?;
                 LayerNorm::new(weight, bias, 1e-5)
-            },            
+            },
             dropout1: Dropout::new(dropout_prob),
             dropout2: Dropout::new(dropout_prob),
         })
     }
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>, training: bool) -> Result<Tensor> {
+        log::trace!("[TransformerEncoderLayer] input x shape: {:?}", x.shape());
         let attn = self.self_attn.forward(x, mask)?;
-        let x = self.norm1.forward(&(x + self.dropout1.forward(&attn, training)?)?)?;
+        let x = self.norm1.forward(&x.broadcast_add(&self.dropout1.forward(&attn, training)?)?)?;
         let ff = self.ff.forward(&x)?;
-        self.norm2.forward(&(x + self.dropout2.forward(&ff, training)?)?)
+        let result = self.norm2.forward(&x.broadcast_add(&self.dropout2.forward(&ff, training)?)?)?;
+        log::trace!("[TransformerEncoderLayer] output shape: {:?}", result.shape());
+        Ok(result)
     }
 }
+
 
 #[derive(Debug, Clone)]
 pub struct MultiHeadAttention {
@@ -188,7 +202,7 @@ impl MultiHeadAttention {
             proj_q: linear_from_varbuilder(varbuilder, input_dim, model_dim, "proj_q")?,
             proj_k: linear_from_varbuilder(varbuilder, input_dim, model_dim, "proj_k")?,
             proj_v: linear_from_varbuilder(varbuilder, input_dim, model_dim, "proj_v")?,
-            proj_out: linear_from_varbuilder(varbuilder, input_dim, model_dim, "proj_out")?,
+            proj_out: linear_from_varbuilder(varbuilder, model_dim, model_dim, "proj_out")?,
             num_heads,
             head_dim,
         })
@@ -196,20 +210,69 @@ impl MultiHeadAttention {
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
         let (b, t, _) = x.dims3()?;
-        let q = self.proj_q.forward(x)?.reshape((b, t, self.num_heads, self.head_dim))?.transpose(1, 2)?;
-        let k = self.proj_k.forward(x)?.reshape((b, t, self.num_heads, self.head_dim))?.transpose(1, 2)?;
-        let v = self.proj_v.forward(x)?.reshape((b, t, self.num_heads, self.head_dim))?.transpose(1, 2)?;
+        log::trace!("[MultiHeadAttention] Input shape: b={}, t={}, head_dim={} (num_heads={})", b, t, self.head_dim, self.num_heads);
 
-        let mut scores = q.matmul(&k.transpose(2, 3)?)? / (self.head_dim as f64).sqrt();
+        let q = self.proj_q.forward(x)?
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+        let k = self.proj_k.forward(x)?
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+        let v = self.proj_v.forward(x)?
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+
+        log::trace!("[MultiHeadAttention] Q/K/V shape after projection and transpose: {:?}", q.shape());
+
+        let k_t = k.transpose(2, 3)?.contiguous()?;
+        let mut scores = q.matmul(&k_t)? / (self.head_dim as f64).sqrt();
+
+        let mut scores = match q.matmul(&k_t) {
+            Ok(s) => (s / (self.head_dim as f64).sqrt())?,
+            Err(e) => {
+                log::error!("[MultiHeadAttention] Failed during matmul for scores: {}", e);
+                return Err(e.into());
+            }
+        };
+
+        log::trace!("[MultiHeadAttention] Attention score shape: {:?}", scores.shape());
+
         if let Some(mask) = mask {
+            log::trace!("[MultiHeadAttention] Applying mask");
             let mask = mask.unsqueeze(1)?;
             let scale = Tensor::new(1e9f32, x.device())?;
-            scores = scores?.broadcast_add(&mask.neg()?.mul(&scale)?);
+            scores = match scores.broadcast_add(&mask.neg()?.mul(&scale)?) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("[MultiHeadAttention] Failed during masking: {}", e);
+                    return Err(e.into());
+                }
+            };
         }
 
-        let scores = scores?; 
-        let attn = candle_nn::ops::softmax(&scores, scores.dims().len() - 1)?;
-        let context = attn.matmul(&v)?.transpose(1, 2)?.reshape((b, t, self.num_heads * self.head_dim))?;
+        let attn = match candle_nn::ops::softmax(&scores, scores.dims().len() - 1) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("[MultiHeadAttention] Failed during softmax: {}", e);
+                return Err(e.into());
+            }
+        };
+
+        let context = match attn.matmul(&v) {
+            Ok(ctx) => ctx.transpose(1, 2)?.reshape((b, t, self.num_heads * self.head_dim))?,
+            Err(e) => {
+                log::error!("[MultiHeadAttention] Failed during attention context computation: {}", e);
+                return Err(e.into());
+            }
+        };
+
+        log::trace!("[MultiHeadAttention] Final context shape: {:?}", context.shape());
         self.proj_out.forward(&context)
     }
 }
@@ -234,7 +297,6 @@ impl FeedForward {
     }
 }
 
-
 fn linear_from_varbuilder(
     vb: &VarBuilder,
     in_dim: usize,
@@ -245,7 +307,6 @@ fn linear_from_varbuilder(
     let bias = vb.get((out_dim,), &format!("{}.bias", prefix)).ok();
     Ok(Linear::new(weight, bias))
 }
-
 
 /// Generate sinusoidal positional encoding like in "Attention is All You Need".
 pub fn create_sinusoidal_encoding(seq_len: usize, model_dim: usize, device: &Device) -> Result<Tensor> {
@@ -258,3 +319,4 @@ pub fn create_sinusoidal_encoding(seq_len: usize, model_dim: usize, device: &Dev
     }
     Tensor::from_vec(pe, (seq_len, model_dim), device)
 }
+

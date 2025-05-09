@@ -1,6 +1,64 @@
 use candle_core::Device;
 use candle_core::utils::{cuda_is_available, metal_is_available};
 use anyhow::{Result, anyhow};
+use std::f64::consts::PI;
+
+pub trait LRScheduler {
+    /// Update the learning rate based on the current step
+    fn step(&mut self);
+    
+    /// Get the current learning rate
+    fn get_last_lr(&self) -> f64;
+}
+
+pub struct CosineWithWarmup {
+    initial_lr: f64,
+    current_step: usize,
+    num_warmup_steps: usize,
+    num_training_steps: usize,
+    num_cycles: f64,
+}
+
+impl CosineWithWarmup {
+    pub fn new(
+        initial_lr: f64,
+        num_warmup_steps: usize,
+        num_training_steps: usize,
+        num_cycles: f64,
+    ) -> Self {
+        Self {
+            initial_lr,
+            current_step: 0,
+            num_warmup_steps: num_warmup_steps,
+            num_training_steps,
+            num_cycles,
+        }
+    }
+
+    fn get_lr(&self) -> f64 {
+        if self.current_step < self.num_warmup_steps {
+            // Linear warmup
+            return self.initial_lr * (self.current_step as f64) / (self.num_warmup_steps as f64);
+        }
+
+        let progress = (self.current_step - self.num_warmup_steps) as f64 
+            / (self.num_training_steps - self.num_warmup_steps) as f64;
+        
+        // Cosine decay
+        let cosine_decay = 0.5 * (1.0 + (PI * self.num_cycles * 2.0 * progress).cos());
+        self.initial_lr * cosine_decay.max(1e-10)
+    }
+}
+
+impl LRScheduler for CosineWithWarmup {
+    fn step(&mut self) {
+        self.current_step += 1;
+    }
+    
+    fn get_last_lr(&self) -> f64 {
+        self.get_lr()
+    }
+}
 
 /// Converts a device string to a Candle Device.
 ///

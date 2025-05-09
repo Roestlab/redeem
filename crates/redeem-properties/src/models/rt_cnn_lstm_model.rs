@@ -47,6 +47,11 @@ impl ModelInterface for RTCNNLSTMModel {
         "rt_cnn_lstm"   
     }
 
+    fn new_untrained(_device: Device) -> Result<Self>
+    {
+        unimplemented!("Untrained model creation is not implemented for this architecture.");
+    }
+
     /// Create a new RTCNNLSTMModel from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,

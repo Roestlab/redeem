@@ -12,11 +12,11 @@ use crate::utils::peptdeep_utils::ModificationMap;
 // Enum for different types of retention time models
 pub enum RTModelArch {
     RTCNNLSTM,
-    // Add other architectures here as needed
+    RTCNNTF
 }
 
 // Constants for different types of retention time models
-pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm"];
+pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm", "rt_cnn_tf"];
 
 // A wrapper struct for RT models
 pub struct RTModelWrapper {

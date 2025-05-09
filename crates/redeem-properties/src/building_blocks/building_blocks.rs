@@ -2,6 +2,7 @@ use anyhow::{Context, Result as AnyHowResult};
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn as nn;
 use candle_transformers as transformers;
+use serde::de;
 use core::num;
 use std::fmt;
 use std::time::Instant;
@@ -26,16 +27,18 @@ pub struct DecoderLinear {
 
 impl DecoderLinear {
     pub fn new(in_features: usize, out_features: usize, vb: &nn::VarBuilder) -> Result<Self> {
-        let weight = Tensor::zeros((in_features, 64), DType::F32, vb.device())?;
-        let bias = Tensor::zeros(64, DType::F32, vb.device())?;
+        // First linear layer: in_features -> 64
+        let weight1 = Tensor::zeros((64, in_features), DType::F32, vb.device())?;
+        let bias1 = Tensor::zeros(64, DType::F32, vb.device())?;
+        let linear1 = nn::Linear::new(weight1, Some(bias1));
 
-        let linear1 = nn::Linear::new(weight, Some(bias));
+        // Activation
         let prelu = nn::PReLU::new(Tensor::zeros(64, DType::F32, vb.device())?, false);
 
-        let weight = Tensor::zeros((64, out_features), DType::F32, vb.device())?;
-        let bias = Tensor::zeros(64, DType::F32, vb.device())?;
-
-        let linear2 = nn::Linear::new(weight, Some(bias));
+        // Second linear layer: 64 -> out_features
+        let weight2 = Tensor::zeros((out_features, 64), DType::F32, vb.device())?;
+        let bias2 = Tensor::zeros(out_features, DType::F32, vb.device())?;
+        let linear2 = nn::Linear::new(weight2, Some(bias2));
 
         let mut nn = seq();
         nn = nn.add(linear1);
@@ -73,9 +76,20 @@ impl DecoderLinear {
 
 impl Module for DecoderLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.nn.forward(x)
+        log::trace!("[DecoderLinear] input shape: {:?}", x.shape());
+        match self.nn.forward(x) {
+            Ok(output) => {
+                log::trace!("[DecoderLinear] output shape: {:?}", output.shape());
+                Ok(output)
+            }
+            Err(e) => {
+                log::error!("[DecoderLinear] forward pass failed: {:?}", e);
+                Err(e)
+            }
+        }
     }
 }
+
 
 impl fmt::Debug for DecoderLinear {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -198,10 +212,9 @@ struct ModEmbeddingFixFirstK {
 }
 
 impl ModEmbeddingFixFirstK {
-    fn new(mod_feature_size: usize, out_features: usize, device: &Device) -> Result<Self> {
+    fn new(mod_feature_size: usize, out_features: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
         let k = 6;
-        let vb = nn::VarBuilder::zeros(DType::F32, device);
-        let nn = nn::linear(mod_feature_size - k, out_features - k, vb.pp("linear"))?;
+        let nn = nn::linear(mod_feature_size - k, out_features - k, varbuilder.pp("linear"))?;
         Ok(Self { k, nn })
     }
 
@@ -243,17 +256,8 @@ pub struct Input26aaModPositionalEncoding {
 }
 
 impl Input26aaModPositionalEncoding {
-    fn new(out_features: usize, max_len: usize, device: &Device) -> Result<Self> {
-        let mod_hidden = 8;
-        let mod_nn = ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden, device)?;
-        let aa_emb = AAEmbedding::new(out_features - mod_hidden, device)?;
-        let pos_encoder = PositionalEncoding::new(out_features, max_len, device)?;
-
-        Ok(Self {
-            mod_nn,
-            aa_emb,
-            pos_encoder,
-        })
+    fn new(_out_features: usize, _max_len: usize, _device: &Device) -> Result<Self> {
+        todo!("new untrained instance of Input26aaModPositionalEncoding not implemented");
     }
 
     pub fn from_varstore(
@@ -586,10 +590,7 @@ struct SeqCNN {
 }
 
 impl SeqCNN {
-    pub fn new(embedding_hidden: usize, device: &Device) -> Result<Self> {
-        let varmap = nn::VarMap::new();
-        let varbuilder = nn::VarBuilder::from_varmap(&varmap, DType::F32, device);
-
+    pub fn new(embedding_hidden: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
         let cnn_short = nn::conv1d(
             embedding_hidden,
             embedding_hidden,
@@ -730,6 +731,7 @@ impl SeqTransformer {
     /// Construct a new transformer encoder block for sequence modeling.
     ///
     /// # Arguments
+    /// * `varbuilder` - The variable builder for creating the model parameters.
     /// * `input_dim` - The input embedding dimension (e.g., CNN output).
     /// * `model_dim` - The internal model dimension of the transformer.
     /// * `ff_dim` - The feedforward hidden layer dimension.
@@ -739,26 +741,25 @@ impl SeqTransformer {
     /// * `dropout_prob` - Dropout probability.
     /// * `device` - The device to place the tensors on.
     pub fn new(
+        varbuilder: &nn::VarBuilder,
         input_dim: usize,
         model_dim: usize,
         ff_dim: usize,
         num_heads: usize,
         num_layers: usize,
         max_len: usize,
-        dropout_prob: f32,
+        dropout: f32,
         device: &Device,
     ) -> Result<Self> {
-        let varmap = nn::VarMap::new();
-        let varbuilder = nn::VarBuilder::from_varmap(&varmap, DType::F32, device);
         let encoder = TransformerEncoder::new(
-            &varbuilder,
+            varbuilder,
             input_dim,
             model_dim,
             ff_dim,
             num_heads,
             num_layers,
             max_len,
-            dropout_prob,
+            dropout,
             device,
         )?;
         Ok(Self { encoder, training: true })
@@ -809,9 +810,7 @@ struct SeqAttentionSum {
 }
 
 impl SeqAttentionSum {
-    pub fn new(hidden_dim: usize, device: &Device) -> Result<Self> {
-        let varmap = nn::VarMap::new();
-        let varbuilder = nn::VarBuilder::from_varmap(&varmap, DType::F32, device);
+    pub fn new(hidden_dim: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
         let attention = nn::Linear::new(
             varbuilder.get((1, hidden_dim), "attention.weight")?,
             None,
@@ -1068,7 +1067,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
 
     /// Construct a CNN+Transformer+Attention encoder from scratch (no pretrained weights).
     pub fn new(
-        device: &Device,
+        varbuilder: &nn::VarBuilder,
         mod_hidden_dim: usize,
         hidden_dim: usize,
         ff_dim: usize,
@@ -1076,12 +1075,14 @@ impl Encoder26aaModCnnTransformerAttnSum {
         num_layers: usize,
         max_len: usize,
         dropout_prob: f32,
+        device: &Device,
     ) -> Result<Self> {
         let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
         Ok(Self {
-            mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, device)?,
-            input_cnn: SeqCNN::new(input_dim, device)?,
+            mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, &varbuilder.pp("mod_nn"))?,
+            input_cnn: SeqCNN::new(input_dim, &varbuilder.pp("input_cnn"))?,
             input_transformer: SeqTransformer::new(
+                &varbuilder.pp("input_transformer"),
                 input_dim * 4,
                 hidden_dim,
                 ff_dim,
@@ -1091,32 +1092,32 @@ impl Encoder26aaModCnnTransformerAttnSum {
                 dropout_prob,
                 device,
             )?,
-            attn_sum: SeqAttentionSum::new(hidden_dim, device)?,
+            attn_sum: SeqAttentionSum::new(hidden_dim, &varbuilder.pp("attn_sum"))?,
         })
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
         let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("Encoder26aaModCnnTransformerAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
+        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - mod_x forward time: {:.3?}", start_time.elapsed());
 
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
         let start_time = Instant::now();
         let x = aa_one_hot(aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        println!("Encoder26aaModCnnTransformerAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - aa_one_hot forward time: {:.3?}", start_time.elapsed());
 
         let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
-        println!("Encoder26aaModCnnTransformerAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - input_cnn forward time: {:.3?}", start_time.elapsed());
 
         let start_time = Instant::now();
         let x = self.input_transformer.forward(&x)?;
-        println!("Encoder26aaModCnnTransformerAttnSum::forward - input_transformer forward time: {:.3?}", start_time.elapsed());
+        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - input_transformer forward time: {:.3?}", start_time.elapsed());
 
         let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
-        println!("Encoder26aaModCnnTransformerAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
+        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - attn_sum forward time: {:.3?}", start_time.elapsed());
 
         Ok(x)
     }
