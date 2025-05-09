@@ -36,9 +36,6 @@ WORKDIR /app
 # Copy the source code into the container
 COPY . .
 
-# Update specific dependencies (if needed)
-RUN cargo update -p redeem-classifiers
-
 # Build the application with CUDA support
 RUN cargo build --release --bin redeem --features cuda 
 
