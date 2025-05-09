@@ -271,7 +271,7 @@ impl ModelInterface for RTCNNLSTMModel {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::model_interface::ModelInterface;
+    use crate::models::model_interface::{ModelInterface, PredictionResult};
     use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
     use candle_core::Device;
     use std::path::PathBuf;
