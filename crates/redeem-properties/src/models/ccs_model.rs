@@ -3,6 +3,7 @@ use candle_core::Device;
 use anyhow::{Result, anyhow};
 use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
+use crate::models::ccs_cnn_tf_model::CCSCNNTFModel;
 use crate::utils::data_handling::PeptideData;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
@@ -10,11 +11,11 @@ use crate::utils::peptdeep_utils::ModificationMap;
 // Enum for different types of CCS models
 pub enum CCSModelArch {
     CCSCNNLSTM,
-    // Add other architectures here as needed
+    CCSCNNTF,
 }
 
 // Constants for different types of CCS models
-pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm"];
+pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm", "ccs_cnn_tf"];
 
 // A wrapper struct for CCS models
 pub struct CCSModelWrapper {
@@ -33,7 +34,7 @@ impl CCSModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
             "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device)?),
-            // Add other cases here as you implement more models
+            "ccs_cnn_tf" => Box::new(CCSCNNTFModel::new(model_path, Some(constants_path), 0, 8, 4, true, device)?),
             _ => return Err(anyhow!("Unsupported CCS model architecture: {}", arch)),
         };
 
@@ -42,6 +43,10 @@ impl CCSModelWrapper {
 
     pub fn predict(&self, peptide_sequence: &[String], mods: &[String], mod_sites: &[String], charge: Vec<i32>) -> Result<PredictionResult> {
         self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), None, None)
+    }
+
+    pub fn train(&mut self, training_data: &Vec<PeptideData>, val_data: Option<&Vec<PeptideData>>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size: usize, val_batch_size: usize, learning_rate: f64, epochs: usize, early_stopping_patience: usize) -> Result<Vec<(usize, f32, Option<f32>, f32, Option<f32>)>> {
+        self.model.train(training_data, val_data, modifications, batch_size, val_batch_size, learning_rate, epochs, early_stopping_patience)
     }
 
     pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size: usize, learning_rate: f64, epochs: usize) -> Result<()> {
