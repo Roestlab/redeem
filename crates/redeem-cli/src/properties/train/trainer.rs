@@ -131,7 +131,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
 
     let start_time = std::time::Instant::now();
     log::trace!("Training started");
-    let epoch_losses = model.train(
+    let train_step_metrics = model.train(
         &train_peptides,
         val_peptides.as_ref(),
         modifications.clone(),
@@ -142,13 +142,15 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         config.early_stopping_patience,
     )?;
     log::info!("Training completed in {:?}", start_time.elapsed());
+    model.save(&config.output_file)?;
+    log::info!("Model saved to: {}", config.output_file);
 
     // Generate report
     let mut report = Report::new(
         "ReDeeM",
         &config.version,
         Some("https://github.com/singjc/redeem/blob/master/img/redeem_logo.png?raw=true"),
-        "ReDeeM Trainer Report",
+        format!("ReDeeM (:?) Trainer Report", config.model_arch).as_str(),
     );
 
     /* Section 1: Overview */
@@ -156,13 +158,44 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         let mut overview_section = ReportSection::new("Overview");
 
         overview_section.add_content(html! {
-            "This report summarizes the training process of the ReDeeM model."
+            "This report summarizes the training process of the ReDeeM model. It includes epoch-level summaries and step-wise dynamics such as learning rate scheduling and accuracy tracking over time. These plots provide insight into model convergence behavior and training stability."
         });
 
+        let epoch_losses = train_step_metrics.summarize_loss_for_plotting();
         let losses_plot = plot_losses(&epoch_losses);
         overview_section.add_plot(losses_plot);
 
-        // Lets perform inference on 1000 random samples from the validation set
+        // Step-wise learning rate plot
+        let lr_plot = plot_training_metric(
+            &train_step_metrics,
+            "lr",
+            "Learning Rate Over Steps",
+            "Step",
+            "Learning Rate",
+        );
+        overview_section.add_plot(lr_plot);
+
+        // Step-wise loss plot
+        let step_loss_plot = plot_training_metric(
+            &train_step_metrics,
+            "loss",
+            "Loss Over Steps",
+            "Step",
+            "Loss",
+        );
+        overview_section.add_plot(step_loss_plot);
+
+        // Step-wise accuracy plot
+        let acc_plot = plot_training_metric(
+            &train_step_metrics,
+            "accuracy",
+            "Accuracy Over Steps",
+            "Step",
+            "Accuracy",
+        );
+        overview_section.add_plot(acc_plot);
+
+        // Inference scatter plot
         let val_peptides: Vec<PeptideData> = sample_peptides(&val_peptides.as_ref().unwrap(), 1000);
         let inference_results: Vec<PeptideData> =
             model.inference(&val_peptides, config.batch_size, modifications, norm_factor)?;
@@ -173,8 +206,8 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
                 match (true_pep.retention_time, pred_pep.retention_time) {
                     (Some(t), Some(p)) => {
                         let t_denorm = t as f64 * norm_factor.unwrap().1 as f64
-                            + norm_factor.unwrap().0 as f64; // de-normalized true RT
-                        Some((t_denorm, p as f64)) // assume predicted is already de-normalized
+                            + norm_factor.unwrap().0 as f64;
+                        Some((t_denorm, p as f64))
                     }
                     _ => None,
                 }
@@ -184,15 +217,17 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         let scatter_plot = plot_scatter(
             &vec![true_rt.clone()],
             &vec![pred_rt.clone()],
-            vec!["RT Prediction".to_string()],
-            "Predicted vs True RT",
-            "Target RT",
-            "Predicted RT",
+            vec!["Prediction".to_string()],
+            "Predicted vs True (Random 1000 Validation Peptides)",
+            "Target",
+            "Predicted",
         )
         .unwrap();
         overview_section.add_plot(scatter_plot);
+
         report.add_section(overview_section);
     }
+
 
     /* Section 2: Configuration */
     {
@@ -221,9 +256,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
     let path = "redeem_trainer_report.html";
     report.save_to_file(&path.to_string())?;
 
-    model.save(&config.output_file)?;
-    log::info!("Model saved to: {}", config.output_file);
-
+    // Save configuration to JSON file
     let path = "redeem_trainer_config.json";
     let json = serde_json::to_string_pretty(&config)?;
     println!("{}", json);

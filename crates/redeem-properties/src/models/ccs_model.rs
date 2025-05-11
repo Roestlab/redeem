@@ -5,6 +5,7 @@ use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
 use crate::models::ccs_cnn_tf_model::CCSCNNTFModel;
 use crate::utils::data_handling::PeptideData;
+use crate::utils::stats::TrainingStepMetrics;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
 
@@ -45,7 +46,7 @@ impl CCSModelWrapper {
         self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), None, None)
     }
 
-    pub fn train(&mut self, training_data: &Vec<PeptideData>, val_data: Option<&Vec<PeptideData>>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size: usize, val_batch_size: usize, learning_rate: f64, epochs: usize, early_stopping_patience: usize) -> Result<Vec<(usize, f32, Option<f32>, f32, Option<f32>)>> {
+    pub fn train(&mut self, training_data: &Vec<PeptideData>, val_data: Option<&Vec<PeptideData>>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size: usize, val_batch_size: usize, learning_rate: f64, epochs: usize, early_stopping_patience: usize) -> Result<TrainingStepMetrics> {
         self.model.train(training_data, val_data, modifications, batch_size, val_batch_size, learning_rate, epochs, early_stopping_patience)
     }
 

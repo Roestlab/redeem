@@ -3,14 +3,27 @@ use candle_core::utils::{cuda_is_available, metal_is_available};
 use anyhow::{Result, anyhow};
 use std::f64::consts::PI;
 
+// Learning rate scheduler trait
+/// Trait representing a learning rate scheduler that can be updated each step
+/// and queried for the current learning rate.
 pub trait LRScheduler {
-    /// Update the learning rate based on the current step
     fn step(&mut self);
-    
-    /// Get the current learning rate
     fn get_last_lr(&self) -> f64;
 }
 
+// Cosine decay with warmup
+/// Cosine learning rate scheduler with linear warmup phase.
+///
+/// This scheduler increases the learning rate linearly from 0 to `initial_lr`
+/// over `num_warmup_steps`, then decays it using cosine annealing over the
+/// remaining training steps, optionally over multiple cycles.
+///
+/// # Fields
+/// * `initial_lr` - The peak learning rate after warmup.
+/// * `current_step` - Internal counter of the current step.
+/// * `num_warmup_steps` - Number of steps to warm up the learning rate.
+/// * `num_training_steps` - Total number of training steps.
+/// * `num_cycles` - Number of cosine cycles in the annealing phase.
 pub struct CosineWithWarmup {
     initial_lr: f64,
     current_step: usize,
@@ -20,32 +33,33 @@ pub struct CosineWithWarmup {
 }
 
 impl CosineWithWarmup {
-    pub fn new(
-        initial_lr: f64,
-        num_warmup_steps: usize,
-        num_training_steps: usize,
-        num_cycles: f64,
-    ) -> Self {
+    /// Create a new `CosineWithWarmup` scheduler.
+    ///
+    /// # Arguments
+    /// * `initial_lr` - Maximum learning rate after warmup.
+    /// * `num_warmup_steps` - Number of steps to linearly increase the learning rate.
+    /// * `num_training_steps` - Total number of training steps.
+    /// * `num_cycles` - Number of cosine cycles during decay.
+    pub fn new(initial_lr: f64, num_warmup_steps: usize, num_training_steps: usize, num_cycles: f64) -> Self {
         Self {
             initial_lr,
             current_step: 0,
-            num_warmup_steps: num_warmup_steps,
+            num_warmup_steps,
             num_training_steps,
             num_cycles,
         }
     }
 
+    /// Computes the learning rate for the current step based on warmup and cosine decay.
     fn get_lr(&self) -> f64 {
         if self.current_step < self.num_warmup_steps {
-            // Linear warmup
             return self.initial_lr * (self.current_step as f64) / (self.num_warmup_steps as f64);
         }
 
-        let progress = (self.current_step - self.num_warmup_steps) as f64 
-            / (self.num_training_steps - self.num_warmup_steps) as f64;
-        
-        // Cosine decay
-        let cosine_decay = 0.5 * (1.0 + (PI * self.num_cycles * 2.0 * progress).cos());
+        let progress = (self.current_step - self.num_warmup_steps) as f64
+            / (self.num_training_steps - self.num_warmup_steps).max(1) as f64;
+
+        let cosine_decay = 0.5 * (1.0 + (std::f64::consts::PI * self.num_cycles * 2.0 * progress).cos());
         self.initial_lr * cosine_decay.max(1e-10)
     }
 }
@@ -54,11 +68,12 @@ impl LRScheduler for CosineWithWarmup {
     fn step(&mut self) {
         self.current_step += 1;
     }
-    
+
     fn get_last_lr(&self) -> f64 {
         self.get_lr()
     }
 }
+
 
 /// Converts a device string to a Candle Device.
 ///
