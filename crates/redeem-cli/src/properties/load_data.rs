@@ -34,27 +34,39 @@ pub fn load_peptide_data<P: AsRef<Path>>(
         let record = result?;
 
         let sequence = record
-            .get(headers.iter().position(|h| h == "sequence").unwrap_or(2))
+            .get(headers.iter().position(|h| h.to_lowercase() == "sequence").unwrap_or(2))
             .unwrap_or("")
             .to_string();
 
         let retention_time = record
-            .get(headers.iter().position(|h| h == "retention time").unwrap_or(3))
+            .get(headers.iter().position(|h| h.to_lowercase() == "retention time").unwrap_or(3))
             .and_then(|s| s.parse::<f32>().ok());
 
         let charge = record
-            .get(headers.iter().position(|h| h == "charge").unwrap_or(usize::MAX))
+            .get(headers.iter().position(|h| h.to_lowercase() == "charge").unwrap_or(usize::MAX))
             .and_then(|s| s.parse::<i32>().ok());
+
+        let precursor_mass = record
+            .get(headers.iter().position(|h| h.to_lowercase() == "precursor_mass").unwrap_or(usize::MAX))
+            .and_then(|s| s.parse::<f32>().ok());
+
+        let ion_mobility = record
+            .get(headers.iter().position(|h| h.to_lowercase() == "ion_mobility").unwrap_or(usize::MAX))
+            .and_then(|s| s.parse::<f32>().ok());
+
+        let ccs = record
+            .get(headers.iter().position(|h| h.to_lowercase() == "ccs").unwrap_or(usize::MAX))
+            .and_then(|s| s.parse::<f32>().ok());
 
         let in_nce = nce.or_else(|| {
             record
-                .get(headers.iter().position(|h| h == "nce").unwrap_or(usize::MAX))
+                .get(headers.iter().position(|h| h.to_lowercase() == "nce").unwrap_or(usize::MAX))
                 .and_then(|s| s.parse::<i32>().ok())
         });
 
         let in_instrument = instrument.clone().or_else(|| {
             record
-                .get(headers.iter().position(|h| h == "instrument").unwrap_or(usize::MAX))
+                .get(headers.iter().position(|h| h.to_lowercase() == "instrument").unwrap_or(usize::MAX))
                 .map(|s| s.to_string())
         });
 
@@ -62,15 +74,17 @@ pub fn load_peptide_data<P: AsRef<Path>>(
             rt_values.push(rt);
         }
 
-        peptides.push(PeptideData::new(
-            &sequence,
+        peptides.push(PeptideData {
+            sequence,
             charge,
-            in_nce,
-            in_instrument.as_deref(),
+            precursor_mass,
+            nce: in_nce,
+            instrument: in_instrument,
             retention_time,
-            None,
-            None,
-        ));
+            ion_mobility,
+            ccs,
+            ms2_intensities: None
+        });
     }
 
     if normalize_rt && !rt_values.is_empty() {
@@ -93,3 +107,4 @@ pub fn load_peptide_data<P: AsRef<Path>>(
         Ok((peptides, None))
     }
 }
+
