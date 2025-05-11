@@ -14,6 +14,7 @@ use crate::utils::peptdeep_utils::{
     load_mod_to_feature,
     parse_model_constants, ModelConstants,
 };
+use crate::utils::utils::get_tensor_stats;
 
 
 // Main Model Struct
@@ -55,7 +56,7 @@ impl ModelInterface for RTCNNLSTMModel {
     /// Create a new RTCNNLSTMModel from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         _fixed_sequence_len: usize,
         _num_frag_types: usize,
         _num_modloss_types: usize,
@@ -69,8 +70,10 @@ impl ModelInterface for RTCNNLSTMModel {
         create_var_map(&mut varmap, tensor_data, &device)?;
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let constants: ModelConstants =
-            parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
+        let constants = match constants_path {
+            Some(path) => parse_model_constants(path.as_ref().to_str().unwrap())?,
+            None => ModelConstants::default(),
+        };
 
         // Load the mod_to_feature mapping
         let mod_to_feature = load_mod_to_feature(&constants)?;
@@ -118,10 +121,20 @@ impl ModelInterface for RTCNNLSTMModel {
         let (_batch_size, _seq_len, _) = xs.shape().dims3()?;
     
         let aa_indices_out = xs.i((.., .., 0))?;
+        let (mean, min, max) = get_tensor_stats(&aa_indices_out)?;
+        log::debug!("[RTCNNLSTMModel] aa_indices_out stats - min: {min}, max: {max}, mean: {mean}");
         let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;
+        let (mean, min, max) = get_tensor_stats(&mod_x_out)?;
+        log::debug!("[RTCNNLSTMModel] mod_x_out stats - min: {min}, max: {max}, mean: {mean}");
         let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[RTCNNLSTMModel] x stats - min: {min}, max: {max}, mean: {mean}");
         let x = self.dropout.forward(&x, self.is_training)?;
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[RTCNNLSTMModel] x after dropout stats - min: {min}, max: {max}, mean: {mean}");
         let x = self.rt_decoder.forward(&x)?;
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[RTCNNLSTMModel] x after decoder stats - min: {min}, max: {max}, mean: {mean}");
         let result = x.squeeze(1)?;
 
         Ok(result)
@@ -310,7 +323,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device).unwrap(); 
+        let model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device).unwrap(); 
 
         let peptide_sequences = "AGHCEWQMKYR";
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
@@ -336,7 +349,7 @@ mod tests {
         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::Cpu;
 
-        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device.clone()).unwrap();
+        let model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device.clone()).unwrap();
 
         // Batched input
         let peptide_sequences = vec![
@@ -383,7 +396,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = /* Assuming Device is defined */ Device::new_cuda(0).unwrap_or(/* assuming Device::Cpu is defined */ Device::Cpu); // Replace with actual Device code.
-        let result =  RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device); 
+        let result =  RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device); 
         let mut model = result.unwrap();
     
         // Test prediction with a few peptides after fine-tuning

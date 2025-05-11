@@ -86,7 +86,7 @@ impl Progress {
         let new_count = self.count.fetch_add(1, Ordering::AcqRel) + 1;
     
         if new_count > self.total {
-            println!("⚠️ WARNING: Extra update detected! Skipping...");
+            log::trace!("⚠️ WARNING: Progress logger received and extra update! This is likely because the logger was initialized with an incorrect total counter, and the process is iterating beyond that counter.");
             return; // Prevent overflow
         }
 

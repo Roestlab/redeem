@@ -15,6 +15,7 @@ use crate::utils::peptdeep_utils::{
     load_mod_to_feature,
     parse_model_constants, ModelConstants,
 };
+use crate::utils::utils::get_tensor_stats;
 
 
 // Main Model Struct
@@ -52,9 +53,9 @@ impl ModelInterface for RTCNNTFModel {
         let mut varmap = VarMap::new();
         let varbuilder = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-
+        log::trace!("[RTCNNTFModel] Initializing rt_encoder");
         let rt_encoder = Encoder26aaModCnnTransformerAttnSum::new(
-            &varbuilder,
+            &varbuilder.pp("rt_encoder"),
             8,     // mod_hidden_dim
             140,   // hidden_dim
             256,   // ff_dim
@@ -65,12 +66,13 @@ impl ModelInterface for RTCNNTFModel {
             &device
         )?;
 
-        let rt_decoder = DecoderLinear::new(140, 1, &varbuilder)?;
+        log::trace!("[RTCNNTFModel] Initializing rt_decoder");
+        let rt_decoder = DecoderLinear::new(140, 1, &varbuilder.pp("rt_decoder"))?;
         let constants = ModelConstants::default();
         let mod_to_feature = load_mod_to_feature(&constants)?;
 
         Ok(Self {
-            var_store: VarBuilder::from_varmap(&varmap, DType::F32, &device),
+            var_store: varbuilder,
             varmap,
             constants,
             device,
@@ -85,7 +87,7 @@ impl ModelInterface for RTCNNTFModel {
     /// Create a new RTCNNTFModel from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         _fixed_sequence_len: usize,
         _num_frag_types: usize,
         _num_modloss_types: usize,
@@ -97,8 +99,10 @@ impl ModelInterface for RTCNNTFModel {
         create_var_map(&mut varmap, tensor_data, &device)?;
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let constants: ModelConstants =
-            parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
+        let constants = match constants_path {
+            Some(path) => parse_model_constants(path.as_ref().to_str().unwrap())?,
+            None => ModelConstants::default(),
+        };
 
         let mod_to_feature = load_mod_to_feature(&constants)?;
         let dropout = Dropout::new(0.1);
@@ -146,20 +150,42 @@ impl ModelInterface for RTCNNTFModel {
             dropout,
             rt_encoder,
             rt_decoder,
-            is_training: true,
+            is_training: false,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
         let aa_indices_out = xs.i((.., .., 0))?;
-        let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;
+        let (mean, min, max) = get_tensor_stats(&aa_indices_out)?;
+        log::debug!("[RTCNNTFModel] aa_indices_out stats - min: {min}, max: {max}, mean: {mean}");
+        let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;    
+         
+        if mod_x_out.shape().elem_count() == 0  {
+            log::error!("[RTCNNTFModel] mod_x_out is empty! shape: {:?}", mod_x_out.shape());
+        } else {
+            match get_tensor_stats(&mod_x_out) {
+                Ok((mean, min, max)) => {
+                    log::debug!("[RTCNNTFModel] mod_x_out stats - min: {min}, max: {max}, mean: {mean}");
+                }
+                Err(e) => {
+                    log::error!("[RTCNNTFModel] Failed to compute stats for mod_x_out: {:?}", e);
+                }
+            }
+        }        
+        
         log::trace!("[RTCNNTFModel] aa_indices_out: {:?}, mod_x_out: {:?}", aa_indices_out, mod_x_out);
         let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
         log::trace!("[RTCNNTFModel] x.shape after rt_encoder: {:?}", x.shape());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[RTCNNTFModel] rt_encoder output stats - min: {min}, max: {max}, mean: {mean}");
         let x = self.dropout.forward(&x, self.is_training)?;
         log::trace!("[RTCNNTFModel] x.shape after dropout: {:?}", x.shape());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[RTCNNTFModel] dropout output stats - min: {min}, max: {max}, mean: {mean}");
         let x = self.rt_decoder.forward(&x)?;
         log::trace!("[RTCNNTFModel] x.shape after rt_decoder: {:?}", x.shape());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[RTCNNTFModel] rt_decoder output stats - min: {min}, max: {max}, mean: {mean}");
         Ok(x.squeeze(1)?)
     }
 
@@ -261,7 +287,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device).unwrap(); 
+        let model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device).unwrap(); 
 
         let peptide_sequences = "AGHCEWQMKYR";
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
@@ -287,7 +313,7 @@ mod tests {
         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::Cpu;
 
-        let model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device.clone()).unwrap();
+        let model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device.clone()).unwrap();
 
         // Batched input
         let peptide_sequences = vec![

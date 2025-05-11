@@ -11,6 +11,7 @@ use crate::building_blocks::bilstm::BidirectionalLSTM;
 use crate::building_blocks::featurize::aa_one_hot;
 use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
 use crate::building_blocks::sequential::{seq, Sequential};
+use crate::utils::utils::get_tensor_stats;
 
 use super::nn::TransformerEncoder;
 
@@ -27,26 +28,22 @@ pub struct DecoderLinear {
 
 impl DecoderLinear {
     pub fn new(in_features: usize, out_features: usize, vb: &nn::VarBuilder) -> Result<Self> {
-        // First linear layer: in_features -> 64
-        let weight1 = Tensor::zeros((64, in_features), DType::F32, vb.device())?;
-        let bias1 = Tensor::zeros(64, DType::F32, vb.device())?;
-        let linear1 = nn::Linear::new(weight1, Some(bias1));
-
-        // Activation
+        log::trace!("[DecoderLinear::new] Initializing linear1");
+        let linear1 = nn::linear(in_features, 64, vb.pp("nn.0"))?;
+        log::trace!("[DecoderLinear::new] Initializing prelu");
         let prelu = nn::PReLU::new(Tensor::zeros(64, DType::F32, vb.device())?, false);
-
-        // Second linear layer: 64 -> out_features
-        let weight2 = Tensor::zeros((out_features, 64), DType::F32, vb.device())?;
-        let bias2 = Tensor::zeros(out_features, DType::F32, vb.device())?;
-        let linear2 = nn::Linear::new(weight2, Some(bias2));
-
+        log::trace!("[DecoderLinear::new] Initializing linear2");
+        let linear2 = nn::linear(64, out_features, vb.pp("nn.2"))?;
+        log::trace!("[DecoderLinear::new] Initializing sequential");
         let mut nn = seq();
         nn = nn.add(linear1);
         nn = nn.add(prelu);
         nn = nn.add(linear2);
-
+    
         Ok(Self { nn })
     }
+    
+    
 
     pub fn from_varstore(
         varstore: &nn::VarBuilder,
@@ -80,6 +77,12 @@ impl Module for DecoderLinear {
         match self.nn.forward(x) {
             Ok(output) => {
                 log::trace!("[DecoderLinear] output shape: {:?}", output.shape());
+                log::trace!(
+                    "[DecoderLinear] output stats - min: {:.4}, max: {:.4}, mean: {:.4}",
+                    output.min_all()?.to_vec0::<f32>()?,
+                    output.max_all()?.to_vec0::<f32>()?,
+                    output.mean_all()?.to_vec0::<f32>()?,
+                );
                 Ok(output)
             }
             Err(e) => {
@@ -798,6 +801,15 @@ impl SeqTransformer {
 
 impl Module for SeqTransformer {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // Add check to ensure input feature dim matches expected model dim
+        let (_b, _t, d) = x.dims3()?;
+        let model_dim = self.encoder.model_dim;
+        if d != model_dim {
+            return Err(candle_core::Error::Msg(format!(
+                "SeqTransformer received input with dim {} but expected {}",
+                d, model_dim
+            )));
+        }
         self.encoder.forward_with_mask(x, None, self.training)
     }
 }
@@ -902,23 +914,31 @@ impl Encoder26aaModCnnLstmAttnSum {
 
         let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("Encoder26aaModCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
-        println!("Encoder26aaModCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        println!("Encoder26aaModCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
         let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
-        println!("Encoder26aaModCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnLstmAttnSum] CNN output stats - min: {min}, max: {max}, mean: {mean}");
         let start_time = Instant::now();
         let x = self.input_lstm.forward(&x)?;
-        println!("Encoder26aaModCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnLstmAttnSum] LSTM output stats - min: {min}, max: {max}, mean: {mean}");
         let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
-        println!("Encoder26aaModCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnLstmAttnSum] AttentionSum output stats - min: {min}, max: {max}, mean: {mean}");
         Ok(x)
     }
 }
@@ -980,27 +1000,27 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 
         let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - charges_repeated forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - charges_repeated forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
 
         let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let x = self.input_lstm.forward(&x)?;
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
         let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
-        println!("Encoder26aaModChargeCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
+        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
         Ok(x)
     }
 }
@@ -1106,18 +1126,26 @@ impl Encoder26aaModCnnTransformerAttnSum {
         let x = aa_one_hot(aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
 
         let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
         log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - input_cnn forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnTransformerAttnSum] input_cnn output stats - min: {min}, max: {max}, mean: {mean}");
 
         let start_time = Instant::now();
         let x = self.input_transformer.forward(&x)?;
         log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - input_transformer forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnTransformerAttnSum] input_transformer output stats - min: {min}, max: {max}, mean: {mean}");
 
         let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
         log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - attn_sum forward time: {:.3?}", start_time.elapsed());
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::debug!("[Encoder26aaModCnnTransformerAttnSum] attn_sum output stats - min: {min}, max: {max}, mean: {mean}");
 
         Ok(x)
     }

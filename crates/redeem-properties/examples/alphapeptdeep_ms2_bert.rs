@@ -139,7 +139,7 @@ fn main() -> Result<()> {
 
     println!("Device: {:?}", device);
 
-    let mut model = MS2BertModel::new(&model_path, &constants_path, 0, 8, 4, true, device)
+    let mut model = MS2BertModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device)
         .context("Failed to create MS2BertModel")?;
 
     // Open the CSV file

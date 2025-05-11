@@ -32,7 +32,7 @@ impl Clone for MS2ModelWrapper {
 impl MS2ModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "ms2_bert" => Box::new(MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
+            "ms2_bert" => Box::new(MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device)?),
             // Add other cases here as you implement more models
             _ => return Err(anyhow!("Unsupported MS2 model architecture: {}", arch)),
         };

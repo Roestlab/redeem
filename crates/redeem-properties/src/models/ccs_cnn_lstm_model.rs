@@ -66,7 +66,7 @@ impl ModelInterface for CCSCNNLSTMModel {
     /// Create a new CCSCNNLSTMModel instance model from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         fixed_sequence_len: usize,
         num_frag_types: usize,
         num_modloss_types: usize,
@@ -80,8 +80,10 @@ impl ModelInterface for CCSCNNLSTMModel {
 
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let constants: ModelConstants =
-            parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
+        let constants = match constants_path {
+            Some(path) => parse_model_constants(path.as_ref().to_str().unwrap())?,
+            None => ModelConstants::default(),
+        };
 
         // Load the mod_to_feature mapping
         let mod_to_feature = load_mod_to_feature(&constants)?;
@@ -295,7 +297,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model = CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
         println!("{:?}", model);
     }
@@ -306,7 +308,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model = CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
         let peptide_sequences = "AGHCEWQMKYR";
         let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
@@ -331,7 +333,7 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model = CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
         let peptide_sequences = vec!["AGHCEWQMKYR".to_string(), "AGHCEWQMKYR".to_string()];
         let mods = vec!["Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(), "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string()];

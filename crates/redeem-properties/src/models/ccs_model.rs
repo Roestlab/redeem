@@ -32,7 +32,7 @@ impl Clone for CCSModelWrapper {
 impl CCSModelWrapper {
     pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
+            "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device)?),
             // Add other cases here as you implement more models
             _ => return Err(anyhow!("Unsupported CCS model architecture: {}", arch)),
         };

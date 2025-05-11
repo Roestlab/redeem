@@ -123,6 +123,7 @@ impl Default for ModelConstants {
                 "Lumos".into(),
                 "timsTOF".into(),
                 "SciexTOF".into(),
+                "ThermoTOF".into(),
             ],
             max_instrument_num: 8,
             mod_elements: vec![

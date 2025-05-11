@@ -1,5 +1,5 @@
 
-
+#[derive(Clone)]
 pub struct PeptideData {
     pub sequence: String,
     pub charge: Option<i32>,

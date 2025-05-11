@@ -1,4 +1,4 @@
-use candle_core::Device;
+use candle_core::{Device, Tensor};
 use candle_core::utils::{cuda_is_available, metal_is_available};
 use anyhow::{Result, anyhow};
 use std::f64::consts::PI;
@@ -148,6 +148,29 @@ pub fn device(cpu: bool) -> Result<Device> {
         Ok(Device::Cpu)
     }
 }
+
+
+pub fn get_tensor_stats(x: &Tensor) -> Result<(f32, f32, f32), candle_core::Error> {
+    // let flat: Vec<f32> = match x.rank() {
+    //     0 => vec![x.to_scalar::<f32>()?],
+    //     1 => x.to_vec1::<f32>()?,
+    //     2 => x.to_vec2::<f32>()?.into_iter().flatten().collect(),
+    //     3 => x.to_vec3::<f32>()?.into_iter().flatten().flatten().collect(),
+    //     _ => return Err(candle_core::Error::Msg(format!("Unsupported tensor rank: {}", x.rank()))),
+    // };
+    let flat = x.flatten_all()?.to_vec1::<f32>()?;
+
+    if flat.is_empty() {
+        return Err(candle_core::Error::Msg("Tensor has no elements to compute stats.".to_string()));
+    }
+
+    let mean = flat.iter().copied().sum::<f32>() / flat.len() as f32;
+    let min = flat.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = flat.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+    Ok((mean, min, max))
+}
+
 
 
 #[cfg(test)]

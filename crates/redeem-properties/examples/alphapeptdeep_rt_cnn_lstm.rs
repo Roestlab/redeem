@@ -113,7 +113,7 @@ fn main() -> Result<()> {
 
     println!("Device: {:?}", device);
 
-    let mut model = RTCNNLSTMModel::new(&model_path, &constants_path, 0, 8, 4, true, device)
+    let mut model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device)
         .context("Failed to create RTCNNLSTMModel")?;
 
     // Define training data
