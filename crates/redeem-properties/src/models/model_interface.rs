@@ -132,7 +132,7 @@ impl Index<(usize, usize)> for PredictionValue {
 #[derive(Debug, Clone)]
 pub enum PredictionResult {
     RTResult(Vec<f32>),
-    IMResult(Vec<f32>),
+    CCSResult(Vec<f32>),
     MS2Result(Vec<Vec<Vec<f32>>>),
 }
 
@@ -140,7 +140,7 @@ impl PredictionResult {
     pub fn len(&self) -> usize {
         match self {
             PredictionResult::RTResult(vec) => vec.len(),
-            PredictionResult::IMResult(vec) => vec.len(),
+            PredictionResult::CCSResult(vec) => vec.len(),
             PredictionResult::MS2Result(vec) => vec.len(),
         }
     }
@@ -148,7 +148,7 @@ impl PredictionResult {
     pub fn get_prediction_entry(&self, index: usize) -> PredictionValue {
         match self {
             PredictionResult::RTResult(vec) => PredictionValue::Single(vec[index].clone()),
-            PredictionResult::IMResult(vec) => PredictionValue::Single(vec[index].clone()),
+            PredictionResult::CCSResult(vec) => PredictionValue::Single(vec[index].clone()),
             PredictionResult::MS2Result(vec) => PredictionValue::Matrix(vec[index].clone()),
         }
     }
@@ -266,7 +266,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             }
             PropertyType::CCS => {
                 let predictions: Vec<f32> = output.to_vec1()?;
-                Ok(PredictionResult::IMResult(predictions))
+                Ok(PredictionResult::CCSResult(predictions))
             }
             PropertyType::MS2 => {
                 let out = self.process_predictions(&output, self.get_min_pred_intensity())?;
@@ -447,7 +447,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         let num_batches = (training_data.len() + batch_size - 1) / batch_size;
     
         info!(
-            "Training {} model from scratch on {} peptide features ({} batches) for {} epochs",
+            "Training {} model from on {} peptide features ({} batches) for {} epochs",
             self.get_model_arch(),
             training_data.len(),
             num_batches,
@@ -491,7 +491,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         PropertyType::RT => PredictionResult::RTResult(
                             batch_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
                         ),
-                        PropertyType::CCS => PredictionResult::IMResult(
+                        PropertyType::CCS => PredictionResult::CCSResult(
                             batch_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
                         ),
                         PropertyType::MS2 => {
@@ -500,7 +500,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     };
     
                     let target_batch = match batch_targets {
-                        PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                        PredictionResult::RTResult(ref values) | PredictionResult::CCSResult(ref values) => {
                             Tensor::new(values.clone(), &self.get_device())?
                         }
                         PredictionResult::MS2Result(_) => unreachable!(),
@@ -548,7 +548,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                             PropertyType::RT => PredictionResult::RTResult(
                                 batch_data.iter().map(|p| p.retention_time.unwrap_or_default()).collect(),
                             ),
-                            PropertyType::CCS => PredictionResult::IMResult(
+                            PropertyType::CCS => PredictionResult::CCSResult(
                                 batch_data.iter().map(|p| p.ion_mobility.unwrap_or_default()).collect(),
                             ),
                             PropertyType::MS2 => {
@@ -557,7 +557,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         };
     
                         let target_val = match val_targets {
-                            PredictionResult::RTResult(ref values) | PredictionResult::IMResult(ref values) => {
+                            PredictionResult::RTResult(ref values) | PredictionResult::CCSResult(ref values) => {
                                 Tensor::new(values.clone(), &self.get_device())?
                             }
                             PredictionResult::MS2Result(_) => unreachable!(),
@@ -716,7 +716,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                             .map(|p| p.retention_time.unwrap_or_default())
                             .collect(),
                     ),
-                    PropertyType::CCS => PredictionResult::IMResult(
+                    PropertyType::CCS => PredictionResult::CCSResult(
                         batch_data
                             .iter()
                             .map(|p| p.ion_mobility.unwrap_or_default())
@@ -732,7 +732,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
                 let target_batch = match batch_targets {
                     PredictionResult::RTResult(ref values)
-                    | PredictionResult::IMResult(ref values) => {
+                    | PredictionResult::CCSResult(ref values) => {
                         Tensor::new(values.clone(), &self.get_device())?
                     }
                     PredictionResult::MS2Result(ref spectra) => {

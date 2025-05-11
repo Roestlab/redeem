@@ -45,7 +45,7 @@ fn run_prediction(model: &mut CCSCNNLSTMModel, prediction_context: &PredictionCo
         None,
     ) {
         Ok(predictions) => {
-            if let PredictionResult::IMResult(ccs_preds) = predictions {  
+            if let PredictionResult::CCSResult(ccs_preds) = predictions {  
                 let total_error: f32 = ccs_preds
                     .iter()
                     .zip(prediction_context.observed_ccs.iter())
