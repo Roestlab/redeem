@@ -34,13 +34,17 @@ ENV CUDA_COMPUTE_CAP=70
 WORKDIR /app
 
 # Copy the source code into the container
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
 
 # Build the application with CUDA support
 RUN cargo build --release --bin redeem --features cuda 
 
 # Copy the binary into the PATH
 RUN cp target/release/redeem /app/redeem
+
+# clean up build artifacts
+RUN cargo clean
 
 # Set the PATH environment variable
 ENV PATH="/app:${PATH}"
