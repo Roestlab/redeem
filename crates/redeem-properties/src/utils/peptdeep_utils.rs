@@ -328,8 +328,20 @@ pub fn extract_masses_and_indices(peptide: &str) -> Vec<(f64, usize)> {
 }
 
 
+/// Extracts modification indices from a peptide string.
+/// The indices are 0-based and represent the positions of the modifications.
+/// 
+/// # Example
+/// ```
+/// use redeem_properties::utils::peptdeep_utils::get_modification_indices;
+/// let result = get_modification_indices("AC[+57.0215]DE");
+/// assert_eq!(result, "1");
+/// 
+/// let result = get_modification_indices("AC(UniMod:4)DE");
+/// assert_eq!(result, "1");
+/// ```
 pub fn get_modification_indices(peptide: &str) -> String {
-    let re = Regex::new(r"\[.*?\]").unwrap();
+    let re = Regex::new(r"(\[.*?\]|\(UniMod:\d+\)|\([a-zA-Z]+\))").unwrap();
     let mut indices = Vec::new();
     let mut offset = 1; // Offset by 1 for 0-based index
 
