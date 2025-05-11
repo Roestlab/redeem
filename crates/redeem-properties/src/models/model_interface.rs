@@ -610,7 +610,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     epochs_without_improvement += 1;
                     if epochs_without_improvement >= early_stopping_patience {
                         info!("Early stopping triggered after {} epochs without validation loss improvement.", early_stopping_patience);
-                        return Ok(epoch_losses);
+                        return Ok(step_metrics);
                     }
                     let checkpoint_path = format!(
                         "redeem_{}_ckpt_model_epoch_{}.safetensors",
