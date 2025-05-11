@@ -4,12 +4,9 @@ use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::path::Path;
 
-
-
 use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModCnnTransformerAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::building_blocks::nn;
 use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
 use crate::utils::peptdeep_utils::{
     load_mod_to_feature,
@@ -249,111 +246,4 @@ impl ModelInterface for RTCNNTFModel {
 
 }
 
-// Module Trait Implementation
 
-// impl Module for RTCNNLSTMModel {
-//     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
-//         ModelInterface::forward(self, input)
-//     }
-// }
-
-
-#[cfg(test)]
-mod tests {
-    use crate::models::model_interface::ModelInterface;
-    use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
-    use candle_core::Device;
-    use std::path::PathBuf;
-
-    use super::*;
-
-    #[test]
-    fn test_parse_model_constants() {
-        let path = "data/models/alphapeptdeep/generic/rt.pth.model_const.yaml";
-        let result = parse_model_constants(path);
-        assert!(result.is_ok());
-        let constants = result.unwrap();
-        assert_eq!(constants.aa_embedding_size.unwrap(), 27);
-        assert_eq!(constants.charge_factor, Some(0.1));
-        assert_eq!(constants.instruments.len(), 4);
-        assert_eq!(constants.max_instrument_num, 8);
-        assert_eq!(constants.mod_elements.len(), 109);
-        assert_eq!(constants.nce_factor, Some(0.01));
-    }
-
-    #[test]
-    fn test_encode_peptides() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-        let device = Device::Cpu;
-        let model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device).unwrap(); 
-
-        let peptide_sequences = "AGHCEWQMKYR";
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
-        // let charge = Some(2);
-        // let nce = Some(20);
-        // let instrument = Some("QE");
-
-        let result =
-            model.encode_peptide(&peptide_sequences, mods, mod_sites, None, None, None);
-
-        println!("{:?}", result);
-
-        // assert!(result.is_ok());
-        // let encoded_peptides = result.unwrap();
-        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
-    }
-
-    #[test]
-    fn test_encode_peptides_batch() {
-
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-        let device = Device::Cpu;
-
-        let model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device.clone()).unwrap();
-
-        // Batched input
-        let peptide_sequences = vec![
-            "ACDEFGHIK".to_string(),
-            "AGHCEWQMKYR".to_string(),
-        ];
-        let mods = vec![
-            "Carbamidomethyl@C".to_string(),
-            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
-        ];
-        let mod_sites = vec![
-            "1".to_string(),
-            "0;4;8".to_string(),
-        ];
-
-        println!("Peptides: {:?}", peptide_sequences);
-        println!("Mods: {:?}", mods);
-        println!("Mod sites: {:?}", mod_sites);
-
-
-        let result = model.encode_peptides(
-            &peptide_sequences,
-            &mods,
-            &mod_sites,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        let tensor = result.unwrap();
-        println!("Batched encoded tensor shape: {:?}", tensor.shape());
-
-        let (batch, seq_len, feat_dim) = tensor.shape().dims3().unwrap();
-        assert_eq!(batch, 2); // two peptides
-        assert!(seq_len >= 11); // padded to max length
-        assert!(feat_dim > 1); // includes aa + mod features
-    }
-
-
-    
-    
-}
