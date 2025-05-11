@@ -1,20 +1,25 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use clap::ArgMatches;
 use anyhow::{Context, Result};
 
-#[derive(Debug, Deserialize, Clone)]
+use crate::properties::util::validate_tsv_or_csv_file;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PropertyTrainConfig {
+    pub version: String,
     pub train_data: String,
     pub validation_data: Option<String>,
     pub output_file: String,
     pub model_arch: String,
     pub device: String,
     pub batch_size: usize,
+    pub validation_batch_size: Option<usize>,
     pub learning_rate: f32,
     pub epochs: usize,
     pub early_stopping_patience: usize,
+    pub checkpoint_file: Option<String>,
     pub instrument: String,
     pub nce: i32,
 }
@@ -22,15 +27,18 @@ pub struct PropertyTrainConfig {
 impl Default for PropertyTrainConfig {
     fn default() -> Self {
         PropertyTrainConfig {
+            version: clap::crate_version!().to_string(),
             train_data: String::new(),
             validation_data: None,
             output_file: String::from("rt_cnn_tf.safetensors"),
             model_arch: String::from("rt_cnn_tf"),
             device: String::from("cpu"),
             batch_size: 64,
+            validation_batch_size: None,
             learning_rate: 1e-3,
             epochs: 10,
             early_stopping_patience: 5,
+            checkpoint_file: None,
             instrument: String::from("QE"),
             nce: 20,
         }
@@ -68,23 +76,12 @@ impl PropertyTrainConfig {
             config.model_arch = model_arch.clone();
         }
 
+        if let Some(checkpoint_file) = matches.get_one::<String>("checkpoint_file") {
+            config.checkpoint_file = Some(checkpoint_file.clone());
+        }
+
         Ok(config)
     }
 }
 
 
-pub fn validate_tsv_or_csv_file(path: &str) -> Result<()> {
-    let pb = PathBuf::from(path);
-
-    let ext = pb.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase());
-    match ext.as_deref() {
-        Some("tsv") | Some("csv") => {}
-        _ => anyhow::bail!("File must have a .tsv or .csv extension: {}", path),
-    }
-
-    if !pb.exists() {
-        anyhow::bail!("File does not exist: {}", path);
-    }
-
-    Ok(())
-}
