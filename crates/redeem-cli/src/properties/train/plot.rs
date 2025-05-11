@@ -1,5 +1,6 @@
 use plotly::{Layout, Plot, Scatter};
 use plotly::common::{Fill, Mode, Title};
+use crate::training::{TrainingStepMetrics, TrainingPhase};
 
 pub fn plot_losses(
     epoch_losses: &[(usize, f32, Option<f32>, f32, Option<f32>)]
@@ -73,6 +74,71 @@ pub fn plot_losses(
             .title("Training and Validation Loss Over Epochs")
             .x_axis(plotly::layout::Axis::new().title("Epoch"))
             .y_axis(plotly::layout::Axis::new().title("Loss"))
+    );
+
+    plot
+}
+
+
+
+/// Plot a single training metric (e.g. loss, learning rate, accuracy) over steps.
+pub fn plot_training_metric(
+    metrics: &TrainingStepMetrics,
+    metric_name: &str,
+    title: &str,
+    x_title: &str,
+    y_title: &str,
+) -> Plot {
+    let mut plot = Plot::new();
+
+    let mut train_x = vec![];
+    let mut train_y = vec![];
+    let mut val_x = vec![];
+    let mut val_y = vec![];
+
+    for i in 0..metrics.steps.len() {
+        let x = metrics.steps[i] as f64;
+        let y_opt = match metric_name {
+            "loss" => Some(metrics.losses[i] as f64),
+            "lr" => Some(metrics.learning_rates[i]),
+            "accuracy" => metrics.accuracies[i].map(|a| a as f64),
+            _ => None,
+        };
+
+        if let Some(y) = y_opt {
+            match metrics.phases[i] {
+                TrainingPhase::Train => {
+                    train_x.push(x);
+                    train_y.push(y);
+                }
+                TrainingPhase::Validation => {
+                    val_x.push(x);
+                    val_y.push(y);
+                }
+            }
+        }
+    }
+
+    if !train_x.is_empty() {
+        plot.add_trace(
+            Scatter::new(train_x.clone(), train_y.clone())
+                .mode(Mode::Lines)
+                .name("Train"),
+        );
+    }
+    if !val_x.is_empty() {
+        plot.add_trace(
+            Scatter::new(val_x.clone(), val_y.clone())
+                .mode(Mode::Lines)
+                .name("Validation"),
+        );
+    }
+
+    plot.set_layout(
+        Layout::new()
+            .title(Title::new().text(title))
+            .x_axis(plotly::layout::Axis::new().title(x_title))
+            .y_axis(plotly::layout::Axis::new().title(y_title))
     );
 
     plot
