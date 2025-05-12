@@ -1,6 +1,7 @@
 use plotly::{Layout, Plot, Scatter};
 use plotly::common::{Fill, Mode, Title};
-use crate::training::{TrainingStepMetrics, TrainingPhase};
+use redeem_properties::utils::stats::{TrainingStepMetrics, TrainingPhase};
+
 
 pub fn plot_losses(
     epoch_losses: &[(usize, f32, Option<f32>, f32, Option<f32>)]
@@ -136,7 +137,7 @@ pub fn plot_training_metric(
 
     plot.set_layout(
         Layout::new()
-            .title(Title::new().text(title))
+            .title(title)
             .x_axis(plotly::layout::Axis::new().title(x_title))
             .y_axis(plotly::layout::Axis::new().title(y_title))
     );

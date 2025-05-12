@@ -15,7 +15,7 @@ use report_builder::{
 };
 
 use crate::properties::load_data;
-use crate::properties::train::plot::plot_losses;
+use crate::properties::train::plot::{plot_losses, plot_training_metric};
 use crate::properties::train::sample_peptides;
 use crate::properties::util::write_bytes_to_file;
 use input::PropertyTrainConfig;
@@ -150,7 +150,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         "ReDeeM",
         &config.version,
         Some("https://github.com/singjc/redeem/blob/master/img/redeem_logo.png?raw=true"),
-        format!("ReDeeM (:?) Trainer Report", config.model_arch).as_str(),
+        &format!("ReDeeM {:?} Trainer Report", config.model_arch),
     );
 
     /* Section 1: Overview */
