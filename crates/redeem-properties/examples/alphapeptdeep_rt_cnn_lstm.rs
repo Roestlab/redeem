@@ -6,65 +6,68 @@ use redeem_properties::{
         rt_cnn_lstm_model::RTCNNLSTMModel,
     },
     utils::{
-        data_handling::{PeptideData, PeptideBatchData},
-        peptdeep_utils::{load_modifications, remove_mass_shift, get_modification_string, get_modification_indices},
+        data_handling::PeptideData,
+        peptdeep_utils::{
+            get_modification_indices, get_modification_string, load_modifications,
+            remove_mass_shift,
+        },
     },
 };
 use std::path::PathBuf;
-use std::sync::Arc;
 
-struct PredictionContext {
-    peptides: Vec<&'static str>,
-    mods: Vec<&'static str>,
-    mod_sites: Vec<&'static str>,
-    observed_rts: Vec<f32>,
-}
+fn run_prediction(model: &mut RTCNNLSTMModel, batch_data: &[PeptideData]) -> Result<()> {
+    let batch = redeem_properties::utils::data_handling::PeptideBatchData::from(batch_data);
 
-impl PredictionContext {
-    fn new(test_peptides: &[(&'static str, &'static str, &'static str, f32)]) -> Self {
-        let peptides = test_peptides.iter().map(|(pep, _, _, _)| *pep).collect();
-        let mods = test_peptides.iter().map(|(_, m, _, _)| *m).collect();
-        let mod_sites = test_peptides.iter().map(|(_, _, site, _)| *site).collect();
-        let observed_rts = test_peptides.iter().map(|(_, _, _, rt)| *rt).collect();
-
-        Self {
-            peptides,
-            mods,
-            mod_sites,
-            observed_rts,
-        }
-    }
-}
-
-fn run_prediction(model: &mut RTCNNLSTMModel, context: &PredictionContext) -> Result<()> {
-    match model.predict(
-        &context.peptides,
-        &context.mods,
-        &context.mod_sites,
+    let predictions = model.predict(
+        &batch.naked_sequence,
+        &batch.mods,
+        &batch.mod_sites,
+        if batch.charges.iter().all(|c| c.is_some()) {
+            Some(batch.charges.iter().map(|c| c.unwrap()).collect())
+        } else {
+            None
+        },
         None,
-        None,
-        None,
-    ) {
-        Ok(preds) => {
-            if let PredictionResult::RTResult(rt_preds) = preds {
-                let total_error: f32 = rt_preds
+        if batch.instruments.iter().all(|i| i.is_some()) {
+            Some(
+                batch
+                    .instruments
                     .iter()
-                    .zip(&context.observed_rts)
-                    .map(|(p, o)| (p - o).abs())
-                    .sum();
+                    .map(|opt| opt.as_ref().map(|a| a.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        },
+    )?;
 
-                for ((pep, pred), obs) in context.peptides.iter().zip(rt_preds.iter()).zip(&context.observed_rts) {
-                    println!("Peptide: {}, Predicted RT: {:.6}, Observed RT: {:.6}", pep, pred, obs);
-                }
+    if let PredictionResult::RTResult(rt_preds) = predictions {
+        let total_error: f32 = rt_preds
+            .iter()
+            .zip(batch.retention_times.iter())
+            .map(|(pred, obs)| (pred - obs.unwrap_or_default()).abs())
+            .sum();
 
-                println!(
-                    "Mean Absolute Error: {:.6}",
-                    total_error / rt_preds.len() as f32
-                );
-            }
+        for ((seq, pred), obs) in batch
+            .naked_sequence
+            .iter()
+            .zip(rt_preds.iter())
+            .zip(batch.retention_times.iter())
+        {
+            println!(
+                "Peptide: {}, Predicted RT: {:.6}, Observed RT: {:.6}",
+                std::str::from_utf8(seq).unwrap_or(""),
+                pred,
+                obs.unwrap_or_default()
+            );
         }
-        Err(e) => println!("Prediction error: {e}"),
+
+        println!(
+            "Mean Absolute Error: {:.6}",
+            total_error / rt_preds.len() as f32
+        );
     }
+
     Ok(())
 }
 
@@ -74,7 +77,6 @@ fn main() -> Result<()> {
     let model_path = PathBuf::from("/home/singjc/Documents/github/redeem/rt_fine_tuned.safetensors");
     let constants_path = PathBuf::from("/home/singjc/Documents/github/redeem/crates/redeem-properties/data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
     let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
-
     println!("Device: {:?}", device);
 
     let mut model = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device)
@@ -117,21 +119,45 @@ fn main() -> Result<()> {
     })
     .collect();
 
-    let test_peptides_data = vec![
+    let test_peptides = vec![
         ("QPYAVSELAGHQTSAESWGTGR", "", "", 0.4328955),
         ("GMSVSDLADKLSTDDLNSLIAHAHR", "Oxidation@M", "1", 0.6536107),
-        ("TVQHHVLFTDNMVLICR", "Oxidation@M;Carbamidomethyl@C", "11;15", 0.7811949),
+        (
+            "TVQHHVLFTDNMVLICR",
+            "Oxidation@M;Carbamidomethyl@C",
+            "11;15",
+            0.7811949,
+        ),
         ("EAELDVNEELDKK", "", "", 0.2934583),
         ("YTPVQQGPVGVNVTYGGDPIPK", "", "", 0.5863009),
     ];
 
-    let prediction_context = PredictionContext::new(&test_peptides_data);
+    let prediction_data: Vec<PeptideData> = test_peptides
+        .into_iter()
+        .map(|(seq, mods, sites, rt)| {
+            let naked = remove_mass_shift(seq);
+            PeptideData::new(
+                seq,
+                &naked,
+                mods,
+                sites,
+                None,
+                None,
+                None,
+                None,
+                Some(rt),
+                None,
+                None,
+                None,
+            )
+        })
+        .collect();
 
-    run_prediction(&mut model, &prediction_context)?;
+    run_prediction(&mut model, &prediction_data)?;
 
     model.fine_tune(&training_data, modifications, 10, 0.001, 5)?;
 
-    run_prediction(&mut model, &prediction_context)?;
+    run_prediction(&mut model, &prediction_data)?;
 
     model.save("alphapeptdeep_rt_cnn_lstm_finetuned.safetensors")?;
 

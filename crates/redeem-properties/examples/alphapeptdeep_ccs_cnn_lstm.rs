@@ -6,25 +6,31 @@ use redeem_properties::{
         model_interface::{ModelInterface, PredictionResult},
     },
     utils::{
-        data_handling::{PeptideData},
-        peptdeep_utils::{ion_mobility_to_ccs_bruker},
+        data_handling::PeptideData,
+        peptdeep_utils::ion_mobility_to_ccs_bruker,
     },
 };
 use std::{path::PathBuf, sync::Arc};
 
-struct PredictionContext<'a> {
-    peptides: Vec<&'a str>,
-    mods: Vec<&'a str>,
-    mod_sites: Vec<&'a str>,
+struct PredictionContext {
+    peptides: Vec<Arc<[u8]>>,
+    mods: Vec<Arc<[u8]>>,
+    mod_sites: Vec<Arc<[u8]>>,
     charges: Vec<i32>,
     observed_ccs: Vec<f32>,
 }
 
-impl<'a> PredictionContext<'a> {
-    fn new(test_peptides: &'a [(&'a str, &'a str, &'a str, i32, f32)]) -> Self {
-        let peptides = test_peptides.iter().map(|(pep, _, _, _, _)| *pep).collect();
-        let mods = test_peptides.iter().map(|(_, m, _, _, _)| *m).collect();
-        let mod_sites = test_peptides.iter().map(|(_, _, s, _, _)| *s).collect();
+impl PredictionContext {
+    fn new(test_peptides: &[(&str, &str, &str, i32, f32)]) -> Self {
+        let peptides = test_peptides.iter()
+            .map(|(pep, _, _, _, _)| Arc::from(pep.as_bytes().to_vec().into_boxed_slice()))
+            .collect();
+        let mods = test_peptides.iter()
+            .map(|(_, m, _, _, _)| Arc::from(m.as_bytes().to_vec().into_boxed_slice()))
+            .collect();
+        let mod_sites = test_peptides.iter()
+            .map(|(_, _, s, _, _)| Arc::from(s.as_bytes().to_vec().into_boxed_slice()))
+            .collect();
         let charges = test_peptides.iter().map(|(_, _, _, c, _)| *c).collect();
         let observed_ccs = test_peptides.iter().map(|(_, _, _, _, ccs)| *ccs).collect();
 
@@ -48,18 +54,20 @@ fn run_prediction(model: &mut CCSCNNLSTMModel, ctx: &PredictionContext) -> Resul
         None,
     )? {
         PredictionResult::CCSResult(preds) => {
-            let total_error: f32 = preds
-                .iter()
-                .zip(ctx.observed_ccs.iter())
+            let total_error: f32 = preds.iter().zip(ctx.observed_ccs.iter())
                 .map(|(pred, obs)| (pred - obs).abs())
                 .sum();
 
-            for (pep, pred, obs) in itertools::izip!(&ctx.peptides, &preds, &ctx.observed_ccs) {
-                println!("Peptide: {}, Predicted CCS: {:.4}, Observed CCS: {:.4}", pep, pred, obs);
+            for ((pep, pred), obs) in ctx.peptides.iter().zip(preds.clone()).zip(&ctx.observed_ccs) {
+                println!(
+                    "Peptide: {}, Predicted CCS: {:.4}, Observed CCS: {:.4}",
+                    std::str::from_utf8(pep).unwrap_or(""),
+                    pred,
+                    obs
+                );
             }
 
-            let mae = total_error / preds.len() as f32;
-            println!("Mean Absolute Error: {:.6}", mae);
+            println!("Mean Absolute Error: {:.6}", total_error / preds.len() as f32);
         }
         _ => println!("Unexpected prediction result type."),
     }
@@ -70,8 +78,6 @@ fn main() -> Result<()> {
     let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
     let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
     let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
-
-    println!("Device: {:?}", device);
 
     let mut model = CCSCNNLSTMModel::new(
         &model_path,
@@ -97,7 +103,5 @@ fn main() -> Result<()> {
     ];
 
     let ctx = PredictionContext::new(&test_peptides);
-    run_prediction(&mut model, &ctx)?;
-
-    Ok(())
+    run_prediction(&mut model, &ctx)
 }

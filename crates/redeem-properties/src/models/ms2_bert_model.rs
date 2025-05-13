@@ -1,9 +1,9 @@
 use anyhow::Result;
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{Dropout, Module, VarBuilder, VarMap};
-use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     building_blocks::building_blocks::{
@@ -13,7 +13,7 @@ use crate::{
     models::model_interface::{
         create_var_map, load_tensors_from_model, ModelInterface, PropertyType,
     },
-    utils::peptdeep_utils::{load_mod_to_feature, parse_model_constants, ModelConstants},
+    utils::peptdeep_utils::{load_mod_to_feature_arc, parse_model_constants, ModelConstants},
 };
 
 // Constants
@@ -27,7 +27,7 @@ pub struct MS2BertModel {
     var_store: VarBuilder<'static>,
     varmap: VarMap,
     constants: ModelConstants,
-    mod_to_feature: HashMap<String, Vec<f32>>,
+    mod_to_feature: HashMap<Arc<[u8]>, Vec<f32>>,
     fixed_sequence_len: usize,
     // Total number of fragment types of a fragmentation position to predict
     num_frag_types: usize,
@@ -60,8 +60,7 @@ impl ModelInterface for MS2BertModel {
         "ms2_bert"
     }
 
-    fn new_untrained(_device: Device) -> Result<Self>
-    {
+    fn new_untrained(_device: Device) -> Result<Self> {
         unimplemented!("Untrained model creation is not implemented for this architecture.");
     }
 
@@ -88,7 +87,7 @@ impl ModelInterface for MS2BertModel {
         };
 
         // Load the mod_to_feature mapping
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
 
         let dropout = Dropout::new(0.1);
 
@@ -355,7 +354,7 @@ impl ModelInterface for MS2BertModel {
         self.constants.mod_elements.len()
     }
 
-    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+    fn get_mod_to_feature(&self) -> &HashMap<Arc<[u8]>, Vec<f32>> {
         &self.mod_to_feature
     }
 
@@ -461,7 +460,8 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
+        let model =
+            MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
         println!("{:?}", model);
     }
@@ -472,23 +472,25 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
+        let model =
+            MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = "AGHCEWQMKYR";
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
+        let seq = Arc::from(b"AGHCEWQMKYR".to_vec().into_boxed_slice());
+        let mods = Arc::from(
+            b"Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let mod_sites = Arc::from(b"0;4;8".to_vec().into_boxed_slice());
         let charge = Some(2);
         let nce = Some(20);
-        let instrument = Some("QE");
+        let instrument = Some(Arc::from(b"QE".to_vec().into_boxed_slice()));
 
         let result =
-            model.encode_peptide(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+            model.encode_peptide(&seq, &mods, &mod_sites, charge, nce, instrument.as_ref());
 
         println!("{:?}", result);
-
-        // assert!(result.is_ok());
-        // let encoded_peptides = result.unwrap();
-        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -497,17 +499,26 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
+        let model =
+            MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = vec!["AGHCEWQMKYR", "AGHCEWQMKYR"];
-        let mods = vec![
-            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M",
-            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M",
-        ];
-        let mod_sites = vec!["0;4;8", "0;4;8"];
+        let seq: Arc<[u8]> = Arc::from(b"AGHCEWQMKYR".to_vec().into_boxed_slice());
+        let mods: Arc<[u8]> = Arc::from(
+            b"Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let mod_sites: Arc<[u8]> = Arc::from(b"0;4;8".to_vec().into_boxed_slice());
         let charge = Some(vec![2, 2]);
         let nce = Some(vec![20, 20]);
-        let instrument = Some(vec!["QE", "QE"]);
+        let instrument = vec![
+            Arc::from(b"QE".to_vec().into_boxed_slice()),
+            Arc::from(b"QE".to_vec().into_boxed_slice()),
+        ];
+
+        let peptide_sequences = vec![seq.clone(), seq];
+        let mods = vec![mods.clone(), mods];
+        let mod_sites = vec![mod_sites.clone(), mod_sites];
 
         let input_tensor = model
             .encode_peptides(
@@ -516,14 +527,15 @@ mod tests {
                 &mod_sites,
                 charge,
                 nce,
-                instrument,
+                Some(instrument.into_iter().map(Some).collect()),
             )
             .unwrap();
+
         let output = model.forward(&input_tensor).unwrap();
         println!("{:?}", output);
 
         let prediction: Vec<Vec<Vec<f32>>> = output.to_vec3().unwrap();
-
         println!("{:?}", prediction);
+        assert_eq!(prediction.len(), 2);
     }
 }

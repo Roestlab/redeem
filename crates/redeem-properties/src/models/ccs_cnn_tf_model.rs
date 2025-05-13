@@ -3,13 +3,14 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModChargeCnnTransformerAttnSum, MOD_FEATURE_SIZE,
 };
 use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
 use crate::utils::peptdeep_utils::{
-    load_mod_to_feature,
+    load_mod_to_feature_arc,
     parse_model_constants, ModelConstants,
 };
 use crate::utils::utils::get_tensor_stats;
@@ -27,7 +28,7 @@ pub struct CCSCNNTFModel {
     varmap: VarMap,
     constants: ModelConstants,
     device: Device,
-    mod_to_feature: HashMap<String, Vec<f32>>,
+    mod_to_feature: HashMap<Arc<[u8]>, Vec<f32>>,
     dropout: Dropout,
     ccs_encoder: Encoder26aaModChargeCnnTransformerAttnSum,
     ccs_decoder: DecoderLinear,
@@ -69,7 +70,7 @@ impl ModelInterface for CCSCNNTFModel {
         log::trace!("[CCSCNNTFModel] Initializing ccs_decoder");
         let ccs_decoder = DecoderLinear::new(129, 1, &varbuilder.pp("ccs_decoder"))?;
         let constants = ModelConstants::default();
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
 
         Ok(Self {
             var_store: varbuilder,
@@ -104,7 +105,7 @@ impl ModelInterface for CCSCNNTFModel {
             None => ModelConstants::default(),
         };
 
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
         let dropout = Dropout::new(0.1);
 
         let ccs_encoder = Encoder26aaModChargeCnnTransformerAttnSum::from_varstore(
@@ -211,7 +212,7 @@ impl ModelInterface for CCSCNNTFModel {
         self.constants.mod_elements.len()
     }
 
-    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+    fn get_mod_to_feature(&self) -> &HashMap<Arc<[u8]>, Vec<f32>> {
         &self.mod_to_feature
     }
 
@@ -257,20 +258,17 @@ mod tests {
         let device = Device::Cpu;
         let model = Box::new(CCSCNNTFModel::new_untrained(device.clone()).unwrap());
 
-        let peptide_sequences = "AGHCEWQMKYR";
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
+        let seq = Arc::from(b"AGHCEWQMKYR".to_vec().into_boxed_slice());
+        let mods =
+            Arc::from(b"Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_vec().into_boxed_slice());
+        let mod_sites = Arc::from(b"0;4;8".to_vec().into_boxed_slice());
         let charge = Some(2);
         let nce = Some(20);
-        let instrument = Some("QE");
+        let instrument = Some(Arc::from(b"QE".to_vec().into_boxed_slice()));
 
-        let result =
-            model.encode_peptide(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+        let result = model.encode_peptide(&seq, &mods, &mod_sites, charge, nce, instrument.as_ref());
 
         println!("{:?}", result);
-
-        // assert!(result.is_ok());
-        // let encoded_peptides = result.unwrap();
-        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+        assert!(result.is_ok());
     }
 }

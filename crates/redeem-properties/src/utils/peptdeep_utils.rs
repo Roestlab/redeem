@@ -4,6 +4,7 @@ use std::ops::Index;
 use std::path::PathBuf;
 use std::io;
 use std::fs;
+use std::sync::Arc;
 use log::info;
 use csv::ReaderBuilder;
 use reqwest;
@@ -209,6 +210,33 @@ pub fn load_mod_to_feature(constants: &ModelConstants) -> Result<HashMap<String,
         let record: ModFeature = result?;
         let feature_vector = parse_mod_formula(&record.composition, &mod_elem_to_idx, mod_feature_size);
         mod_to_feature.insert(record.mod_name, feature_vector);
+    }
+
+    Ok(mod_to_feature)
+}
+
+pub fn load_mod_to_feature_arc(
+    constants: &ModelConstants,
+) -> Result<HashMap<Arc<[u8]>, Vec<f32>>, Error> {
+    let path = ensure_mod_tsv_exists()?;
+    let mut rdr = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_path(path)?;
+
+    let mod_elem_to_idx: HashMap<String, usize> = constants
+        .mod_elements
+        .iter()
+        .enumerate()
+        .map(|(i, elem)| (elem.clone(), i))
+        .collect();
+
+    let mod_feature_size = constants.mod_elements.len();
+    let mut mod_to_feature = HashMap::new();
+
+    for result in rdr.deserialize() {
+        let record: ModFeature = result?;
+        let feature_vector = parse_mod_formula(&record.composition, &mod_elem_to_idx, mod_feature_size);
+        mod_to_feature.insert(Arc::from(record.mod_name.as_bytes()), feature_vector);
     }
 
     Ok(mod_to_feature)

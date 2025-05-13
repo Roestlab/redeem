@@ -3,13 +3,14 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModCnnTransformerAttnSum, MOD_FEATURE_SIZE,
 };
 use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
 use crate::utils::peptdeep_utils::{
-    load_mod_to_feature,
+    load_mod_to_feature_arc,
     parse_model_constants, ModelConstants,
 };
 use crate::utils::utils::get_tensor_stats;
@@ -24,7 +25,7 @@ pub struct RTCNNTFModel {
     varmap: VarMap,
     constants: ModelConstants,
     device: Device,
-    mod_to_feature: HashMap<String, Vec<f32>>,
+    mod_to_feature: HashMap<Arc<[u8]>, Vec<f32>>,
     dropout: Dropout,
     rt_encoder: Encoder26aaModCnnTransformerAttnSum,
     rt_decoder: DecoderLinear,
@@ -66,7 +67,7 @@ impl ModelInterface for RTCNNTFModel {
         log::trace!("[RTCNNTFModel] Initializing rt_decoder");
         let rt_decoder = DecoderLinear::new(128, 1, &varbuilder.pp("rt_decoder"))?;
         let constants = ModelConstants::default();
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
 
         Ok(Self {
             var_store: varbuilder,
@@ -101,7 +102,7 @@ impl ModelInterface for RTCNNTFModel {
             None => ModelConstants::default(),
         };
 
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
         let dropout = Dropout::new(0.1);
 
         let rt_encoder = Encoder26aaModCnnTransformerAttnSum::from_varstore(
@@ -195,7 +196,7 @@ impl ModelInterface for RTCNNTFModel {
         self.constants.mod_elements.len()
     }
 
-    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+    fn get_mod_to_feature(&self) -> &HashMap<Arc<[u8]>, Vec<f32>> {
         &self.mod_to_feature
     }
 

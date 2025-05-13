@@ -1,11 +1,18 @@
 use crate::{
-    building_blocks::featurize::{self, aa_indices_tensor, get_mod_features_from_parsed},
+    building_blocks::featurize::{
+        self, aa_indices_tensor, aa_indices_tensor_from_arc, get_mod_features_from_parsed,
+        get_mod_features_from_parsed_arc,
+    },
     models::{ccs_model::CCSModelWrapper, ms2_model::MS2ModelWrapper, rt_model::RTModelWrapper},
     utils::{
-        data_handling::{PeptideBatchData, PeptideData, RTNormalization}, logging::Progress, peptdeep_utils::{
+        data_handling::{PeptideBatchData, PeptideData, RTNormalization},
+        logging::Progress,
+        peptdeep_utils::{
             get_modification_indices, get_modification_string, parse_instrument_index,
             remove_mass_shift,
-        }, stats::{compute_loss_stats, Metrics, TrainingPhase, TrainingStepMetrics}, utils::{get_tensor_stats, CosineWithWarmup, LRScheduler}
+        },
+        stats::{compute_loss_stats, Metrics, TrainingPhase, TrainingStepMetrics},
+        utils::{get_tensor_stats, CosineWithWarmup, LRScheduler},
     },
 };
 use anyhow::{Context, Result};
@@ -13,9 +20,13 @@ use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{Optimizer, VarMap};
 use log::info;
 use rayon::prelude::*;
-use std::{ops::{Deref, Index}, process::Output};
 use std::path::Path;
 use std::{collections::HashMap, path::PathBuf};
+use std::{
+    ops::{Deref, Index},
+    process::Output,
+    sync::Arc,
+};
 
 // Constants
 const CHARGE_FACTOR: f64 = 0.1;
@@ -231,30 +242,35 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// Predict the property for a batch of peptide sequences.
     ///
     /// # Arguments
-    ///   * `peptide_sequences` - A vector of peptide sequences.
-    ///   * `mods` - A vector of strings representing the modifications for each peptide.
-    ///   * `mod_sites` - A vector of strings representing the modification sites for each peptide.
-    ///  * `charge` - An optional vector of charge states for each peptide.
-    ///  * `nce` - An optional vector of nominal collision energies for each peptide.
-    ///  * `instrument` - An optional vector of instrument names for each peptide.
+    /// * `peptide_sequences` - A slice of `Arc<[u8]>` containing each peptide sequence.
+    /// * `mods` - A slice of `Arc<[u8]>` with modifications for each peptide.
+    /// * `mod_sites` - A slice of `Arc<[u8]>` representing modification sites per peptide.
+    /// * `charges` - Optional vector of charge states.
+    /// * `nces` - Optional vector of normalized collision energies.
+    /// * `instruments` - Optional vector of instrument names as `Arc<[u8]>`.
     ///
     /// # Returns
-    ///    A vector of predicted retention times.
+    /// A `PredictionResult` containing either RT, CCS, or MS2 predictions.
     fn predict(
         &self,
-        peptide_sequences: &Vec<&str>,
-        mods: &Vec<&str>,
-        mod_sites: &Vec<&str>,
-        charge: Option<Vec<i32>>,
-        nce: Option<Vec<i32>>,
-        instrument: Option<&Vec<&str>>,
+        peptide_sequences: &[Arc<[u8]>],
+        mods: &[Arc<[u8]>],
+        mod_sites: &[Arc<[u8]>],
+        charges: Option<Vec<i32>>,
+        nces: Option<Vec<i32>>,
+        instruments: Option<Vec<Option<Arc<[u8]>>>>,
     ) -> Result<PredictionResult> {
-        // Encode the batch of peptides
         let input_tensor = self
-            .encode_peptides(peptide_sequences, mods, mod_sites, charge, nce, instrument.cloned())?
+            .encode_peptides(
+                peptide_sequences,
+                mods,
+                mod_sites,
+                charges,
+                nces,
+                instruments,
+            )?
             .to_device(self.get_device())?;
 
-        // Forward pass through the model
         let output = self.forward(&input_tensor)?;
 
         match self.property_type() {
@@ -268,7 +284,6 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             }
             PropertyType::MS2 => {
                 let out = self.process_predictions(&output, self.get_min_pred_intensity())?;
-                // Each prediction per peptide is a vector of vectors of f32, i.e. Number of fragment ions by number of ion types ordered as b_z1, b_z2, y_z1, y_z2, b_modloss_z1, b_modloss_z2, y_modloss_z1, y_modloss_z2
                 let predictions: Vec<Vec<Vec<f32>>> = out.to_vec3()?;
                 Ok(PredictionResult::MS2Result(predictions))
             }
@@ -282,31 +297,40 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// Encode peptide sequence (plus modifications) into a tensor.
     fn encode_peptide(
         &self,
-        peptide_sequence: &str,
-        mods: &str,
-        mod_sites: &str,
+        peptide_sequence: &Arc<[u8]>,
+        mods: &Arc<[u8]>,
+        mod_sites: &Arc<[u8]>,
         charge: Option<i32>,
         nce: Option<i32>,
-        instrument: Option<&str>,
+        instrument: Option<&Arc<[u8]>>,
     ) -> Result<Tensor> {
         let device = self.get_device();
         let mod_feature_size = self.get_mod_element_count();
         let mod_to_feature = self.get_mod_to_feature();
 
-        log::trace!("[ModelInterface::encode_peptide] peptide_sequence: {} | mods: {} | mod_sites: {} | charge: {:?} | nce: {:?} | instrument: {:?}", peptide_sequence, mods, mod_sites, charge, nce, instrument);
+        log::trace!(
+            "[ModelInterface::encode_peptide] peptide_sequence: {:?} | mods: {:?} | mod_sites: {:?} | charge: {:?} | nce: {:?} | instrument: {:?}",
+            peptide_sequence, mods, mod_sites, charge, nce, instrument
+        );
 
-        let aa_tensor = aa_indices_tensor(peptide_sequence, device)?;
-
+        let aa_tensor = aa_indices_tensor_from_arc(peptide_sequence, device)?;
         let (batch_size, seq_len, _) = aa_tensor.shape().dims3()?;
 
-        let mod_names: Vec<&str> = mods.split(';').filter(|s| !s.is_empty()).collect();
-        let mod_indices: Vec<usize> = mod_sites
+        let mod_names: Vec<Arc<[u8]>> = std::str::from_utf8(mods)
+            .unwrap_or("")
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| Arc::from(s.as_bytes().to_vec().into_boxed_slice()))
+            .collect();
+
+        let mod_indices: Vec<usize> = std::str::from_utf8(mod_sites)
+            .unwrap_or("")
             .split(';')
             .filter(|s| !s.is_empty())
             .map(|s| s.parse::<usize>().unwrap())
             .collect();
 
-        let mod_tensor = get_mod_features_from_parsed(
+        let mod_tensor = get_mod_features_from_parsed_arc(
             &mod_names,
             &mod_indices,
             seq_len,
@@ -338,7 +362,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         }
 
         if let Some(instr) = instrument {
-            let instr_idx = parse_instrument_index(instr) as u32;
+            let instr_str = std::str::from_utf8(instr).unwrap_or("");
+            let instr_idx = parse_instrument_index(instr_str) as u32;
             let instr_tensor =
                 Tensor::from_slice(&vec![instr_idx; seq_len], &[batch_size, seq_len, 1], device)?
                     .to_dtype(DType::F32)?;
@@ -349,7 +374,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             let output = features.remove(0);
             let (mean, min, max) = get_tensor_stats(&output)?;
             if !mean.is_finite() || !min.is_finite() || !max.is_finite() {
-                log::error!("For Peptide = {peptide_sequence} encode_peptides produced non-finite tensor stats: mean={mean}, min={min}, max={max}");
+                log::error!("For Peptide = {:?} encode_peptides produced non-finite tensor stats: mean={mean}, min={min}, max={max}", peptide_sequence);
                 anyhow::bail!("Non-finite values found in peptide encoding output.");
             }
             Ok(output)
@@ -357,7 +382,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             let output = Tensor::cat(&features, 2)?;
             let (mean, min, max) = get_tensor_stats(&output)?;
             if !mean.is_finite() || !min.is_finite() || !max.is_finite() {
-                log::error!("For Peptide = {peptide_sequence} encode_peptides produced non-finite tensor stats: mean={mean}, min={min}, max={max}");
+                log::error!("For Peptide = {:?} encode_peptides produced non-finite tensor stats: mean={mean}, min={min}, max={max}", peptide_sequence);
                 anyhow::bail!("Non-finite values found in peptide encoding output.");
             }
             Ok(output)
@@ -367,12 +392,12 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// Encode a batch of peptide sequences into a tensor
     fn encode_peptides(
         &self,
-        peptide_sequences: &Vec<&str>,
-        mods: &Vec<&str>,
-        mod_sites: &Vec<&str>,
+        peptide_sequences: &[Arc<[u8]>],
+        mods: &[Arc<[u8]>],
+        mod_sites: &[Arc<[u8]>],
         charges: Option<Vec<i32>>,
         nces: Option<Vec<i32>>,
-        instruments: Option<Vec<&str>,>,
+        instruments: Option<Vec<Option<Arc<[u8]>>>>,
     ) -> Result<Tensor> {
         let len = peptide_sequences.len();
 
@@ -385,14 +410,14 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     &mod_sites[i],
                     charges.as_ref().map(|v| v[i]),
                     nces.as_ref().map(|v| v[i]),
-                    instruments.as_ref().map(|v| v[i]),
+                    instruments.as_ref().and_then(|v| v[i].as_ref()),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
 
         if tensors.is_empty() {
             return Err(anyhow::anyhow!(
-                "Encoding batch of peptides failed, the resulting tesnor batch is empty."
+                "Encoding batch of peptides failed, the resulting tensor batch is empty."
             ));
         }
 
@@ -402,7 +427,6 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             .max()
             .unwrap_or(0);
 
-        // Consistency check for feature dimension
         let expected_feat_dim = tensors
             .get(0)
             .ok_or_else(|| anyhow::anyhow!("Empty input batch"))?
@@ -415,7 +439,6 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             .map(|t| {
                 let (_, seq_len, feat_dim) = t.shape().dims3()?;
 
-                // Check that all tensors have the same feature dimension
                 if feat_dim != expected_feat_dim {
                     return Err(anyhow::anyhow!(
                         "Inconsistent feature dim: expected {}, got {}",
@@ -425,7 +448,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 }
 
                 if seq_len < max_len {
-                    let pad = Tensor::zeros(&[1, max_len - seq_len, feat_dim], t.dtype(), t.device())?;
+                    let pad =
+                        Tensor::zeros(&[1, max_len - seq_len, feat_dim], t.dtype(), t.device())?;
                     Ok(Tensor::cat(&[&t, &pad], 1)?)
                 } else {
                     Ok(t)
@@ -495,7 +519,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             recalls: vec![],
             accuracies: vec![],
         };
-        
+
         let mut step_idx = 0;
         let mut val_step_idx = 0;
 
@@ -505,10 +529,10 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         };
         let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
         let mut lr_scheduler = CosineWithWarmup::new(
-            learning_rate, 
-            warmup_steps, 
-            total_steps, 
-            0.5 // one full cosine cycle
+            learning_rate,
+            warmup_steps,
+            total_steps,
+            0.5, // one full cosine cycle
         );
 
         let mut best_val_loss = f32::INFINITY;
@@ -543,13 +567,15 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         PropertyType::CCS => {
                             let tol: Vec<f32> = targets.iter().map(|t| t * 0.02).collect();
                             Some(Metrics::accuracy_dynamic(&predictions, &targets, &tol))
-                        }, // is predicted CCS within 2% of target CCS?
+                        } // is predicted CCS within 2% of target CCS?
                         _ => None,
                     };
-                    
+
                     step_metrics.epochs.push(epoch);
                     step_metrics.steps.push(step_idx);
-                    step_metrics.learning_rates.push(lr_scheduler.get_last_lr() as f64);
+                    step_metrics
+                        .learning_rates
+                        .push(lr_scheduler.get_last_lr() as f64);
                     step_metrics.losses.push(loss_val);
                     step_metrics.phases.push(TrainingPhase::Train);
                     step_metrics.accuracies.push(acc);
@@ -583,23 +609,26 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     .par_chunks(validation_batch_size)
                     .enumerate()
                     .map(|(idx, batch_data)| {
-                        let (input_val, target_val) = self.prepare_batch_inputs(batch_data, &modifications)?;
+                        let (input_val, target_val) =
+                            self.prepare_batch_inputs(batch_data, &modifications)?;
                         let predicted = self.forward(&input_val)?;
                         let val_loss = candle_nn::loss::mse(&predicted, &target_val)?;
                         let loss_val = val_loss.to_vec0::<f32>()?;
-                
+
                         let predictions = predicted.to_vec1::<f32>()?;
                         let targets = target_val.to_vec1::<f32>()?;
-                
+
                         let acc = match self.property_type() {
-                            PropertyType::RT => Some(Metrics::accuracy(&predictions, &targets, 0.5)),
+                            PropertyType::RT => {
+                                Some(Metrics::accuracy(&predictions, &targets, 0.5))
+                            }
                             PropertyType::CCS => {
                                 let tol: Vec<f32> = targets.iter().map(|t| t * 0.02).collect();
                                 Some(Metrics::accuracy_dynamic(&predictions, &targets, &tol))
-                            },
+                            }
                             _ => None,
                         };
-                
+
                         Ok((loss_val, idx, lr_scheduler.get_last_lr(), acc))
                     })
                     .collect::<Result<_>>()?;
@@ -616,7 +645,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 }
                 val_step_idx += val_results.len();
 
-                let val_losses: Vec<f32> = val_results.iter().map(|(loss, _, _, _)| *loss).collect();
+                let val_losses: Vec<f32> =
+                    val_results.iter().map(|(loss, _, _, _)| *loss).collect();
                 let (avg_val_loss, std_val_loss): (f32, f32) = compute_loss_stats(&val_losses);
 
                 epoch_losses.push((
@@ -652,7 +682,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     let checkpoint_path = format!(
                         "redeem_{}_ckpt_model_epoch_{}.safetensors",
                         self.get_model_arch(),
-                        epoch- 1
+                        epoch - 1
                     );
                     // Check if the prior checkpoint exists, if it does delete it
                     if PathBuf::from(&checkpoint_path).exists() {
@@ -677,7 +707,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 let checkpoint_path = format!(
                     "redeem_{}_ckpt_model_epoch_{}.safetensors",
                     self.get_model_arch(),
-                    epoch- 1
+                    epoch - 1
                 );
                 // Check if the prior checkpoint exists, if it does delete it
                 if PathBuf::from(&checkpoint_path).exists() {
@@ -871,6 +901,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         todo!()
     }
 
+    /// Perform inference over a batch of peptides.
     fn inference(
         &self,
         inference_data: &Vec<PeptideData>,
@@ -887,45 +918,44 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             inference_data.len(),
             num_batches
         );
-    
+
         let progress = Progress::new(inference_data.len(), "[inference] Batch:");
         let mut result: Vec<Option<PeptideData>> = vec![None; inference_data.len()];
-    
+
         inference_data
             .par_chunks(batch_size)
             .enumerate()
             .map(|(batch_idx, batch_data)| {
                 let start_idx = batch_idx * batch_size;
                 let batch: PeptideBatchData = batch_data.into();
-    
-                let naked_sequences = batch.naked_sequence_strs();
-                let mods = batch.mods_strs();
-                let mod_sites = batch.mod_sites_strs();
-    
+
+                let naked_sequences = &batch.naked_sequence;
+                let mods = &batch.mods;
+                let mod_sites = &batch.mod_sites;
+
                 let charges = if batch.charges.iter().all(|c| c.is_some()) {
                     Some(batch.charges.iter().map(|c| c.unwrap()).collect::<Vec<_>>())
                 } else {
                     None
                 };
-    
+
                 let nces = if batch.nces.iter().all(|n| n.is_some()) {
                     Some(batch.nces.iter().map(|n| n.unwrap()).collect::<Vec<_>>())
                 } else {
                     None
                 };
-    
+
                 let instruments = if batch.instruments.iter().all(|i| i.is_some()) {
-                    let flat: Vec<&str> = batch.instrument_strs().into_iter().map(|opt| opt.unwrap()).collect();
-                    Some(flat)
+                    Some(batch.instruments.clone())
                 } else {
                     None
                 };
-    
+
                 let input_tensor = self
-                    .encode_peptides(&naked_sequences, &mods, &mod_sites, charges, nces, instruments)?
+                    .encode_peptides(naked_sequences, mods, mod_sites, charges, nces, instruments)?
                     .to_device(self.get_device())?;
                 let output = self.forward(&input_tensor)?;
-    
+
                 match self.property_type() {
                     PropertyType::RT | PropertyType::CCS => {
                         let predictions = output.to_vec1()?;
@@ -938,7 +968,9 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                                     PropertyType::RT => {
                                         peptide.retention_time = Some(match rt_norm {
                                             RTNormalization::ZScore(mean, std) => pred * std + mean,
-                                            RTNormalization::MinMax(min, max) => pred * (max - min) + min,
+                                            RTNormalization::MinMax(min, max) => {
+                                                pred * (max - min) + min
+                                            }
                                             RTNormalization::None => pred,
                                         });
                                     }
@@ -962,27 +994,27 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 result[idx] = Some(peptide);
                 progress.inc();
             });
-    
+
         progress.finish();
         Ok(result.into_iter().flatten().collect())
     }
-    
 
     /// Extract encoded input and target tensor for a batch of peptides.
     fn prepare_batch_inputs(
         &self,
         batch_data: &[PeptideData],
-        _modifications: &HashMap<(String, Option<char>), crate::utils::peptdeep_utils::ModificationMap>,
+        _modifications: &HashMap<
+            (String, Option<char>),
+            crate::utils::peptdeep_utils::ModificationMap,
+        >,
     ) -> Result<(Tensor, Tensor)> {
         use rayon::prelude::*;
 
         let batch: PeptideBatchData = batch_data.into();
 
-        let naked_sequences = batch.naked_sequence_strs();
-
-        let mods = batch.mods_strs();
-
-        let mod_sites = batch.mod_sites_strs();
+        let naked_sequences = &batch.naked_sequence;
+        let mods = &batch.mods;
+        let mod_sites = &batch.mod_sites;
 
         let charges = if batch.charges.iter().all(|c| c.is_some()) {
             Some(batch.charges.iter().map(|c| c.unwrap()).collect::<Vec<_>>())
@@ -997,19 +1029,13 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         };
 
         let instruments = if batch.instruments.iter().all(|i| i.is_some()) {
-            let flat: Vec<&str> = batch
-                .instrument_strs()
-                .into_iter()
-                .map(|opt| opt.unwrap())
-                .collect();
-            Some(flat)
+            Some(batch.instruments.clone())
         } else {
             None
         };
-        
 
         let input_batch = self
-            .encode_peptides(&naked_sequences, &mods, &mod_sites, charges, nces, instruments)?
+            .encode_peptides(naked_sequences, mods, mod_sites, charges, nces, instruments)?
             .to_device(self.get_device())?;
 
         let target_values: Vec<f32> = match self.property_type() {
@@ -1048,7 +1074,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
     fn get_mod_element_count(&self) -> usize;
 
-    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>>;
+    fn get_mod_to_feature(&self) -> &HashMap<Arc<[u8]>, Vec<f32>>;
 
     fn get_min_pred_intensity(&self) -> f32;
 
@@ -1105,8 +1131,6 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         Ok(final_predicts)
     }
 }
-
-
 
 /// Parameters for the `predict` method of a `ModelInterface` implementation.
 #[derive(Clone)]

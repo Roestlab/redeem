@@ -18,28 +18,35 @@ use std::{
 fn run_prediction(model: &mut MS2BertModel, batch_data: &[PeptideData]) -> Result<()> {
     let batch = PeptideBatchData::from(batch_data);
 
-    let peptides = batch.naked_sequence_strs();
-    let mods = batch.mods_strs();
-    let mod_sites = batch.mod_sites_strs();
-
-    let charges = if batch.charges.iter().all(|c| c.is_some()) {
-        Some(batch.charges.iter().map(|c| c.unwrap()).collect())
-    } else {
-        None
-    };
-    let nces = if batch.nces.iter().all(|n| n.is_some()) {
-        Some(batch.nces.iter().map(|n| n.unwrap()).collect())
-    } else {
-        None
-    };
     let instruments = if batch.instruments.iter().all(|i| i.is_some()) {
-        let flat: Vec<&str> = batch.instrument_strs().into_iter().map(|opt| opt.unwrap()).collect();
-        Some(flat)
+        Some(
+            batch
+                .instruments
+                .iter()
+                .map(|opt| opt.as_ref().map(|a| Arc::clone(a)))
+                .collect::<Vec<_>>(),
+        )
     } else {
         None
     };
+    
 
-    let predictions = model.predict(&peptides, &mods, &mod_sites, charges, nces, instruments.as_ref())?;
+    let predictions = model.predict(
+        &batch.naked_sequence,
+        &batch.mods,
+        &batch.mod_sites,
+        if batch.charges.iter().all(|c| c.is_some()) {
+            Some(batch.charges.iter().map(|c| c.unwrap()).collect())
+        } else {
+            None
+        },
+        if batch.nces.iter().all(|n| n.is_some()) {
+            Some(batch.nces.iter().map(|n| n.unwrap()).collect())
+        } else {
+            None
+        },
+        instruments,
+    )?;
 
     if let PredictionResult::MS2Result(ms2_preds) = predictions {
         let total_error: f32 = ms2_preds
