@@ -8,7 +8,7 @@ use candle_nn::VarMap;
 use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
 use crate::models::rt_cnn_transformer_model::RTCNNTFModel;
-use crate::utils::data_handling::PeptideData;
+use crate::utils::data_handling::{PeptideData, RTNormalization};
 use crate::utils::stats::TrainingStepMetrics;
 use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
@@ -59,7 +59,7 @@ impl RTModelWrapper {
         self.model.fine_tune(training_data, modifications, batch_size, learning_rate, epochs)
     }
 
-    pub fn inference(&mut self, inference_data: &Vec<PeptideData>, batch_size: usize, modifications: HashMap<(String, Option<char>), ModificationMap>, rt_norm_params: Option<(f32, f32)>,) -> Result<Vec<PeptideData>> {
+    pub fn inference(&mut self, inference_data: &Vec<PeptideData>, batch_size: usize, modifications: HashMap<(String, Option<char>), ModificationMap>, rt_norm_params: RTNormalization,) -> Result<Vec<PeptideData>> {
         self.model.inference(inference_data, batch_size, modifications, rt_norm_params)
     }
 

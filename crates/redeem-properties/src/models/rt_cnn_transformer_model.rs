@@ -54,7 +54,7 @@ impl ModelInterface for RTCNNTFModel {
         let rt_encoder = Encoder26aaModCnnTransformerAttnSum::new(
             &varbuilder.pp("rt_encoder"),
             8,     // mod_hidden_dim
-            140,   // hidden_dim
+            128,   // hidden_dim
             256,   // ff_dim
             4,     // num_heads
             2,     // num_layers
@@ -64,7 +64,7 @@ impl ModelInterface for RTCNNTFModel {
         )?;
 
         log::trace!("[RTCNNTFModel] Initializing rt_decoder");
-        let rt_decoder = DecoderLinear::new(140, 1, &varbuilder.pp("rt_decoder"))?;
+        let rt_decoder = DecoderLinear::new(128, 1, &varbuilder.pp("rt_decoder"))?;
         let constants = ModelConstants::default();
         let mod_to_feature = load_mod_to_feature(&constants)?;
 
@@ -107,7 +107,7 @@ impl ModelInterface for RTCNNTFModel {
         let rt_encoder = Encoder26aaModCnnTransformerAttnSum::from_varstore(
             &var_store,
             8,      // mod_hidden_dim
-            140,    // hidden_dim
+            128,    // hidden_dim
             256,    // ff_dim
             4,      // num_heads
             2,      // num_layers
@@ -132,7 +132,7 @@ impl ModelInterface for RTCNNTFModel {
 
         let rt_decoder = DecoderLinear::from_varstore(
             &var_store,
-            140,
+            128,
             1,
             vec!["rt_decoder.nn.0.weight", "rt_decoder.nn.1.weight", "rt_decoder.nn.2.weight"],
             vec!["rt_decoder.nn.0.bias", "rt_decoder.nn.2.bias"]
@@ -156,33 +156,13 @@ impl ModelInterface for RTCNNTFModel {
         let (mean, min, max) = get_tensor_stats(&aa_indices_out)?;
         log::debug!("[RTCNNTFModel] aa_indices_out stats - min: {min}, max: {max}, mean: {mean}");
         let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;    
-         
-        if mod_x_out.shape().elem_count() == 0  {
-            log::error!("[RTCNNTFModel] mod_x_out is empty! shape: {:?}", mod_x_out.shape());
-        } else {
-            match get_tensor_stats(&mod_x_out) {
-                Ok((mean, min, max)) => {
-                    log::debug!("[RTCNNTFModel] mod_x_out stats - min: {min}, max: {max}, mean: {mean}");
-                }
-                Err(e) => {
-                    log::error!("[RTCNNTFModel] Failed to compute stats for mod_x_out: {:?}", e);
-                }
-            }
-        }        
-        
-        log::trace!("[RTCNNTFModel] aa_indices_out: {:?}, mod_x_out: {:?}", aa_indices_out, mod_x_out);
+
         let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
-        log::trace!("[RTCNNTFModel] x.shape after rt_encoder: {:?}", x.shape());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[RTCNNTFModel] rt_encoder output stats - min: {min}, max: {max}, mean: {mean}");
+        
         let x = self.dropout.forward(&x, self.is_training)?;
-        log::trace!("[RTCNNTFModel] x.shape after dropout: {:?}", x.shape());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[RTCNNTFModel] dropout output stats - min: {min}, max: {max}, mean: {mean}");
+        
         let x = self.rt_decoder.forward(&x)?;
-        log::trace!("[RTCNNTFModel] x.shape after rt_decoder: {:?}", x.shape());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[RTCNNTFModel] rt_decoder output stats - min: {min}, max: {max}, mean: {mean}");
+
         Ok(x.squeeze(1)?)
     }
 

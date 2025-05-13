@@ -124,17 +124,13 @@ impl ModelInterface for RTCNNLSTMModel {
         let (mean, min, max) = get_tensor_stats(&aa_indices_out)?;
         log::debug!("[RTCNNLSTMModel] aa_indices_out stats - min: {min}, max: {max}, mean: {mean}");
         let mod_x_out = xs.i((.., .., 1..1 + MOD_FEATURE_SIZE))?;
-        let (mean, min, max) = get_tensor_stats(&mod_x_out)?;
-        log::debug!("[RTCNNLSTMModel] mod_x_out stats - min: {min}, max: {max}, mean: {mean}");
+        
         let x = self.rt_encoder.forward(&aa_indices_out, &mod_x_out)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[RTCNNLSTMModel] x stats - min: {min}, max: {max}, mean: {mean}");
+        
         let x = self.dropout.forward(&x, self.is_training)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[RTCNNLSTMModel] x after dropout stats - min: {min}, max: {max}, mean: {mean}");
+        
         let x = self.rt_decoder.forward(&x)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[RTCNNLSTMModel] x after decoder stats - min: {min}, max: {max}, mean: {mean}");
+        
         let result = x.squeeze(1)?;
 
         Ok(result)
