@@ -3,7 +3,8 @@ use std::path::Path;
 use std::io::BufReader;
 use anyhow::{Result, Context};
 use csv::ReaderBuilder;
-use redeem_properties::utils::data_handling::PeptideData;
+use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
+
 
 /// Load peptide training data from a CSV or TSV file and optionally normalize RT.
 ///
@@ -12,8 +13,8 @@ pub fn load_peptide_data<P: AsRef<Path>>(
     path: P,
     nce: Option<i32>,
     instrument: Option<String>,
-    normalize_rt: bool,
-) -> Result<(Vec<PeptideData>, Option<(f32, f32)>)> {
+    normalize_rt: Option<String>,
+) -> Result<(Vec<PeptideData>, RTNormalization)> {
     let file = File::open(&path)
         .with_context(|| format!("Failed to open file: {:?}", path.as_ref()))?;
     let reader = BufReader::new(file);
@@ -83,28 +84,33 @@ pub fn load_peptide_data<P: AsRef<Path>>(
             retention_time,
             ion_mobility,
             ccs,
-            ms2_intensities: None
+            ms2_intensities: None,
         });
     }
 
-    if normalize_rt && !rt_values.is_empty() {
-        let mean = rt_values.iter().copied().sum::<f32>() / rt_values.len() as f32;
-        let std = (rt_values
-            .iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f32>()
-            / rt_values.len() as f32)
-            .sqrt();
-
-        for peptide in &mut peptides {
-            if let Some(rt) = peptide.retention_time.as_mut() {
-                *rt = (*rt - mean) / std;
+    match RTNormalization::from_str(normalize_rt) {
+        RTNormalization::ZScore(_, _) if !rt_values.is_empty() => {
+            let mean = rt_values.iter().copied().sum::<f32>() / rt_values.len() as f32;
+            let std = (rt_values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / rt_values.len() as f32).sqrt();
+            for peptide in &mut peptides {
+                if let Some(rt) = peptide.retention_time.as_mut() {
+                    *rt = (*rt - mean) / std;
+                }
             }
+            Ok((peptides, RTNormalization::ZScore(mean, std)))
         }
-
-        Ok((peptides, Some((mean, std))))
-    } else {
-        Ok((peptides, None))
+        RTNormalization::MinMax(_, _) if !rt_values.is_empty() => {
+            let min = *rt_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let max = *rt_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let range = max - min;
+            for peptide in &mut peptides {
+                if let Some(rt) = peptide.retention_time.as_mut() {
+                    *rt = (*rt - min) / range;
+                }
+            }
+            Ok((peptides, RTNormalization::MinMax(min, max)))
+        }
+        _ => Ok((peptides, RTNormalization::None))
     }
 }
 

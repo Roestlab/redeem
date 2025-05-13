@@ -1,4 +1,23 @@
 
+
+/// Type of RT normalization used
+#[derive(Debug, Clone, Copy)]
+pub enum RTNormalization {
+    ZScore(f32, f32),     // mean, std
+    MinMax(f32, f32),     // min, max
+    None,
+}
+
+impl RTNormalization {
+    pub fn from_str(norm: Option<String>) -> Self {
+        match norm.as_deref() {
+            Some("z_score") => RTNormalization::ZScore(0.0, 0.0),
+            Some("min_max") => RTNormalization::MinMax(0.0, 0.0),
+            _ => RTNormalization::None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PeptideData {
     pub sequence: String,

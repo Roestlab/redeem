@@ -6,7 +6,7 @@ use redeem_properties::models::{
     ccs_cnn_lstm_model::CCSCNNLSTMModel, ccs_cnn_tf_model::CCSCNNTFModel,
     rt_cnn_lstm_model::RTCNNLSTMModel, rt_cnn_transformer_model::RTCNNTFModel,
 };
-use redeem_properties::utils::data_handling::PeptideData;
+use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
 use redeem_properties::utils::peptdeep_utils::load_modifications;
 use redeem_properties::utils::utils::get_device;
 use report_builder::{
@@ -29,7 +29,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         &config.train_data,
         Some(config.nce),
         Some(config.instrument.clone()),
-        true,
+        Some(config.rt_normalization.clone().unwrap()),
     )?;
     log::info!("Loaded {} training peptides", train_peptides.len());
 
@@ -39,7 +39,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
             val_path,
             Some(config.nce),
             Some(config.instrument.clone()),
-            true,
+            Some(config.rt_normalization.clone().unwrap()),
         )
         .context("Failed to load validation data")?;
         (Some(peptides), Some(norm))
@@ -196,7 +196,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         overview_section.add_plot(acc_plot);
 
         // Inference scatter plot
-        let val_peptides: Vec<PeptideData> = sample_peptides(&val_peptides.as_ref().unwrap(), 1000);
+        let val_peptides: Vec<PeptideData> = sample_peptides(&val_peptides.as_ref().unwrap(), 5000);
         let inference_results: Vec<PeptideData> =
             model.inference(&val_peptides, config.batch_size, modifications, norm_factor)?;
         let (true_rt, pred_rt): (Vec<f64>, Vec<f64>) = val_peptides
@@ -205,14 +205,18 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
             .filter_map(|(true_pep, pred_pep)| {
                 match (true_pep.retention_time, pred_pep.retention_time) {
                     (Some(t), Some(p)) => {
-                        let t_denorm = t as f64 * norm_factor.unwrap().1 as f64
-                            + norm_factor.unwrap().0 as f64;
+                        let t_denorm = match norm_factor {
+                            RTNormalization::ZScore(mean, std) => t as f64 * std as f64 + mean as f64,
+                            RTNormalization::MinMax(min, range) => t as f64 * range as f64 + min as f64,
+                            RTNormalization::None => t as f64,
+                        };
                         Some((t_denorm, p as f64))
                     }
                     _ => None,
                 }
             })
             .unzip();
+        
 
         let scatter_plot = plot_scatter(
             &vec![true_rt.clone()],

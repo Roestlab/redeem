@@ -1,5 +1,10 @@
 use anyhow::{Context, Result};
-use redeem_properties::utils::data_handling::PeptideData;
+use redeem_properties::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
+use redeem_properties::models::ccs_cnn_tf_model::CCSCNNTFModel;
+use redeem_properties::models::ccs_model::load_collision_cross_section_model;
+use redeem_properties::models::rt_cnn_lstm_model::RTCNNLSTMModel;
+use redeem_properties::models::model_interface::ModelInterface;
+use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
 use redeem_properties::utils::peptdeep_utils::load_modifications;
 use redeem_properties::utils::utils::get_device;
 use redeem_properties::models::rt_model::load_retention_time_model;
@@ -12,19 +17,52 @@ use crate::properties::inference::output::write_peptide_data;
 pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
 
     // Load inference data
-    let (inference_data, norm_factor) = load_peptide_data(&config.inference_data, Some(config.nce), Some(config.instrument.clone()), true)?;
+    let (inference_data, norm_factor) = load_peptide_data(&config.inference_data, Some(config.nce), Some(config.instrument.clone()), Some("min_max".to_string()))?;
     log::info!("Loaded {} peptides", inference_data.len());
 
     // Dispatch model training based on architecture
     let model_arch = config.model_arch.as_str();
     let device = get_device(&config.device)?;
 
-    let mut model = load_retention_time_model(
-        &config.model_path,
-        None,
-        &config.model_arch,
-        device.clone(),
-    )?;
+    let mut model: Box<dyn ModelInterface + Send + Sync> = match model_arch {
+        "rt_cnn_lstm" => Box::new(RTCNNLSTMModel::new(
+            &config.model_path,
+            None,
+            0,
+            8,
+            4,
+            true,
+            device.clone(),
+        )?),
+        "rt_cnn_tf" => Box::new(RTCNNLSTMModel::new(
+            &config.model_path,
+            None,
+            0,
+            8,
+            4,
+            true,
+            device.clone(),
+        )?),
+        "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(
+                &config.model_path,
+                None,
+                0,
+                8,
+                4,
+                true,
+                device.clone(),
+                )?),
+        "ccs_cnn_tf" => Box::new(CCSCNNTFModel::new(
+            &config.model_path,
+            None,
+            0,
+            8,
+            4,
+            true,
+            device.clone(),
+        )?),
+        _ => return Err(anyhow::anyhow!("Unsupported RT model architecture: {}", model_arch)),
+    };
 
     let modifications = load_modifications().context("Failed to load modifications")?;
 
