@@ -11,6 +11,7 @@ use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
 /// Returns both the peptide vector and optionally (mean, std) of retention times.
 pub fn load_peptide_data<P: AsRef<Path>>(
     path: P,
+    model_arch: &str,
     nce: Option<i32>,
     instrument: Option<String>,
     normalize_rt: Option<String>,
@@ -43,9 +44,12 @@ pub fn load_peptide_data<P: AsRef<Path>>(
             .get(headers.iter().position(|h| h.to_lowercase() == "retention time").unwrap_or(3))
             .and_then(|s| s.parse::<f32>().ok());
 
-        let charge = record
-            .get(headers.iter().position(|h| h.to_lowercase() == "charge").unwrap_or(usize::MAX))
-            .and_then(|s| s.parse::<i32>().ok());
+        let charge = match model_arch {
+            "rt_cnn_lstm" | "rt_cnn_tf" => None,
+            _ => record
+                .get(headers.iter().position(|h| h.to_lowercase() == "charge").unwrap_or(usize::MAX))
+                .and_then(|s| s.parse::<i32>().ok()),
+        };
 
         let precursor_mass = record
             .get(headers.iter().position(|h| h.to_lowercase() == "precursor_mass").unwrap_or(usize::MAX))
@@ -59,17 +63,24 @@ pub fn load_peptide_data<P: AsRef<Path>>(
             .get(headers.iter().position(|h| h.to_lowercase() == "ccs").unwrap_or(usize::MAX))
             .and_then(|s| s.parse::<f32>().ok());
 
-        let in_nce = nce.or_else(|| {
-            record
-                .get(headers.iter().position(|h| h.to_lowercase() == "nce").unwrap_or(usize::MAX))
-                .and_then(|s| s.parse::<i32>().ok())
-        });
+        let in_nce = match model_arch {
+            "ms2_bert" => nce.or_else(|| {
+                record
+                    .get(headers.iter().position(|h| h.to_lowercase() == "nce").unwrap_or(usize::MAX))
+                    .and_then(|s| s.parse::<i32>().ok())
+            }),
+            _ => None
+            
+        };
 
-        let in_instrument = instrument.clone().or_else(|| {
-            record
-                .get(headers.iter().position(|h| h.to_lowercase() == "instrument").unwrap_or(usize::MAX))
-                .map(|s| s.to_string())
-        });
+        let in_instrument = match model_arch {
+            "ms2_bert" => instrument.clone().or_else(|| {
+                record
+                    .get(headers.iter().position(|h| h.to_lowercase() == "instrument").unwrap_or(usize::MAX))
+                    .map(|s| s.to_string())
+            }),
+            _ => None
+        };
 
         if let Some(rt) = retention_time {
             rt_values.push(rt);

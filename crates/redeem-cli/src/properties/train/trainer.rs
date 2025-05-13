@@ -27,6 +27,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
     // Load training data
     let (train_peptides, norm_factor) = load_peptide_data(
         &config.train_data,
+        &config.model_arch,
         Some(config.nce),
         Some(config.instrument.clone()),
         Some(config.rt_normalization.clone().unwrap()),
@@ -37,6 +38,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
     let (val_peptides, _val_norm_factor) = if let Some(ref val_path) = config.validation_data {
         let (peptides, norm) = load_peptide_data(
             val_path,
+            &config.model_arch,
             Some(config.nce),
             Some(config.instrument.clone()),
             Some(config.rt_normalization.clone().unwrap()),
