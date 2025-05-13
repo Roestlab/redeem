@@ -144,7 +144,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         config.learning_rate as f64,
         config.epochs,
         config.early_stopping_patience,
-    )?;
+    ).with_context(|| "Training failed: an error occurred during the model training process")?;
     log::info!("Training completed in {:?}", start_time.elapsed());
     model.save(&config.output_file)?;
     log::info!("Model saved to: {}", config.output_file);

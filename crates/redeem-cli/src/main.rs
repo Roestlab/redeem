@@ -164,20 +164,37 @@ fn handle_properties(matches: &ArgMatches) -> Result<()> {
         Some(("train", train_matches)) => {
             let config_path: &PathBuf = train_matches.get_one("config").unwrap();
             log::info!("[ReDeeM::Properties] Training from config: {:?}", config_path);
-            let params: PropertyTrainConfig = PropertyTrainConfig::from_arguments(config_path, train_matches)?;
-            let _ = trainer::run_training(&params);
-            Ok(())
+
+            let params: PropertyTrainConfig =
+                PropertyTrainConfig::from_arguments(config_path, train_matches)?;
+
+            match trainer::run_training(&params) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    log::error!("Training failed: {:#}", e);
+                    std::process::exit(1)
+                }
+            }
         },
         Some(("inference", inference_matches)) => {
             let config_path: &PathBuf = inference_matches.get_one("config").unwrap();
             log::info!("[ReDeeM::Properties] Inference using config: {:?}", config_path);
-            let params: PropertyInferenceConfig = PropertyInferenceConfig::from_arguments(config_path, inference_matches)?;
-            let _ = inference:: run_inference(&params);
-            Ok(())
+
+            let params: PropertyInferenceConfig =
+                PropertyInferenceConfig::from_arguments(config_path, inference_matches)?;
+
+            match inference::run_inference(&params) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    log::error!("Inference failed: {:#}", e);
+                    std::process::exit(1)
+                }
+            }
         }
         _ => unreachable!(),
     }
 }
+
 
 fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
