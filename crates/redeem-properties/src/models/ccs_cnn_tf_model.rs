@@ -57,7 +57,7 @@ impl ModelInterface for CCSCNNTFModel {
         let ccs_encoder = Encoder26aaModChargeCnnTransformerAttnSum::new(
             &varbuilder.pp("ccs_encoder"),
             8,     // mod_hidden_dim
-            140,   // hidden_dim
+            128,   // hidden_dim
             256,   // ff_dim
             4,     // num_heads
             2,     // num_layers
@@ -67,7 +67,7 @@ impl ModelInterface for CCSCNNTFModel {
         )?;
 
         log::trace!("[CCSCNNTFModel] Initializing ccs_decoder");
-        let ccs_decoder = DecoderLinear::new(141, 1, &varbuilder.pp("ccs_decoder"))?;
+        let ccs_decoder = DecoderLinear::new(129, 1, &varbuilder.pp("ccs_decoder"))?;
         let constants = ModelConstants::default();
         let mod_to_feature = load_mod_to_feature(&constants)?;
 
@@ -110,7 +110,7 @@ impl ModelInterface for CCSCNNTFModel {
         let ccs_encoder = Encoder26aaModChargeCnnTransformerAttnSum::from_varstore(
             &var_store,
             8,      // mod_hidden_dim
-            140,    // hidden_dim
+            128,    // hidden_dim
             256,    // ff_dim
             4,      // num_heads
             2,      // num_layers
@@ -135,7 +135,7 @@ impl ModelInterface for CCSCNNTFModel {
 
         let ccs_decoder = DecoderLinear::from_varstore(
             &var_store,
-            141,
+            129,
             1,
             vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
             vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"]
@@ -162,23 +162,23 @@ impl ModelInterface for CCSCNNTFModel {
         let start_charge = start_mod_x + MOD_FEATURE_SIZE;
 
         let aa_indices_out = xs.i((.., .., 0))?;
+        let (mean, min, max) = get_tensor_stats(&aa_indices_out)?;
+        log::debug!("[CCSCNNTFModel] aa_indices_out stats - min: {min}, max: {max}, mean: {mean}");
+        
         let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
         let charge_out = xs.i((.., 0..1, start_charge..start_charge + 1))?;
         let charge_out = charge_out.squeeze(2)?;         
         
         let x = self.ccs_encoder.forward(&aa_indices_out, &mod_x_out, &charge_out)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[CCSCNNTFModel] ccs_encoder output stats - min: {min}, max: {max}, mean: {mean}");
+       
 
         let x = self.dropout.forward(&x, self.is_training)?;
-        log::trace!("[CCSCNNTFModel] x.shape after dropout: {:?}", x.shape());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[CCSCNNTFModel] dropout output stats - min: {min}, max: {max}, mean: {mean}");
+        
+
+        let x = Tensor::cat(&[x, charge_out], 1)?;
 
         let x = self.ccs_decoder.forward(&x)?;
-        log::trace!("[CCSCNNTFModel] x.shape after ccs_decoder: {:?}", x.shape());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[CCSCNNTFModel] ccs_decoder output stats - min: {min}, max: {max}, mean: {mean}");
+        
         Ok(x.squeeze(1)?)
     }
 
