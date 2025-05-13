@@ -243,3 +243,34 @@ impl ModelInterface for CCSCNNTFModel {
 }
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::model_interface::ModelInterface;
+    use crate::models::ccs_cnn_tf_model::CCSCNNTFModel;
+    use candle_core::Device;
+    use std::path::PathBuf;
+
+
+    #[test]
+    fn test_encode_peptides() {
+        let device = Device::Cpu;
+        let model = Box::new(CCSCNNTFModel::new_untrained(device.clone()).unwrap());
+
+        let peptide_sequences = "AGHCEWQMKYR";
+        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let mod_sites = "0;4;8";
+        let charge = Some(2);
+        let nce = Some(20);
+        let instrument = Some("QE");
+
+        let result =
+            model.encode_peptide(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+
+        println!("{:?}", result);
+
+        // assert!(result.is_ok());
+        // let encoded_peptides = result.unwrap();
+        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+    }
+}

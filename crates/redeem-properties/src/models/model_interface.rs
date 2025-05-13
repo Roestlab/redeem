@@ -293,7 +293,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         let mod_feature_size = self.get_mod_element_count();
         let mod_to_feature = self.get_mod_to_feature();
 
-        log::trace!("[ModelInterface::encode_peptide] peptide_sequence: {}", peptide_sequence);
+        log::trace!("[ModelInterface::encode_peptide] peptide_sequence: {} | mods: {} | mod_sites: {} | charge: {:?} | nce: {:?} | instrument: {:?}", peptide_sequence, mods, mod_sites, charge, nce, instrument);
+        
         let aa_tensor = aa_indices_tensor(peptide_sequence, device)?;
 
         let (batch_size, seq_len, _) = aa_tensor.shape().dims3()?;
@@ -401,20 +402,36 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             .max()
             .unwrap_or(0);
 
+        // Consistency check for feature dimension
+        let expected_feat_dim = tensors
+            .get(0)
+            .ok_or_else(|| anyhow::anyhow!("Empty input batch"))?
+            .shape()
+            .dims3()?
+            .2;
+
         let padded = tensors
             .into_par_iter()
             .map(|t| {
                 let (_, seq_len, feat_dim) = t.shape().dims3()?;
+
+                // Check that all tensors have the same feature dimension
+                if feat_dim != expected_feat_dim {
+                    return Err(anyhow::anyhow!(
+                        "Inconsistent feature dim: expected {}, got {}",
+                        expected_feat_dim,
+                        feat_dim
+                    ));
+                }
+
                 if seq_len < max_len {
-                    let pad =
-                        Tensor::zeros(&[1, max_len - seq_len, feat_dim], t.dtype(), t.device())?;
-                    Tensor::cat(&[&t, &pad], 1)
+                    let pad = Tensor::zeros(&[1, max_len - seq_len, feat_dim], t.dtype(), t.device())?;
+                    Ok(Tensor::cat(&[&t, &pad], 1)?)
                 } else {
                     Ok(t)
                 }
             })
-            .map(|res| res.map_err(anyhow::Error::from))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
         Ok(Tensor::cat(&padded, 0)?)
     }

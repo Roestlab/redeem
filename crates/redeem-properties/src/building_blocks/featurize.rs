@@ -26,8 +26,12 @@ pub fn aa_indices_tensor(seq: &str, device: &Device) -> Result<Tensor> {
     let map = aa_index_map();
     let filtered: Vec<i64> = seq
         .chars()
-        .filter_map(|c| map.get(&c).copied())
-        .collect();
+        .map(|c| {
+            map.get(&c)
+                .copied()
+                .ok_or_else(|| anyhow!("Unknown amino acid character: '{}'", c))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut indices = vec![0i64]; // padding start
     indices.extend(filtered);
     indices.push(0); // padding end
@@ -43,6 +47,20 @@ pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor>
     let num_classes = AA_EMBEDDING_SIZE;
 
     let indices = aa_indices.to_vec2::<f32>()?;
+
+    for (i, row) in indices.iter().enumerate() {
+        for (j, val) in row.iter().enumerate() {
+            if !val.is_finite() || *val < 0.0 || *val > (AA_EMBEDDING_SIZE as f32) {
+                log::error!(
+                    "[aa_one_hot] Invalid index at batch {}, position {}: {}",
+                    i, j, val
+                );
+            }
+        }
+    }
+    
+
+
     let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
 
     one_hot_data

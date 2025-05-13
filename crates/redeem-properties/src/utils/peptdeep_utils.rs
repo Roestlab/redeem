@@ -343,12 +343,26 @@ pub fn extract_masses_and_indices(peptide: &str) -> Vec<(f64, usize)> {
 pub fn get_modification_indices(peptide: &str) -> String {
     let re = Regex::new(r"(\[.*?\]|\(UniMod:\d+\)|\([a-zA-Z]+\))").unwrap();
     let mut indices = Vec::new();
-    let mut offset = 1; // Offset by 1 for 0-based index
+    let mut offset = 0;
+    let mut aa_index = 0;
+    let mut i = 0;
 
-    for mat in re.find_iter(peptide) {
-        let index = mat.start().saturating_sub(offset);
-        indices.push(index.to_string());
-        offset += mat.end() - mat.start();
+    while i < peptide.len() {
+        let c = peptide[i..].chars().next().unwrap();
+
+        if c == '[' || c == '(' {
+            if let Some(mat) = re.find_at(peptide, i) {
+                if mat.start() == i {
+                    // If the modification is at the beginning (i == 0), it's on the N-term
+                    indices.push(aa_index.to_string());
+                    i = mat.end();
+                    continue;
+                }
+            }
+        }
+
+        aa_index += 1;
+        i += c.len_utf8();
     }
 
     indices.join(";")
@@ -403,25 +417,58 @@ pub fn extract_unimod_annotations(peptide: &str) -> Vec<(String, usize)> {
     let re_unimod = Regex::new(r"\(UniMod:(\d+)\)").unwrap();
     let mut results = Vec::new();
     let mut offset = 0;
+    let mut aa_index = 0;
     let mut idx = 0;
 
     while idx < peptide.len() {
         if let Some(mat) = re_unimod.find_at(peptide, idx) {
             if mat.start() == idx {
+                // UniMod annotation
                 let cap = re_unimod.captures(&peptide[idx..mat.end()]).unwrap();
                 let unimod_str = format!("UniMod:{}", &cap[1]);
-                let pos = idx - offset;
-                results.push((unimod_str, pos));
+                results.push((unimod_str, aa_index));
                 offset += mat.end() - mat.start();
                 idx = mat.end();
                 continue;
             }
         }
-        idx += peptide[idx..].chars().next().unwrap().len_utf8();
+
+        // Only increment aa_index on actual amino acid
+        let ch = peptide[idx..].chars().next().unwrap();
+        if ch.is_alphabetic() {
+            aa_index += 1;
+        }
+        idx += ch.len_utf8();
     }
 
     results
 }
+
+
+/// Extracts either mass shift or UniMod annotations from a peptide string,
+/// returning a vector of (mod_str, position).
+///
+/// Dispatches to `extract_mass_annotations` if it finds `[+mass]`,
+/// or to `extract_unimod_annotations` if it finds `(UniMod:id)`.
+///
+/// # Example
+/// ```
+/// let mass = extract_mod_annotations("AC[+57.0215]DE");
+/// assert_eq!(mass, vec![("57.0215".to_string(), 2)]);
+///
+/// let unimod = extract_mod_annotations("AC(UniMod:4)DE");
+/// assert_eq!(unimod, vec![("UniMod:4".to_string(), 2)]);
+/// ```
+pub fn extract_mod_annotations(peptide: &str) -> Vec<(String, usize)> {
+    if peptide.contains("[+") || peptide.contains("[-") {
+        extract_mass_annotations(peptide)
+    } else if peptide.contains("(UniMod:") {
+        extract_unimod_annotations(peptide)
+    } else {
+        Vec::new()
+    }
+}
+
 
 
 /// Attempts to look up a modification name from a map using the provided key and amino acid.
@@ -438,13 +485,14 @@ pub fn extract_unimod_annotations(peptide: &str) -> Vec<(String, usize)> {
 /// ```
 pub fn lookup_modification(
     key: String,
-    aa: char,
+    aa: Option<char>,
     map: &HashMap<(String, Option<char>), ModificationMap>,
 ) -> Option<String> {
-    map.get(&(key.clone(), Some(aa)))
+    map.get(&(key.clone(), aa))
         .or_else(|| map.get(&(key, None)))
         .map(|m| m.name.clone())
 }
+
 
 
 
@@ -484,20 +532,41 @@ pub fn get_modification_string(
     modification_map: &HashMap<(String, Option<char>), ModificationMap>,
 ) -> String {
     let naked_peptide = remove_mass_shift(peptide);
-    let mut found_mods = Vec::new();
 
-    for (key, pos) in extract_mass_annotations(peptide)
+    extract_mod_annotations(peptide)
         .into_iter()
-        .chain(extract_unimod_annotations(peptide))
-    {
-        let aa = naked_peptide.chars().nth(pos.saturating_sub(1)).unwrap_or('\0');
-        if let Some(name) = lookup_modification(key, aa, modification_map) {
-            found_mods.push(name);
-        }
-    }
+        .filter_map(|(key, pos)| {
+            let aa_opt = if pos == 0 {
+                naked_peptide.chars().next()
+            } else {
+                naked_peptide.chars().nth(pos - 1)
+            };
 
-    found_mods.join(";")
+            // Try normal lookup first
+            let mod_str = lookup_modification(key.clone(), aa_opt, modification_map);
+
+            // If not found and it's a terminal mod, look for Protein_N-term
+            if mod_str.is_none() && pos == 0 {
+                // Try all entries with same key and look for *_N-term
+                let fallback = modification_map
+                    .iter()
+                    .find_map(|((k, _), v)| {
+                        if k == &key && (v.name.contains("Protein_N-term") || v.name.contains("Any_N-term")) {
+                            Some(v.name.clone())
+                        } else {
+                            None
+                        }
+                    });
+                fallback
+            } else {
+                mod_str
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
+
+
 
 
 // TODO: Derive from PeptDep constants yaml
@@ -574,6 +643,44 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_unimod_annotations() {
+        let peptide = "AC(UniMod:4)DE(UniMod:7)FG";
+        let result = extract_unimod_annotations(peptide);
+        println!("Peptide: {}, Result: {:?}", peptide, result);
+        assert_eq!(result, vec![("UniMod:4".to_string(), 2), ("UniMod:7".to_string(), 4)]);
+
+        let peptide = "AC(UniMod:4)DE(UniMod:7)FG(UniMod:10)";
+        let result = extract_unimod_annotations(peptide);
+        println!("Peptide: {}, Result: {:?}", peptide, result);
+        assert_eq!(
+            result,
+            vec![
+                ("UniMod:4".to_string(), 2),
+                ("UniMod:7".to_string(), 4),
+                ("UniMod:10".to_string(), 6)
+            ]
+        );
+
+        let peptide = "(UniMod:1)M(UniMod:35)AAAATMAAAAR";
+        let result = extract_unimod_annotations(peptide);
+        println!("Peptide: {}, Result: {:?}", peptide, result);
+        assert_eq!(result, vec![("UniMod:1".to_string(), 0), ("UniMod:35".to_string(), 1)]);
+    }
+
+    #[test]
+    fn test_extract_mod_annotations() {
+        let peptide = "[+42.0105]M[+15.9949]AAAATMAAAAR";
+        let result = extract_mod_annotations(peptide);
+        println!("Peptide: {}, Result: {:?}", peptide, result);
+        assert_eq!(result, vec![("42.0105".to_string(), 0), ("15.9949".to_string(), 1)]);
+
+        let peptide = "(UniMod:1)M(UniMod:35)AAAATMAAAAR";
+        let result = extract_mod_annotations(peptide);
+        println!("Peptide: {}, Result: {:?}", peptide, result);
+        assert_eq!(result, vec![("UniMod:1".to_string(), 0), ("UniMod:35".to_string(), 1)]);
+    }
+
+    #[test]
     fn test_get_modification_indices() {
         // Compile the regex once for all tests
         // let re = Regex::new(r"\[.*?\]").unwrap();
@@ -581,13 +688,14 @@ mod tests {
         // Test cases
         let test_cases = vec![
             ("PEPTIDE", ""),
-            ("PEPT[+15.9949]IDE", "3"),
-            ("P[+15.9949]EPT[+79.99]IDE", "0;3"),
-            ("TVQSLEIDLDSM[+15.9949]R", "11"),
-            ("TVQS[+79.99]LEIDLDSM[+15.9949]R", "3;11"),
+            ("PEPT[+15.9949]IDE", "4"),
+            ("P[+15.9949]EPT[+79.99]IDE", "1;4"),
+            ("TVQSLEIDLDSM[+15.9949]R", "12"),
+            ("TVQS[+79.99]LEIDLDSM[+15.9949]R", "4;12"),
             ("[+42.0106]PEPTIDE", "0"),
-            ("PEPTIDE[+42.0106]", "6"),
-            ("P[+15.9949]EP[+79.99]T[+15.9949]IDE", "0;2;3"),
+            ("PEPTIDE[+42.0106]", "7"),
+            ("P[+15.9949]EP[+79.99]T[+15.9949]IDE", "1;3;4"),
+            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "0;1"),
         ];
 
         for (peptide, expected) in test_cases {
@@ -630,9 +738,11 @@ mod tests {
             ("P[+15.9949]EPT[+79.9663]IDE", "Oxidation@P;Phospho@T"),
             ("TVQSLEIDLDSM[+15.9949]R", "Oxidation@M"),
             ("TVQS[+79.9663]LEIDLDSM[+15.9949]R", "Phospho@S;Oxidation@M"),
-            ("[+42.0106]PEPTIDE", "Acetyl@Protein_N-term"),
+            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "Any_N-term;Oxidation@M"),
+            ("[+42.0106]PEPTIDE", "Any_N-term"),
             ("PEPTIDE[+42.0106]", ""),
             ("P[+15.9949]EP[+79.9663]T[+15.9949]IDE", "Oxidation@P;Oxidation@T"),
+            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "Any_N-term;Oxidation@M"),
         ];
 
 
