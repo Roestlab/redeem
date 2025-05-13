@@ -38,27 +38,51 @@ impl PropertyInferenceConfig {
         let config_json = fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read config file: {:?}", config_path))?;
 
-        let mut config: PropertyInferenceConfig = serde_json::from_str(&config_json)
-            .unwrap_or_else(|_| PropertyInferenceConfig::default());
+        let partial: serde_json::Value = serde_json::from_str(&config_json)?;
+        let mut config = PropertyInferenceConfig::default();
+
+        macro_rules! load_or_default {
+            ($field:ident) => {
+                if let Some(val) = partial.get(stringify!($field)) {
+                    if let Ok(parsed) = serde_json::from_value(val.clone()) {
+                        config.$field = parsed;
+                    } else {
+                        log::warn!(
+                            "Config Invalid value for '{}', using default: {:?}",
+                            stringify!($field), config.$field
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "Config Missing field '{}', using default: {:?}",
+                        stringify!($field), config.$field
+                    );
+                }
+            };
+        }
+
+        load_or_default!(model_path);
+        load_or_default!(inference_data);
+        load_or_default!(output_file);
+        load_or_default!(model_arch);
+        load_or_default!(device);
+        load_or_default!(batch_size);
+        load_or_default!(instrument);
+        load_or_default!(nce);
 
         // Apply CLI overrides
         if let Some(model_path) = matches.get_one::<String>("model_path") {
             config.model_path = model_path.clone();
-        } else {
-            config.model_path = config.model_path.clone();
         }
-
         if let Some(inference_data) = matches.get_one::<String>("inference_data") {
             validate_tsv_or_csv_file(inference_data)?;
-            config.inference_data = inference_data.clone().to_string();
+            config.inference_data = inference_data.clone();
         } else {
             validate_tsv_or_csv_file(&config.inference_data)?;
         }
-
         if let Some(output_file) = matches.get_one::<String>("output_file") {
             config.output_file = output_file.clone();
         }
-
         if let Some(model_arch) = matches.get_one::<String>("model_arch") {
             config.model_arch = model_arch.clone();
         }
