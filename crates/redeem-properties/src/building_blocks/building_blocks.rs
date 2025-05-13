@@ -1,6 +1,6 @@
 use anyhow::{Context, Result as AnyHowResult};
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn as nn;
+use candle_nn::{self as nn, linear};
 use candle_transformers as transformers;
 use serde::de;
 use core::num;
@@ -28,13 +28,10 @@ pub struct DecoderLinear {
 
 impl DecoderLinear {
     pub fn new(in_features: usize, out_features: usize, vb: &nn::VarBuilder) -> Result<Self> {
-        log::trace!("[DecoderLinear::new] Initializing linear1");
         let linear1 = nn::linear(in_features, 64, vb.pp("nn.0"))?;
-        log::trace!("[DecoderLinear::new] Initializing prelu");
         let prelu = nn::PReLU::new(Tensor::zeros(64, DType::F32, vb.device())?, false);
-        log::trace!("[DecoderLinear::new] Initializing linear2");
         let linear2 = nn::linear(64, out_features, vb.pp("nn.2"))?;
-        log::trace!("[DecoderLinear::new] Initializing sequential");
+
         let mut nn = seq();
         nn = nn.add(linear1);
         nn = nn.add(prelu);
@@ -73,16 +70,8 @@ impl DecoderLinear {
 
 impl Module for DecoderLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        log::trace!("[DecoderLinear] input shape: {:?}", x.shape());
         match self.nn.forward(x) {
             Ok(output) => {
-                log::trace!("[DecoderLinear] output shape: {:?}", output.shape());
-                log::trace!(
-                    "[DecoderLinear] output stats - min: {:.4}, max: {:.4}, mean: {:.4}",
-                    output.min_all()?.to_vec0::<f32>()?,
-                    output.max_all()?.to_vec0::<f32>()?,
-                    output.mean_all()?.to_vec0::<f32>()?,
-                );
                 Ok(output)
             }
             Err(e) => {
@@ -120,7 +109,6 @@ impl AAEmbedding {
 
     fn from_varstore(varstore: &nn::VarBuilder, hidden_size: usize, name: &str) -> Result<Self> {
         let weight = varstore.get((AA_EMBEDDING_SIZE, hidden_size), name)?;
-        log::trace!("[AAEmbedding::from_varstore] weight shape (AA_EMBEDDING_SIZE, hidden_size): {:?}, device: {:?}", weight.shape(), weight.device());
         let embeddings = nn::Embedding::new(weight, hidden_size);
         Ok(Self { embeddings })
     }
@@ -128,13 +116,7 @@ impl AAEmbedding {
 
 impl Module for AAEmbedding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        log::trace!("[AAEmbedding::forward] x shape: {:?}, device: {:?}, min: {:?}, max: {:?}",
-                    x.shape(), x.device(), x.min_all(), x.max_all());
-
         let x = x.to_dtype(DType::I64)?;
-        log::trace!("[AAEmbedding::forward] x (converted to i64) shape: {:?}, device: {:?}, min: {:?}, max: {:?}",
-                    x.shape(), x.device(), x.min_all(), x.max_all());
-
         self.embeddings.forward(&x)
     }
 }
@@ -217,7 +199,7 @@ struct ModEmbeddingFixFirstK {
 impl ModEmbeddingFixFirstK {
     fn new(mod_feature_size: usize, out_features: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
         let k = 6;
-        let nn = nn::linear(mod_feature_size - k, out_features - k, varbuilder.pp("linear"))?;
+        let nn = nn::linear_no_bias(mod_feature_size - k, out_features - k, varbuilder.pp("nn"))?;
         Ok(Self { k, nn })
     }
 
@@ -288,19 +270,10 @@ impl Input26aaModPositionalEncoding {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-        log::trace!("[Input26aaModPositionalEncoding::forward] aa_indices shape: {:?}, device: {:?}, min: {:?}, max: {:?}", 
-                aa_indices.shape(), aa_indices.device(), aa_indices.min_all(),aa_indices.max_all());
-    
-        log::trace!("[Input26aaModPositionalEncoding::forward] mod_x shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
-
         let mod_x = self.mod_nn.forward(mod_x)?;
-        log::trace!("[Input26aaModPositionalEncoding::forward] mod_x (after mod_nn) shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
         let x = self.aa_emb.forward(aa_indices)?;
-        log::trace!("[Input26aaModPositionalEncoding::forward] x (after aa_emb) shape: {:?}, device: {:?}", x.shape(), x.device());
-
         // Concatenate x and mod_x along the last dimension
         let concatenated = Tensor::cat(&[&x, &mod_x], 2)?;
-        log::trace!("[Input26aaModPositionalEncoding::forward] concatenated shape: {:?}, device: {:?}", concatenated.shape(), concatenated.device());
         self.pos_encoder.forward(&concatenated)
     }
 }
@@ -332,34 +305,6 @@ impl MetaEmbedding {
         Ok(Self { nn })
     }
 
-    // fn one_hot(&self, indices: &Tensor, num_classes: usize) -> AnyHowResult<Tensor> {
-    //     let batch_size = indices.dim(0)?;
-
-    //     let mut one_hot_data = vec![0.0f32; batch_size * num_classes];
-
-    //     for i in 0..batch_size {
-    //         let index = indices.get(i)?.to_scalar::<i64>()?;
-    //         let class_idx = index as usize;
-
-    //         if class_idx < num_classes {
-    //             one_hot_data[i * num_classes + class_idx] = 1.0;
-    //         } else {
-    //             return Err(anyhow::anyhow!(
-    //                 "Index {} out of bounds for one-hot encoding",
-    //                 class_idx
-    //             ));
-    //         }
-    //     }
-
-    //     log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), indices.device());
-
-    //     log::trace!("one hot encoded data: {:?}", Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
-    //     .context("Failed to create tensor from one-hot data"));
-
-    //     Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
-    //         .context("Failed to create tensor from one-hot data")
-    // }
-
     fn one_hot(&self, indices: &Tensor, num_classes: usize) -> Result<Tensor> {
         let batch_size = indices.dim(0)?;
         let device = indices.device();
@@ -385,8 +330,6 @@ impl MetaEmbedding {
         // Create a tensor from the one-hot data
         let one_hot = Tensor::from_slice(&one_hot_data, (batch_size, num_classes), device)?;
 
-        log::trace!("[MetaEmbedding::one_hot] one hot encoded data shape: {:?}, device: {:?}", one_hot.shape(), one_hot.device());
-
         Ok(one_hot)
     }
 
@@ -396,39 +339,23 @@ impl MetaEmbedding {
         nces: &Tensor,
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
-        // Log input tensors
-        log::trace!("[MetaEmbedding::forward] charges shape: {:?}, device: {:?}", charges.shape(), charges.device());
-        log::trace!("[MetaEmbedding::forward] nces shape: {:?}, device: {:?}", nces.shape(), nces.device());
-        log::trace!("[MetaEmbedding::forward] instrument_indices shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
-        log::trace!("[MetaEmbedding::forward] charges: {:?}", charges.to_vec2::<f32>()?);
-
-        //  // Ensure instrument_indices is a 1D tensor
-        // let instrument_indices = instrument_indices.squeeze(1)?; // Remove the second dimension
-        // log::trace!("[MetaEmbedding::forward] instrument_indices (after squeeze) shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
 
 
         // One-hot encode the instrument indices
         let inst_x = self.one_hot(&instrument_indices.to_dtype(DType::I64)?, MAX_INSTRUMENT_NUM)?;
 
-        log::trace!("[MetaEmbedding::forward] inst_x shape: {:?}, device: {:?}", inst_x.shape(), inst_x.device());
-
         // Ensure all tensors are on the same device
         let charges = &charges.to_device(inst_x.device())?;
         let nces = &nces.to_device(inst_x.device())?;
-        log::trace!("[MetaEmbedding::forward] charges (after to_device) shape: {:?}, device: {:?}", charges.shape(), charges.device());
-        log::trace!("[MetaEmbedding::forward] nces (after to_device) shape: {:?}, device: {:?}", nces.shape(), nces.device());
 
         // Concatenate the one-hot encoded instrument indices with NCEs
         let combined_input = Tensor::cat(&[&inst_x, nces], 1)?;
-        log::trace!("[MetaEmbedding::forward] combined_input shape: {:?}, device: {:?}", combined_input.shape(), combined_input.device());
 
         // Pass through the linear layer
         let meta_x = self.nn.forward(&combined_input)?;
-        log::trace!("[MetaEmbedding::forward] meta_x shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         // Concatenate the output with charges
         let meta_x = Tensor::cat(&[&meta_x, charges], 1)?;
-        log::trace!("[MetaEmbedding::forward] final meta_x shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         Ok(meta_x)
     }
@@ -685,11 +612,20 @@ impl Module for SeqCNN {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.transpose(1, 2)?;
 
-        let short = self.cnn_short.forward(&x)?;
+        let short = match self.cnn_short.forward(&x) {
+            Ok(output) => output,
+            Err(e) => {
+                log::error!("[SeqCNN::forward] cnn_short.forward failed: {:?}", e);
+                return Err(e);
+            }
+        };
+
         let medium = self.cnn_medium.forward(&x)?;
+
         let long = self.cnn_long.forward(&x)?;
 
         let output = Tensor::cat(&[x, short, medium, long], 1)?;
+
         Ok(output.transpose(1, 2)?)
     }
 }
@@ -801,16 +737,7 @@ impl SeqTransformer {
 
 impl Module for SeqTransformer {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Add check to ensure input feature dim matches expected model dim
-        let (_b, _t, d) = x.dims3()?;
-        let model_dim = self.encoder.model_dim;
-        if d != model_dim {
-            return Err(candle_core::Error::Msg(format!(
-                "SeqTransformer received input with dim {} but expected {}",
-                d, model_dim
-            )));
-        }
-        self.encoder.forward_with_mask(x, None, self.training)
+        Ok(self.encoder.forward_with_mask(x, None, self.training)?)
     }
 }
 
@@ -823,10 +750,10 @@ struct SeqAttentionSum {
 
 impl SeqAttentionSum {
     pub fn new(hidden_dim: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
-        let attention = nn::Linear::new(
-            varbuilder.get((1, hidden_dim), "attention.weight")?,
-            None,
-        );
+        let attention = nn::linear_no_bias(
+            hidden_dim,
+            1,
+            varbuilder.pp("attn.0"))?;
         Ok(Self { attention })
     }
 
@@ -838,7 +765,14 @@ impl SeqAttentionSum {
 
 impl Module for SeqAttentionSum {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let attention_weights = self.attention.forward(x)?;
+        let attention_weights = match self.attention.forward(x) {
+            Ok(weights) => weights,
+            Err(e) => {
+                log::error!("Attention forward pass failed: {}", e);
+                return Err(e);
+            }
+        };
+        
 
         // Apply softmax to normalize weights
         // TODO: This is done in the model itself in the PyTorch implementation
@@ -911,34 +845,23 @@ impl Encoder26aaModCnnLstmAttnSum {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-
-        let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
-        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - mod_x forward time: {:.3?}", start_time.elapsed());
-        let start_time = Instant::now();
+
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
-        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - additional_tensors forward time: {:.3?}", start_time.elapsed());
-        let start_time = Instant::now();
+
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - aa_one_hot forward time: {:.3?}", start_time.elapsed());
+
         let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+        log::trace!("[Encoder26aaModCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
         let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
-        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnLstmAttnSum] CNN output stats - min: {min}, max: {max}, mean: {mean}");
-        let start_time = Instant::now();
+
         let x = self.input_lstm.forward(&x)?;
-        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnLstmAttnSum] LSTM output stats - min: {min}, max: {max}, mean: {mean}");
-        let start_time = Instant::now();
+
         let x = self.attn_sum.forward(&x)?;
-        log::trace!("Encoder26aaModCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnLstmAttnSum] AttentionSum output stats - min: {min}, max: {max}, mean: {mean}");
+
         Ok(x)
     }
 }
@@ -1006,15 +929,15 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-        let start_time = Instant::now();
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::trace!("[Encoder26aaModChargeCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
         let x = self.input_cnn.forward(&x)?;
-        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_cnn forward time: {:.3?}", start_time.elapsed());
-        let start_time = Instant::now();
+
         let x = self.input_lstm.forward(&x)?;
-        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - input_lstm forward time: {:.3?}", start_time.elapsed());
-        let start_time = Instant::now();
+
         let x = self.attn_sum.forward(&x)?;
-        log::trace!("Encoder26aaModChargeCnnLstmAttnSum::forward - attn_sum forward time: {:.3?}", start_time.elapsed());
+
         Ok(x)
     }
 }
@@ -1025,6 +948,7 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 pub struct Encoder26aaModCnnTransformerAttnSum {
     mod_nn: ModEmbeddingFixFirstK,
     input_cnn: SeqCNN,
+    proj_cnn_to_transformer: candle_nn::Linear,
     input_transformer: SeqTransformer,
     attn_sum: SeqAttentionSum,
 }
@@ -1060,6 +984,10 @@ impl Encoder26aaModCnnTransformerAttnSum {
                 names_input_cnn_weight,
                 names_input_cnn_bias,
             )?,
+            proj_cnn_to_transformer: candle_nn::Linear::new(
+                varstore.get((input_dim * 4, hidden_dim), "proj_cnn_to_transformer.weight")?,
+                Some(varstore.get(hidden_dim, "proj_cnn_to_transformer.bias")?),
+            ),
             input_transformer: SeqTransformer::from_varstore(
                 varstore.pp(transformer_pp).clone(),
                 input_dim * 4,
@@ -1095,6 +1023,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
         Ok(Self {
             mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, &varbuilder.pp("mod_nn"))?,
             input_cnn: SeqCNN::new(input_dim, &varbuilder.pp("input_cnn"))?,
+            proj_cnn_to_transformer: candle_nn::linear_no_bias(input_dim*4, hidden_dim, varbuilder.pp("proj_cnn_to_transformer"))?,
             input_transformer: SeqTransformer::new(
                 &varbuilder.pp("input_transformer"),
                 input_dim * 4,
@@ -1111,35 +1040,28 @@ impl Encoder26aaModCnnTransformerAttnSum {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-        let start_time = Instant::now();
         let mod_x = self.mod_nn.forward(mod_x)?;
-        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - mod_x forward time: {:.3?}", start_time.elapsed());
 
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
-        let start_time = Instant::now();
+
         let x = aa_one_hot(aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - aa_one_hot forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
 
-        let start_time = Instant::now();
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::trace!("[Encoder26aaModCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
+        if !mean.is_finite() || !min.is_finite() || !max.is_finite() {
+            log::error!("ERROR [Encoder26aaModCnnTransformerAttnSum] aa_one_hot produced non-finite tensor stats: mean={mean}, min={min}, max={max}");
+            candle_core::bail!("ERRORNon-finite values found in peptide encoding output.");
+        }
+
         let x = self.input_cnn.forward(&x)?;
-        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - input_cnn forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnTransformerAttnSum] input_cnn output stats - min: {min}, max: {max}, mean: {mean}");
 
-        let start_time = Instant::now();
+        let x = self.proj_cnn_to_transformer.forward(&x)?;
+
         let x = self.input_transformer.forward(&x)?;
-        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - input_transformer forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnTransformerAttnSum] input_transformer output stats - min: {min}, max: {max}, mean: {mean}");
 
-        let start_time = Instant::now();
         let x = self.attn_sum.forward(&x)?;
-        log::trace!("[Encoder26aaModCnnTransformerAttnSum::forward] - attn_sum forward time: {:.3?}", start_time.elapsed());
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModCnnTransformerAttnSum] attn_sum output stats - min: {min}, max: {max}, mean: {mean}");
 
         Ok(x)
     }
@@ -1151,6 +1073,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
 pub struct Encoder26aaModChargeCnnTransformerAttnSum {
     mod_nn: ModEmbeddingFixFirstK,
     input_cnn: SeqCNN,
+    proj_cnn_to_transformer: candle_nn::Linear,
     input_transformer: SeqTransformer,
     attn_sum: SeqAttentionSum,
 }
@@ -1172,7 +1095,7 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
         names_attn_sum: Vec<&str>,
         device: &Device,
     ) -> Result<Self> {
-        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim + 1;
         Ok(Self {
             mod_nn: ModEmbeddingFixFirstK::from_varstore(
                 &varstore,
@@ -1186,6 +1109,10 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
                 names_input_cnn_weight,
                 names_input_cnn_bias,
             )?,
+            proj_cnn_to_transformer: candle_nn::Linear::new(
+                varstore.get((input_dim * 4, hidden_dim), "proj_cnn_to_transformer.weight")?,
+                Some(varstore.get(hidden_dim, "proj_cnn_to_transformer.bias")?),
+            ),            
             input_transformer: SeqTransformer::from_varstore(
                 varstore.pp(transformer_pp).clone(),
                 input_dim * 4,
@@ -1217,10 +1144,11 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
         dropout_prob: f32,
         device: &Device,
     ) -> Result<Self> {
-        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim + 1;
         Ok(Self {
             mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, &varbuilder.pp("mod_nn"))?,
             input_cnn: SeqCNN::new(input_dim, &varbuilder.pp("input_cnn"))?,
+            proj_cnn_to_transformer: candle_nn::linear_no_bias(input_dim*4, hidden_dim, varbuilder.pp("proj_cnn_to_transformer"))?,
             input_transformer: SeqTransformer::new(
                 &varbuilder.pp("input_transformer"),
                 input_dim * 4,
@@ -1241,23 +1169,20 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
         let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
 
         let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
+
         let x = aa_one_hot(aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
         let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModChargeCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+        log::trace!("[Encoder26aaModChargeCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
 
         let x = self.input_cnn.forward(&x)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModChargeCnnTransformerAttnSum] input_cnn output stats - min: {min}, max: {max}, mean: {mean}");
+
+        let x = self.proj_cnn_to_transformer.forward(&x)?;
 
         let x = self.input_transformer.forward(&x)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModChargeCnnTransformerAttnSum] input_transformer output stats - min: {min}, max: {max}, mean: {mean}");
 
         let x = self.attn_sum.forward(&x)?;
-
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[Encoder26aaModChargeCnnTransformerAttnSum] attn_sum output stats - min: {min}, max: {max}, mean: {mean}");
 
         Ok(x)
     }

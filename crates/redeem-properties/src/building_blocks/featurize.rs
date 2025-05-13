@@ -39,31 +39,53 @@ pub fn aa_indices_tensor(seq: &str, device: &Device) -> Result<Tensor> {
 /// One-hot encode amino acid indices and concatenate additional tensors.
 pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor> {
     let (batch_size, seq_len) = aa_indices.shape().dims2()?;
+    log::trace!("[aa_one_hot] batch_size: {}, seq_len: {}", batch_size, seq_len);
     let num_classes = AA_EMBEDDING_SIZE;
 
-    // Extract all indices as f32s once
     let indices = aa_indices.to_vec2::<f32>()?;
-
-    // Preallocate output buffer
     let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
 
-    // Use parallel iterator for speed
     one_hot_data
         .par_chunks_mut(seq_len * num_classes)
         .zip(indices.par_iter())
-        .for_each(|(chunk, row)| {
+        .enumerate()
+        .try_for_each(|(batch_idx, (chunk, row))| -> Result<()> {
             for (seq_idx, &fidx) in row.iter().enumerate() {
-                let class_idx = fidx.round() as usize;
-                if class_idx < num_classes {
-                    chunk[seq_idx * num_classes + class_idx] = 1.0;
+                if !fidx.is_finite() {
+                    return Err(anyhow!(
+                        "Invalid AA index: found NaN or Inf at batch {}, position {}: {}",
+                        batch_idx, seq_idx, fidx
+                    ));
                 }
+
+                if fidx < 0.0 {
+                    return Err(anyhow!(
+                        "Invalid AA index: negative value at batch {}, position {}: {}",
+                        batch_idx, seq_idx, fidx
+                    ));
+                }
+
+                let class_idx = fidx.round() as usize;
+                if class_idx >= num_classes {
+                    return Err(anyhow!(
+                        "AA index out of bounds: got {}, but num_classes = {} (batch {}, position {})",
+                        class_idx, num_classes, batch_idx, seq_idx
+                    ));
+                }
+
+                let index = seq_idx * num_classes + class_idx;
+                chunk[index] = 1.0;
             }
-        });
+            Ok(())
+        })?;
 
-    let one_hot_tensor = Tensor::from_slice(&one_hot_data, (batch_size, seq_len, num_classes), aa_indices.device())
-        .map_err(|e| anyhow!("Failed to create one-hot tensor: {}", e))?;
+    let one_hot_tensor = Tensor::from_slice(
+        &one_hot_data,
+        (batch_size, seq_len, num_classes),
+        aa_indices.device(),
+    )
+    .map_err(|e| anyhow!("Failed to create one-hot tensor: {}", e))?;
 
-    // Concatenate with additional tensors
     if cat_others.is_empty() {
         Ok(one_hot_tensor)
     } else {
@@ -72,6 +94,8 @@ pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor>
         Ok(Tensor::cat(&features, 2)?)
     }
 }
+
+
 
 
 

@@ -59,7 +59,6 @@ impl BidirectionalLSTM {
         let c0_forward = c0.i(0)?;
         let state_fw = rnn::LSTMState { h: h0_forward, c: c0_forward };
     
-        let start_time = std::time::Instant::now();
         let out_fw_states = lstm_forward.seq_init(input, &state_fw)?;
         let out_fw = Tensor::stack(
             &out_fw_states.iter().map(|s| s.h()).collect::<Vec<_>>(),
@@ -67,10 +66,8 @@ impl BidirectionalLSTM {
         )?;
         let last_fw_h = out_fw_states.last().unwrap().h().clone();
         let last_fw_c = out_fw_states.last().unwrap().c().clone();
-        log::trace!("BidirectionLSTM::apply_bidirectional_layer - Forward LSTM time: {:?}", start_time.elapsed());
     
         // Reverse sequence
-        let start_time = std::time::Instant::now();
         let input_reversed = Tensor::cat(
             &(0..seq_len)
                 .rev()
@@ -78,14 +75,12 @@ impl BidirectionalLSTM {
                 .collect::<Result<Vec<_>>>()?,
             1,
         )?;
-        log::trace!("BidirectionLSTM::apply_bidirectional_layer - Reverse sequence time: {:?}", start_time.elapsed());
             
         // Initial states for backward
         let h0_backward = h0.i(1)?;
         let c0_backward = c0.i(1)?;
         let state_bw = rnn::LSTMState { h: h0_backward, c: c0_backward };
     
-        let start_time = std::time::Instant::now();
         let out_bw_states = lstm_backward.seq_init(&input_reversed, &state_bw)?;
         let out_bw = Tensor::stack(
             &out_bw_states.iter().map(|s| s.h()).collect::<Vec<_>>(),
@@ -93,7 +88,6 @@ impl BidirectionalLSTM {
         )?;
         let last_bw_h = out_bw_states.last().unwrap().h().clone();
         let last_bw_c = out_bw_states.last().unwrap().c().clone();
-        log::trace!("BidirectionLSTM::apply_bidirectional_layer - Backward LSTM time: {:?}", start_time.elapsed());
     
         // Combine hidden and cell states
         let hn = Tensor::stack(&[last_fw_h.clone(), last_bw_h.clone()], 0)?;
@@ -116,12 +110,9 @@ impl BidirectionalLSTM {
         let h0_2 = h0.narrow(0, 2, 2)?;
         let c0_2 = c0.narrow(0, 2, 2)?;
 
-        let start_time = std::time::Instant::now();
         let (out1, (hn1, cn1)) = self.apply_bidirectional_layer(xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1)?;
-        log::trace!("BidirectionLSTM::forward_with_state - Layer 1 time: {:?}", start_time.elapsed());
-        let start_time = std::time::Instant::now();
+
         let (out2, (hn2, cn2)) = self.apply_bidirectional_layer(&out1, &self.forward_lstm2, &self.backward_lstm2, &h0_2, &c0_2)?;
-        log::trace!("BidirectionLSTM::forward_with_state - Layer 2 time: {:?}", start_time.elapsed());
 
         let hn = Tensor::cat(&[hn1, hn2], 0)?;
         let cn = Tensor::cat(&[cn1, cn2], 0)?;

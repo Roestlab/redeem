@@ -114,34 +114,17 @@ impl TransformerEncoder {
     }
 
     pub fn forward_with_mask(&self, x: &Tensor, padding_mask: Option<&Tensor>, training: bool) -> Result<Tensor> {
-        log::trace!("[TransformerEncoder] input x shape: {:?}", x.shape());
-        let (mean, min, max) = get_tensor_stats(x)?;
-        log::debug!("[TransformerEncoder] input stats: mean={}, min={}, max={}", mean, min, max);
         let (b, t, _) = x.dims3()?;
         let pe = self.pos_encoding.i((..t, ..))?
             .unsqueeze(0)?
             .broadcast_as((b, t, self.pos_encoding.dim(1)?))?;
 
-        log::trace!("[TransformerEncoder] positional encoding shape: {:?}", pe.shape());
-        let (mean, min, max) = get_tensor_stats(&pe)?;
-        log::debug!("[TransformerEncoder] positional encoding stats: mean={}, min={}, max={}", mean, min, max);
-
         let mut out = x.broadcast_add(&pe)?;
-        let (mean, min, max) = get_tensor_stats(&out)?;
-        log::debug!("[TransformerEncoder] after positional encoding stats: mean={}, min={}, max={}", mean, min, max);
 
         out = self.dropout.forward(&out, training)?;
 
-        log::trace!("[TransformerEncoder] after dropout shape: {:?}", out.shape());
-        let (mean, min, max) = get_tensor_stats(&out)?;
-        log::debug!("[TransformerEncoder] after dropout stats: mean={}, min={}, max={}", mean, min, max);
-
-        for (i, layer) in self.layers.iter().enumerate() {
-            log::trace!("[TransformerEncoder] applying layer {}", i);
+        for (_i, layer) in self.layers.iter().enumerate() {
             out = layer.forward(&out, padding_mask, training)?;
-            log::trace!("[TransformerEncoder] output shape after layer {}: {:?}", i, out.shape());
-            let (mean, min, max) = get_tensor_stats(&out)?;
-            log::debug!("[TransformerEncoder] output stats after layer {}: mean={}, min={}, max={}", i, mean, min, max);
         }
         Ok(out)
     }
@@ -182,26 +165,12 @@ impl TransformerEncoderLayer {
     }
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>, training: bool) -> Result<Tensor> {
-        log::trace!("[TransformerEncoderLayer] input x shape: {:?}", x.shape());
         let attn = self.self_attn.forward(x, mask)?;
-        let (mean, min, max) = get_tensor_stats(&attn)?;
-        log::debug!("[TransformerEncoderLayer] attention stats: mean={}, min={}, max={}", mean, min, max);
         let tmp = self.dropout1.forward(&attn, training)?;
-        let (mean, min, max) = get_tensor_stats(&tmp)?;
-        log::debug!("[TransformerEncoderLayer] attention after dropout stats: mean={}, min={}, max={}", mean, min, max);
         let tmp2 = x.broadcast_add(&tmp)?;
-        let (mean, min, max) = get_tensor_stats(&tmp2)?;
-        log::debug!("[TransformerEncoderLayer] after residual connection stats: mean={}, min={}, max={}", mean, min, max);
         let x = self.norm1.forward(&tmp2)?;
-        let (mean, min, max) = get_tensor_stats(&x)?;
-        log::debug!("[TransformerEncoderLayer] after norm1 stats: mean={}, min={}, max={}", mean, min, max);
         let ff = self.ff.forward(&x)?;
-        let (mean, min, max) = get_tensor_stats(&ff)?;
-        log::debug!("[TransformerEncoderLayer] feedforward stats: mean={}, min={}, max={}", mean, min, max);
         let result = self.norm2.forward(&x.broadcast_add(&self.dropout2.forward(&ff, training)?)?)?;
-        log::trace!("[TransformerEncoderLayer] output shape: {:?}", result.shape());
-        let (mean, min, max) = get_tensor_stats(&result)?;
-        log::debug!("[TransformerEncoderLayer] output stats: mean={}, min={}, max={}", mean, min, max);
         Ok(result)
     }
 }
@@ -237,34 +206,21 @@ impl MultiHeadAttention {
 
     pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
         let (b, t, _) = x.dims3()?;
-        log::trace!("[MultiHeadAttention] Input shape: b={}, t={}, head_dim={} (num_heads={})", b, t, self.head_dim, self.num_heads);
 
         let q = self.proj_q.forward(x)?
             .reshape((b, t, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        log::trace!("[MultiHeadAttention] Q shape after projection and transpose: {:?}", q.shape());
-        let (mean, min, max) = get_tensor_stats(&q)?;
-        log::debug!("[MultiHeadAttention] Q stats: mean={}, min={}, max={}", mean, min, max);
 
         let k = self.proj_k.forward(x)?
             .reshape((b, t, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        log::trace!("[MultiHeadAttention] K shape after projection and transpose: {:?}", k.shape());
-        let (mean, min, max) = get_tensor_stats(&k)?;
-        log::debug!("[MultiHeadAttention] K stats: mean={}, min={}, max={}", mean, min, max);
 
         let v = self.proj_v.forward(x)?
             .reshape((b, t, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        log::trace!("[MultiHeadAttention] V shape after projection and transpose: {:?}", v.shape());
-        let (mean, min, max) = get_tensor_stats(&v)?;
-        log::debug!("[MultiHeadAttention] V stats: mean={}, min={}, max={}", mean, min, max);
-
-
-        log::trace!("[MultiHeadAttention] Q/K/V shape after projection and transpose: {:?}", q.shape());
 
         let k_t = k.transpose(2, 3)?.contiguous()?;
         let mut scores = q.matmul(&k_t)? / (self.head_dim as f64).sqrt();
@@ -277,12 +233,7 @@ impl MultiHeadAttention {
             }
         };
 
-        log::trace!("[MultiHeadAttention] Attention score shape: {:?}", scores.shape());
-        let (mean, min, max) = get_tensor_stats(&scores)?;
-        log::debug!("[MultiHeadAttention] Attention score stats: mean={}, min={}, max={}", mean, min, max);
-
         if let Some(mask) = mask {
-            log::trace!("[MultiHeadAttention] Applying mask");
             let mask = mask.unsqueeze(1)?;
             let scale = Tensor::new(1e9f32, x.device())?;
             scores = match scores.broadcast_add(&mask.neg()?.mul(&scale)?) {
@@ -301,8 +252,6 @@ impl MultiHeadAttention {
                 return Err(e.into());
             }
         };
-        let (attn_mean, attn_min, attn_max) = get_tensor_stats(&attn)?;
-        log::debug!("[MultiHeadAttention] Attention stats: mean={}, min={}, max={}", attn_mean, attn_min, attn_max);
 
         let context = match attn.matmul(&v) {
             Ok(ctx) => ctx.transpose(1, 2)?.reshape((b, t, self.num_heads * self.head_dim))?,
@@ -312,9 +261,6 @@ impl MultiHeadAttention {
             }
         };
 
-        log::trace!("[MultiHeadAttention] Final context shape: {:?}", context.shape());
-        let (mean, min, max) = get_tensor_stats(&context)?;
-        log::debug!("[MultiHeadAttention] Context stats: mean={}, min={}, max={}", mean, min, max);
         self.proj_out.forward(&context)
     }
 }
