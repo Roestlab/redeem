@@ -1,9 +1,12 @@
+use std::{collections::HashMap, sync::Arc};
 use std::fs::File;
 use std::path::Path;
 use std::io::BufReader;
 use anyhow::{Result, Context};
 use csv::ReaderBuilder;
-use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
+use redeem_properties::utils::peptdeep_utils::{get_modification_indices, get_modification_string, ModificationMap};
+use redeem_properties::utils::{data_handling::{PeptideData, RTNormalization}, peptdeep_utils::remove_mass_shift};
+
 
 
 /// Load peptide training data from a CSV or TSV file and optionally normalize RT.
@@ -15,6 +18,7 @@ pub fn load_peptide_data<P: AsRef<Path>>(
     nce: Option<i32>,
     instrument: Option<String>,
     normalize_rt: Option<String>,
+    modifications: &HashMap<(String, Option<char>), ModificationMap>,
 ) -> Result<(Vec<PeptideData>, RTNormalization)> {
     let file = File::open(&path)
         .with_context(|| format!("Failed to open file: {:?}", path.as_ref()))?;
@@ -35,10 +39,21 @@ pub fn load_peptide_data<P: AsRef<Path>>(
     for result in rdr.records() {
         let record = result?;
 
-        let sequence = record
-            .get(headers.iter().position(|h| h.to_lowercase() == "sequence").unwrap_or(2))
-            .unwrap_or("")
-            .to_string();
+        let sequence_bytes: Arc<[u8]> = Arc::from(
+            record
+                .get(headers.iter().position(|h| h.to_lowercase() == "sequence").unwrap_or(2))
+                .unwrap_or("")
+                .as_bytes()
+                .to_vec()
+                .into_boxed_slice(),
+        );
+
+        let sequence_str = String::from_utf8_lossy(&sequence_bytes);
+
+        let naked_sequence = Arc::from(remove_mass_shift(&sequence_str).as_bytes().to_vec().into_boxed_slice());
+
+        let mods: Arc<[u8]> = Arc::from(get_modification_string(&sequence_str, modifications).into_bytes().into_boxed_slice());
+        let mod_sites: Arc<[u8]> = Arc::from(get_modification_indices(&sequence_str).into_bytes().into_boxed_slice());
 
         let retention_time = record
             .get(headers.iter().position(|h| h.to_lowercase() == "retention time").unwrap_or(3))
@@ -69,25 +84,31 @@ pub fn load_peptide_data<P: AsRef<Path>>(
                     .get(headers.iter().position(|h| h.to_lowercase() == "nce").unwrap_or(usize::MAX))
                     .and_then(|s| s.parse::<i32>().ok())
             }),
-            _ => None
-            
+            _ => None,
         };
 
         let in_instrument = match model_arch {
-            "ms2_bert" => instrument.clone().or_else(|| {
-                record
-                    .get(headers.iter().position(|h| h.to_lowercase() == "instrument").unwrap_or(usize::MAX))
-                    .map(|s| s.to_string())
-            }),
-            _ => None
+            "ms2_bert" => instrument
+                .as_ref()
+                .map(|s| Arc::from(s.as_bytes().to_vec().into_boxed_slice()))
+                .or_else(|| {
+                    record
+                        .get(headers.iter().position(|h| h.to_lowercase() == "instrument").unwrap_or(usize::MAX))
+                        .map(|s| Arc::from(s.as_bytes().to_vec().into_boxed_slice()))
+                }),
+            _ => None,
         };
+        
 
         if let Some(rt) = retention_time {
             rt_values.push(rt);
         }
 
         peptides.push(PeptideData {
-            sequence,
+            modified_sequence: sequence_bytes,
+            naked_sequence,
+            mods,
+            mod_sites,
             charge,
             precursor_mass,
             nce: in_nce,

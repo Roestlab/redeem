@@ -24,6 +24,9 @@ use load_data::load_peptide_data;
 use super::input;
 
 pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
+    log::trace!("Loading modifications map");
+    let modifications = load_modifications().context("Failed to load modifications")?;
+
     // Load training data
     let (train_peptides, norm_factor) = load_peptide_data(
         &config.train_data,
@@ -31,6 +34,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         Some(config.nce),
         Some(config.instrument.clone()),
         Some(config.rt_normalization.clone().unwrap()),
+        &modifications,
     )?;
     log::info!("Loaded {} training peptides", train_peptides.len());
 
@@ -42,6 +46,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
             Some(config.nce),
             Some(config.instrument.clone()),
             Some(config.rt_normalization.clone().unwrap()),
+            &modifications,
         )
         .context("Failed to load validation data")?;
         (Some(peptides), Some(norm))
@@ -127,9 +132,6 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
     };
 
     log::trace!("Model loaded successfully");
-
-    log::trace!("Loading modifications map");
-    let modifications = load_modifications().context("Failed to load modifications")?;
 
     let start_time = std::time::Instant::now();
     log::trace!("Training started");

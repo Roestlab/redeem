@@ -335,9 +335,9 @@ mod tests {
         let device = Device::Cpu;
         let model = CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = vec!["AGHCEWQMKYR".to_string(), "AGHCEWQMKYR".to_string()];
-        let mods = vec!["Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(), "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string()];
-        let mod_sites = vec!["0;4;8".to_string(), "0;4;8".to_string()];
+        let peptide_sequences = vec!["AGHCEWQMKYR", "AGHCEWQMKYR"];
+        let mods = vec!["Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M", "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"];
+        let mod_sites = vec!["0;4;8", "0;4;8"];
         let charge = Some(vec![2, 2]);
 
         let result = model.predict(&peptide_sequences, &mods, &mod_sites, charge, None, None);

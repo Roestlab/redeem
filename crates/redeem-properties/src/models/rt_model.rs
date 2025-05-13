@@ -47,7 +47,7 @@ impl RTModelWrapper {
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &[String], mod_sites: &[String]) -> Result<PredictionResult> {
+    pub fn predict(&self, peptide_sequence: &Vec<&str>, mods: &Vec<&str>, mod_sites: &Vec<&str>) -> Result<PredictionResult> {
         self.model.predict(peptide_sequence, mods, mod_sites, None, None, None)
     }
 

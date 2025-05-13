@@ -15,6 +15,8 @@ use crate::properties::load_data::load_peptide_data;
 use crate::properties::util::write_bytes_to_file;
 
 pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
+    let modifications = load_modifications().context("Failed to load modifications")?;
+
     // Load inference data
     let (inference_data, norm_factor) = load_peptide_data(
         &config.inference_data,
@@ -22,6 +24,7 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
         Some(config.nce),
         Some(config.instrument.clone()),
         Some("min_max".to_string()),
+        &modifications,
     )?;
     log::info!("Loaded {} peptides", inference_data.len());
 
@@ -73,8 +76,6 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
             ));
         }
     };
-
-    let modifications = load_modifications().context("Failed to load modifications")?;
 
     let start_time = std::time::Instant::now();
     model.set_evaluation_mode();

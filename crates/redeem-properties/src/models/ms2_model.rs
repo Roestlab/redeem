@@ -40,7 +40,7 @@ impl MS2ModelWrapper {
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &[String], mod_sites: &[String], charge: Vec<i32>, nce: Vec<i32>, intsrument: Vec<String>) -> Result<PredictionResult> {
+    pub fn predict(&self, peptide_sequence: &Vec<&str>, mods: &Vec<&str>, mod_sites: &Vec<&str>, charge: Vec<i32>, nce: Vec<i32>, intsrument: &Vec<&str>) -> Result<PredictionResult> {
         self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), Some(nce), Some(intsrument))
     }
 

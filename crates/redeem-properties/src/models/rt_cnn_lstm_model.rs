@@ -349,16 +349,16 @@ mod tests {
 
         // Batched input
         let peptide_sequences = vec![
-            "ACDEFGHIK".to_string(),
-            "AGHCEWQMKYR".to_string(),
+            "ACDEFGHIK",
+            "AGHCEWQMKYR",
         ];
         let mods = vec![
-            "Carbamidomethyl@C".to_string(),
-            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
+            "Carbamidomethyl@C",
+            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M",
         ];
         let mod_sites = vec![
-            "1".to_string(),
-            "0;4;8".to_string(),
+            "1",
+            "0;4;8",
         ];
 
         println!("Peptides: {:?}", peptide_sequences);
@@ -388,34 +388,23 @@ mod tests {
 
     #[test]
     fn test_prediction() {
+
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-        let device = /* Assuming Device is defined */ Device::new_cuda(0).unwrap_or(/* assuming Device::Cpu is defined */ Device::Cpu); // Replace with actual Device code.
-        let result =  RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device); 
+        let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+        let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
+        let result = RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device);
         let mut model = result.unwrap();
-    
-        // Test prediction with a few peptides after fine-tuning
+
         let test_peptides = vec![
             ("AGHCEWQMKYR", "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M", "0;4;8", 0.2945),
             ("QPYAVSELAGHQTSAESWGTGR", "", "", 0.4328955),
             ("GMSVSDLADKLSTDDLNSLIAHAHR", "Oxidation@M", "1", 0.6536107),
-            (
-                "TVQHHVLFTDNMVLICR",
-                "Oxidation@M;Carbamidomethyl@C",
-                "11;15",
-                0.7811949,
-            ),
+            ("TVQHHVLFTDNMVLICR", "Oxidation@M;Carbamidomethyl@C", "11;15", 0.7811949),
             ("EAELDVNEELDKK", "", "", 0.2934583),
             ("YTPVQQGPVGVNVTYGGDPIPK", "", "", 0.5863009),
             ("YYAIDFTLDEIK", "", "", 0.8048359),
             ("VSSLQAEPLPR", "", "", 0.3201348),
-            (
-                "NHAVVCQGCHNAIDPEVQR",
-                "Carbamidomethyl@C;Carbamidomethyl@C",
-                "5;8",
-                0.1730425,
-            ),
+            ("NHAVVCQGCHNAIDPEVQR", "Carbamidomethyl@C;Carbamidomethyl@C", "5;8", 0.1730425),
             ("IPNIYAIGDVVAGPMLAHK", "", "", 0.8220097),
             ("AELGIPLEEVPPEEINYLTR", "", "", 0.8956433),
             ("NESTPPSEELELDKWK", "", "", 0.4471560),
@@ -440,34 +429,32 @@ mod tests {
             ("HEDLKDMLEFPAQELR", "", "", 0.6529368),
             ("LLPDFLLER", "", "", 0.7852863),
         ];
-    
-        let batch_size = 16; // Set an appropriate batch size
-        let peptides: Vec<String> = test_peptides.iter().map(|(pep, _, _, _)| pep.to_string()).collect();
-        let mods: Vec<String> = test_peptides.iter().map(|(_, mod_, _, _)| mod_.to_string()).collect();
-        let mod_sites: Vec<String> = test_peptides.iter().map(|(_, _, sites, _)| sites.to_string()).collect();
+
+        let peptides: Vec<&str> = test_peptides.iter().map(|(pep, _, _, _)| *pep).collect();
+        let mods: Vec<&str> = test_peptides.iter().map(|(_, mod_, _, _)| *mod_).collect();
+        let mod_sites: Vec<&str> = test_peptides.iter().map(|(_, _, sites, _)| *sites).collect();
         let observed_rts: Vec<f32> = test_peptides.iter().map(|(_, _, _, rt)| *rt).collect();
-    
+
         match model.predict(&peptides, &mods, &mod_sites, None, None, None) {
             Ok(predictions) => {
-                if let /* Assuming PredictionResult and RTResult are defined */ PredictionResult::RTResult(rt_preds) = predictions {  // Replace with actual PredictionResult and RTResult code
+                if let PredictionResult::RTResult(rt_preds) = predictions {
                     let total_error: f32 = rt_preds.iter().zip(observed_rts.iter())
                         .map(|(pred, obs)| (pred - obs).abs())
                         .sum();
-    
-                    // PRINT PREDICTIONS AND OBSERVED RTs WITHOUT IZIP
+
                     let mut peptides_iter = peptides.iter();
                     let mut rt_preds_iter = rt_preds.iter();
                     let mut observed_rts_iter = observed_rts.iter();
-    
+
                     loop {
                         match (peptides_iter.next(), rt_preds_iter.next(), observed_rts_iter.next()) {
                             (Some(pep), Some(pred), Some(obs)) => {
                                 println!("Peptide: {}, Predicted RT: {}, Observed RT: {}", pep, pred, obs);
                             }
-                            _ => break, // Exit the loop if any iterator is exhausted
+                            _ => break,
                         }
                     }
-    
+
                     let mean_absolute_error = total_error / rt_preds.len() as f32;
                     println!("Mean Absolute Error: {:.6}", mean_absolute_error);
                 } else {
