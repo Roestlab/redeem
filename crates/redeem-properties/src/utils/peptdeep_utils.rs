@@ -12,9 +12,10 @@ use regex::Regex;
 use std::collections::HashMap;
 use serde::Deserialize;
 use zip::ZipArchive;
+use once_cell::sync::Lazy;
 
-const MOD_TSV_URL: &str = "https://raw.githubusercontent.com/MannLabs/alphabase/main/alphabase/constants/const_files/modification.tsv";
-const MOD_TSV_PATH: &str = "data/modification.tsv";
+const MODIFICATIONS_TSV_BYTES: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/assets/modification.tsv"));
+
 
 const PRETRAINED_MODELS_URL: &str = "https://github.com/singjc/redeem/releases/download/v0.1.0-alpha/peptdeep_generic_pretrained_models.zip";
 const PRETRAINED_MODELS_ZIP: &str = "data/peptdeep_generic_pretrained_models.zip";
@@ -36,58 +37,59 @@ const MAX_INSTRUMENT_NUM: usize = 8;
 const UNKNOWN_INSTRUMENT_NUM: usize = MAX_INSTRUMENT_NUM - 1;
 
 
-pub fn download_pretrained_models_exist() -> Result<PathBuf, io::Error> {
-    let zip_path = PathBuf::from(PRETRAINED_MODELS_ZIP);
-    let extract_dir = PathBuf::from(PRETRAINED_MODELS_PATH);
+#[derive(Debug, Clone)]
+pub struct ModificationMap {
+    pub name: String,
+    pub amino_acid: Option<char>, // Optional if not applicable
+    pub unimod_id: Option<u32>
+}
 
-    // Ensure the parent directory exists
-    if let Some(parent) = zip_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+/// Loads a unified modification map where the key is either:
+/// - ("57.0215", Some('C')) for mass-based lookup
+/// - ("UniMod:4", Some('C')) for UniMod ID–based lookup
+/// Loads the modification map, parsing the embedded modifications.tsv.
+pub fn load_modifications() -> Result<HashMap<(String, Option<char>), ModificationMap>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_reader(MODIFICATIONS_TSV_BYTES);
 
-    // Download the zip file if it doesn't exist
-    if !zip_path.exists() {
-        info!("Downloading pretrained models...");
-        let mut response = reqwest::blocking::get(PRETRAINED_MODELS_URL)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        let mut file = File::create(&zip_path)?;
-        io::copy(&mut response, &mut file)?;
-    }
+    let mut modifications = HashMap::new();
 
-    // Unzip the file if the target directory doesn't exist
-    if !extract_dir.exists() {
-        info!("Unzipping pretrained models...");
-        let file = File::open(&zip_path)?;
-        let mut archive = ZipArchive::new(file)?;
+    for result in rdr.records() {
+        let record = result?;
+        let mod_name = record.get(0).unwrap_or("").to_string();
+        let unimod_mass: f64 = record.get(1).unwrap_or("0").parse().unwrap_or(0.0);
+        let unimod_id: Option<u32> = record.get(7).and_then(|s| s.parse().ok());
 
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)?;
-            let outpath = extract_dir.join(file.mangled_name());
+        let mass_key = format!("{:.4}", unimod_mass);
+        let unimod_key = unimod_id.map(|id| format!("UniMod:{}", id));
 
-            if file.name().ends_with('/') {
-                // Create directory
-                fs::create_dir_all(&outpath)?;
-            } else {
-                // Write file
-                if let Some(parent) = outpath.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let mut outfile = File::create(&outpath)?;
-                io::copy(&mut file, &mut outfile)?;
-            }
+        let amino_acid = mod_name.split('@').nth(1).and_then(|aa| aa.chars().next());
+
+        let modification = ModificationMap {
+            name: mod_name,
+            amino_acid,
+            unimod_id,
+        };
+
+        // Insert mass-based key
+        modifications.insert((mass_key.clone(), amino_acid), modification.clone());
+
+        // Insert unimod-id based key if available
+        if let Some(key) = unimod_key {
+            modifications.insert((key, amino_acid), modification.clone());
         }
     }
 
-    Ok(extract_dir)
+    Ok(modifications)
 }
 
-pub fn parse_instrument_index(instrument: &str) -> usize {
-    let upper_instrument = instrument.to_uppercase();
-    
-    INSTRUMENT_DICT.iter()
-        .find(|&&(name, _)| name == upper_instrument)
-        .map_or(UNKNOWN_INSTRUMENT_NUM, |&(_, index)| index)
-}
+// Lazy static variable to hold the loaded modification map
+pub static MODIFICATION_MAP: Lazy<HashMap<(String, Option<char>), ModificationMap>> = Lazy::new(|| {
+    load_modifications().expect("Failed to load modifications")
+});
+
+
 
 
 #[derive(Clone, Debug, Deserialize)]
@@ -153,24 +155,6 @@ pub fn parse_model_constants(path: &str) -> Result<ModelConstants> {
     Ok(constants)
 }
 
-fn ensure_mod_tsv_exists() -> Result<PathBuf, io::Error> {
-    let path = PathBuf::from(MOD_TSV_PATH);
-    
-    // Ensure the parent directory exists
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    if !path.exists() {
-        info!("Downloading modification.tsv...");
-        let mut response = reqwest::blocking::get(MOD_TSV_URL)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        let mut file = File::create(&path)?;
-        response.copy_to(&mut file)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    }
-    Ok(path)
-}
 
 fn parse_mod_formula(formula: &str, mod_elem_to_idx: &HashMap<String, usize>, mod_feature_size: usize) -> Vec<f32> {
     let mut feature = vec![0.0; mod_feature_size];
@@ -191,10 +175,10 @@ fn parse_mod_formula(formula: &str, mod_elem_to_idx: &HashMap<String, usize>, mo
 }
 
 pub fn load_mod_to_feature(constants: &ModelConstants) -> Result<HashMap<String, Vec<f32>>, Error> {
-    let path = ensure_mod_tsv_exists()?;
+
     let mut rdr = ReaderBuilder::new()
         .delimiter(b'\t')
-        .from_path(path)?;
+        .from_reader(MODIFICATIONS_TSV_BYTES);  // Read from the byte slice
 
     // Create mod_elem_to_idx mapping
     let mod_elem_to_idx: HashMap<String, usize> = constants.mod_elements.iter()
@@ -218,10 +202,10 @@ pub fn load_mod_to_feature(constants: &ModelConstants) -> Result<HashMap<String,
 pub fn load_mod_to_feature_arc(
     constants: &ModelConstants,
 ) -> Result<HashMap<Arc<[u8]>, Vec<f32>>, Error> {
-    let path = ensure_mod_tsv_exists()?;
+
     let mut rdr = ReaderBuilder::new()
         .delimiter(b'\t')
-        .from_path(path)?;
+        .from_reader(MODIFICATIONS_TSV_BYTES);
 
     let mod_elem_to_idx: HashMap<String, usize> = constants
         .mod_elements
@@ -241,59 +225,6 @@ pub fn load_mod_to_feature_arc(
 
     Ok(mod_to_feature)
 }
-
-
-#[derive(Debug, Clone)]
-pub struct ModificationMap {
-    pub name: String,
-    pub amino_acid: Option<char>, // Optional if not applicable
-    pub unimod_id: Option<u32>
-}
-
-
-/// Loads a unified modification map where the key is either:
-/// - ("57.0215", Some('C')) for mass-based lookup
-/// - ("UniMod:4", Some('C')) for UniMod ID–based lookup
-pub fn load_modifications() -> Result<HashMap<(String, Option<char>), ModificationMap>> {
-    let path: PathBuf = ensure_mod_tsv_exists().context("Failed to ensure TSV exists")?;
-
-    let mut rdr = ReaderBuilder::new()
-        .delimiter(b'\t')
-        .from_path(&path)
-        .context("Failed to read modification TSV file")?;
-
-    let mut modifications = HashMap::new();
-
-    for result in rdr.records() {
-        let record = result.context("Failed to read record")?;
-        let mod_name = record.get(0).unwrap_or("").to_string();
-        let unimod_mass: f64 = record.get(1).unwrap_or("0").parse().unwrap_or(0.0);
-        let unimod_id: Option<u32> = record.get(7).and_then(|s| s.parse().ok());
-
-        let mass_key = format!("{:.4}", unimod_mass);
-        let unimod_key = unimod_id.map(|id| format!("UniMod:{}", id));
-
-        let amino_acid = mod_name.split('@').nth(1).and_then(|aa| aa.chars().next());
-
-        let modification = ModificationMap {
-            name: mod_name,
-            amino_acid,
-            unimod_id,
-        };
-
-        // Insert mass-based key
-        modifications.insert((mass_key.clone(), amino_acid), modification.clone());
-
-        // Insert unimod-id based key if available
-        if let Some(key) = unimod_key {
-            modifications.insert((key, amino_acid), modification.clone());
-        }
-    }
-
-    Ok(modifications)
-}
-
-
 
 
 /// Removes mass shifts and UniMod annotations from a modified peptide sequence.
@@ -595,6 +526,59 @@ pub fn get_modification_string(
 }
 
 
+pub fn download_pretrained_models_exist() -> Result<PathBuf, io::Error> {
+    let zip_path = PathBuf::from(PRETRAINED_MODELS_ZIP);
+    let extract_dir = PathBuf::from(PRETRAINED_MODELS_PATH);
+
+    // Ensure the parent directory exists
+    if let Some(parent) = zip_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Download the zip file if it doesn't exist
+    if !zip_path.exists() {
+        info!("Downloading pretrained models...");
+        let mut response = reqwest::blocking::get(PRETRAINED_MODELS_URL)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut file = File::create(&zip_path)?;
+        io::copy(&mut response, &mut file)?;
+    }
+
+    // Unzip the file if the target directory doesn't exist
+    if !extract_dir.exists() {
+        info!("Unzipping pretrained models...");
+        let file = File::open(&zip_path)?;
+        let mut archive = ZipArchive::new(file)?;
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let outpath = extract_dir.join(file.mangled_name());
+
+            if file.name().ends_with('/') {
+                // Create directory
+                fs::create_dir_all(&outpath)?;
+            } else {
+                // Write file
+                if let Some(parent) = outpath.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut outfile = File::create(&outpath)?;
+                io::copy(&mut file, &mut outfile)?;
+            }
+        }
+    }
+
+    Ok(extract_dir)
+}
+
+pub fn parse_instrument_index(instrument: &str) -> usize {
+    let upper_instrument = instrument.to_uppercase();
+    
+    INSTRUMENT_DICT.iter()
+        .find(|&&(name, _)| name == upper_instrument)
+        .map_or(UNKNOWN_INSTRUMENT_NUM, |&(_, index)| index)
+}
+
 
 
 // TODO: Derive from PeptDep constants yaml
@@ -758,7 +742,7 @@ mod tests {
 
     #[test]
     fn test_get_modification_string() {
-        let modification_map = load_modifications().unwrap();
+        let modification_map = MODIFICATION_MAP.clone();
 
         let test_cases = vec![
             ("PEPTIDE", ""),
@@ -766,11 +750,11 @@ mod tests {
             ("P[+15.9949]EPT[+79.9663]IDE", "Oxidation@P;Phospho@T"),
             ("TVQSLEIDLDSM[+15.9949]R", "Oxidation@M"),
             ("TVQS[+79.9663]LEIDLDSM[+15.9949]R", "Phospho@S;Oxidation@M"),
-            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "Any_N-term;Oxidation@M"),
-            ("[+42.0106]PEPTIDE", "Any_N-term"),
+            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "Acetyl@Protein_N-term;Oxidation@M"),
+            ("[+42.0106]PEPTIDE", "Acetyl@Protein_N-term"),
             ("PEPTIDE[+42.0106]", ""),
             ("P[+15.9949]EP[+79.9663]T[+15.9949]IDE", "Oxidation@P;Oxidation@T"),
-            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "Any_N-term;Oxidation@M"),
+            ("(UniMod:1)M(UniMod:35)AAAATMAAAAR", "Acetyl@Protein_N-term;Oxidation@M"),
         ];
 
 
