@@ -98,6 +98,9 @@ fn save_predictions_to_csv(
 
 fn main() -> Result<()> {
     env_logger::init();
+    // Set log level to debug
+    log::set_max_level(log::LevelFilter::Debug);
+
     let (x, y, metadata) = load_test_psm_csv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_with_metadata_for_testing_redeem.csv")?;
 
     println!("Loaded features shape: {:?}", x.shape());
