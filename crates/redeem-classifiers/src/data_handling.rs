@@ -91,6 +91,8 @@ impl Experiment {
     /// This re-ranks all PSMs per spectrum (grouped by file_id and spec_id),
     /// and sets the rank column in `self.x` accordingly (1 = best).
     ///
+    /// Also logs the percentage of PSMs whose rank changed.
+    ///
     /// # Arguments
     /// * `scores` - The current classifier scores (same length as rows in `x`)
     /// * `metadata` - PSM metadata with file_id and spec_id for grouping
@@ -114,16 +116,33 @@ impl Experiment {
                 .push((i, scores[i]));
         }
 
+        let mut changed_ranks = 0;
+
         // 3. For each group, sort by score descending and assign new rank
         for group in spectrum_groups.values_mut() {
             group.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             for (rank, (row_idx, _)) in group.iter().enumerate() {
-                self.x[[*row_idx, rank_feature_idx]] = (rank + 1) as f32;
+                let old_rank = self.x[[*row_idx, rank_feature_idx]] as usize;
+                let new_rank = rank + 1;
+                if old_rank != new_rank {
+                    changed_ranks += 1;
+                }
+                self.x[[*row_idx, rank_feature_idx]] = new_rank as f32;
             }
         }
 
-        log::debug!("Updated rank feature for {} spectrum groups.", spectrum_groups.len());
+        let total = self.x.nrows();
+        let pct_changed = (changed_ranks as f64 / total as f64) * 100.0;
+
+        log::debug!(
+            "Updated rank feature for {} spectrum groups. Rank changed for {:.2}% of PSMs ({} of {}).",
+            spectrum_groups.len(),
+            pct_changed,
+            changed_ranks,
+            total
+        );
     }
+
 
     pub fn get_top_test_peaks(&self) -> Experiment {
         let mask = &self.is_train.mapv(|x| !x) & &self.is_top_peak;
