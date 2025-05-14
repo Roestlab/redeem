@@ -5,56 +5,83 @@ use ndarray::{Array1, Array2};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::io::BufReader;
 
+use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
 use redeem_classifiers::models::utils::ModelType;
 use redeem_classifiers::report::{report::{Report, ReportSection}, plots::{plot_score_histogram, plot_pp}};
 
 
-fn read_features_tsv(path: &str) -> Result<Array2<f32>, Box<dyn Error>> {
+/// Load a test PSM CSV file into feature matrix, labels, and metadata.
+///
+/// # Arguments
+/// * `path` - Path to the CSV file
+///
+/// # Returns
+/// A tuple of (`x`, `y`, `PsmMetadata`)
+pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMetadata)> {
+    let file = File::open(path)?;
     let mut reader = ReaderBuilder::new()
-        .has_headers(false)
-        .delimiter(b',')
-        .from_path(path)?;
+        .has_headers(true)
+        .from_reader(BufReader::new(file));
 
-    let mut data = Vec::new();
+    let headers = reader
+        .headers()?
+        .iter()
+        .map(|h| h.to_string())
+        .collect::<Vec<_>>();
+
+    // Find indices
+    let file_id_idx = headers.iter().position(|h| h == "file_id").unwrap();
+    let spec_id_idx = headers.iter().position(|h| h == "spec_id").unwrap();
+    let label_idx = headers.iter().position(|h| h == "label").unwrap();
+
+    // Everything else is a feature
+    let feature_indices: Vec<usize> = (0..headers.len())
+        .filter(|&i| i != file_id_idx && i != spec_id_idx && i != label_idx)
+        .collect();
+
+    let feature_names = feature_indices
+        .iter()
+        .map(|&i| headers[i].clone())
+        .collect::<Vec<_>>();
+
+    let mut file_ids = Vec::new();
+    let mut spec_ids = Vec::new();
+    let mut labels = Vec::new();
+    let mut features = Vec::new();
 
     for result in reader.records() {
         let record = result?;
-        let row: Vec<f32> = record
+
+        file_ids.push(record[file_id_idx].parse::<usize>()?);
+        spec_ids.push(record[spec_id_idx].to_string());
+        labels.push(record[label_idx].parse::<i32>()?);
+
+        let row = feature_indices
             .iter()
-            .map(|field| field.parse::<f32>())
-            .collect::<Result<_, _>>()?;
-        data.push(row);
+            .map(|&i| record[i].parse::<f32>().unwrap_or(f32::NAN))
+            .collect::<Vec<f32>>();
+
+        features.extend(row);
     }
 
-    let n_samples = data.len();
-    let n_features = data[0].len();
+    let n_rows = labels.len();
+    let n_cols = feature_indices.len();
 
-    Array2::from_shape_vec(
-        (n_samples, n_features),
-        data.into_iter().flatten().collect(),
-    )
-    .map_err(|e| e.into())
+    let x = Array2::from_shape_vec((n_rows, n_cols), features)?;
+    let y = Array1::from_vec(labels);
+
+    let metadata = PsmMetadata {
+        file_id: file_ids,
+        spec_id: spec_ids,
+        feature_names,
+    };
+
+    Ok((x, y, metadata))
 }
 
-fn read_labels_tsv(path: &str) -> Result<Array1<i32>, Box<dyn Error>> {
-    let mut reader = ReaderBuilder::new()
-        .has_headers(false)
-        .delimiter(b'\t')
-        .from_path(path)?;
-
-    let labels: Vec<i32> = reader
-        .records()
-        .map(|r| {
-            let record = r?;
-            let value = record.get(0).ok_or_else(|| "Empty row".to_string())?;
-            value.parse::<i32>().map_err(|e| e.into())
-        })
-        .collect::<Result<_, Box<dyn Error>>>()?;
-
-    Ok(Array1::from_vec(labels))
-}
 
 fn save_predictions_to_csv(
     predictions: &Array1<f32>,
@@ -71,12 +98,10 @@ fn save_predictions_to_csv(
 
 fn main() -> Result<()> {
     env_logger::init();
-    // Load the test data from the TSV files
-    let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
-    // Select first 10 columns of data
-    let x = x.slice(ndarray::s![.., ..10]).to_owned();
+    // Set log level to debug
+    log::set_max_level(log::LevelFilter::Debug);
 
-    let y = read_labels_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_labels_for_testing.csv").unwrap();
+    let (x, y, metadata) = load_test_psm_csv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_with_metadata_for_testing_redeem.csv")?;
 
     println!("Loaded features shape: {:?}", x.shape());
     println!("Loaded labels shape: {:?}", y.shape());
@@ -97,7 +122,7 @@ fn main() -> Result<()> {
         3,
         Some((0.15, 1.0))
     );
-    let predictions = learner.fit(x, y.clone());
+    let predictions = learner.fit(x, y.clone(), metadata);
 
     println!("Labels: {:?}", y);
 
