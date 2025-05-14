@@ -1,20 +1,19 @@
 
 use std::sync::Arc;
 
-/// Type of RT normalization used
 #[derive(Debug, Clone, Copy)]
-pub enum RTNormalization {
+pub enum TargetNormalization {
     ZScore(f32, f32),     // mean, std
     MinMax(f32, f32),     // min, max
     None,
 }
 
-impl RTNormalization {
+impl TargetNormalization {
     pub fn from_str(norm: Option<String>) -> Self {
         match norm.as_deref() {
-            Some("z_score") => RTNormalization::ZScore(0.0, 0.0),
-            Some("min_max") => RTNormalization::MinMax(0.0, 0.0),
-            _ => RTNormalization::None,
+            Some("z_score") => TargetNormalization::ZScore(0.0, 0.0),
+            Some("min_max") => TargetNormalization::MinMax(0.0, 0.0),
+            _ => TargetNormalization::None,
         }
     }
 }

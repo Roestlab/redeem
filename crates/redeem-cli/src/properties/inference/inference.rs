@@ -5,7 +5,7 @@ use redeem_properties::models::ccs_model::load_collision_cross_section_model;
 use redeem_properties::models::model_interface::ModelInterface;
 use redeem_properties::models::rt_cnn_lstm_model::RTCNNLSTMModel;
 use redeem_properties::models::rt_model::load_retention_time_model;
-use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
+use redeem_properties::utils::data_handling::{PeptideData, TargetNormalization};
 use redeem_properties::utils::peptdeep_utils::load_modifications;
 use redeem_properties::utils::utils::get_device;
 

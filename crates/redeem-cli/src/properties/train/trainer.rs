@@ -6,7 +6,7 @@ use redeem_properties::models::{
     ccs_cnn_lstm_model::CCSCNNLSTMModel, ccs_cnn_tf_model::CCSCNNTFModel,
     rt_cnn_lstm_model::RTCNNLSTMModel, rt_cnn_transformer_model::RTCNNTFModel,
 };
-use redeem_properties::utils::data_handling::{PeptideData, RTNormalization};
+use redeem_properties::utils::data_handling::{PeptideData, TargetNormalization};
 use redeem_properties::utils::peptdeep_utils::load_modifications;
 use redeem_properties::utils::utils::get_device;
 use report_builder::{
@@ -210,9 +210,9 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
                 match (true_pep.retention_time, pred_pep.retention_time) {
                     (Some(t), Some(p)) => {
                         let t_denorm = match norm_factor {
-                            RTNormalization::ZScore(mean, std) => t as f64 * std as f64 + mean as f64,
-                            RTNormalization::MinMax(min, range) => t as f64 * range as f64 + min as f64,
-                            RTNormalization::None => t as f64,
+                            TargetNormalization::ZScore(mean, std) => t as f64 * std as f64 + mean as f64,
+                            TargetNormalization::MinMax(min, range) => t as f64 * range as f64 + min as f64,
+                            TargetNormalization::None => t as f64,
                         };
                         Some((t_denorm, p as f64))
                     }

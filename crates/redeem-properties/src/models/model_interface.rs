@@ -5,7 +5,7 @@ use crate::{
     },
     models::{ccs_model::CCSModelWrapper, ms2_model::MS2ModelWrapper, rt_model::RTModelWrapper},
     utils::{
-        data_handling::{PeptideBatchData, PeptideData, RTNormalization},
+        data_handling::{PeptideBatchData, PeptideData, TargetNormalization},
         logging::Progress,
         peptdeep_utils::{
             get_modification_indices, get_modification_string, parse_instrument_index,
@@ -910,7 +910,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             (String, Option<char>),
             crate::utils::peptdeep_utils::ModificationMap,
         >,
-        rt_norm: RTNormalization,
+        rt_norm: TargetNormalization,
     ) -> Result<Vec<PeptideData>> {
         let num_batches = (inference_data.len() + batch_size - 1) / batch_size;
         info!(
@@ -967,11 +967,11 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                                 match self.property_type() {
                                     PropertyType::RT => {
                                         peptide.retention_time = Some(match rt_norm {
-                                            RTNormalization::ZScore(mean, std) => pred * std + mean,
-                                            RTNormalization::MinMax(min, max) => {
+                                            TargetNormalization::ZScore(mean, std) => pred * std + mean,
+                                            TargetNormalization::MinMax(min, max) => {
                                                 pred * (max - min) + min
                                             }
-                                            RTNormalization::None => pred,
+                                            TargetNormalization::None => pred,
                                         });
                                     }
                                     PropertyType::CCS => peptide.ion_mobility = Some(pred),

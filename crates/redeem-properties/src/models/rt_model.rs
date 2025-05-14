@@ -3,7 +3,7 @@
 use crate::models::model_interface::{ModelInterface, PredictionResult};
 use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
 use crate::models::rt_cnn_transformer_model::RTCNNTFModel;
-use crate::utils::data_handling::{PeptideData, RTNormalization};
+use crate::utils::data_handling::{PeptideData, TargetNormalization};
 use crate::utils::peptdeep_utils::ModificationMap;
 use crate::utils::stats::TrainingStepMetrics;
 use anyhow::{anyhow, Result};
@@ -123,7 +123,7 @@ impl RTModelWrapper {
         inference_data: &Vec<PeptideData>,
         batch_size: usize,
         modifications: HashMap<(String, Option<char>), ModificationMap>,
-        rt_norm_params: RTNormalization,
+        rt_norm_params: TargetNormalization,
     ) -> Result<Vec<PeptideData>> {
         self.model
             .inference(inference_data, batch_size, modifications, rt_norm_params)

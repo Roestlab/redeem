@@ -5,7 +5,7 @@ use std::io::BufReader;
 use anyhow::{Result, Context};
 use csv::ReaderBuilder;
 use redeem_properties::utils::peptdeep_utils::{get_modification_indices, get_modification_string, ModificationMap};
-use redeem_properties::utils::{data_handling::{PeptideData, RTNormalization}, peptdeep_utils::remove_mass_shift};
+use redeem_properties::utils::{data_handling::{PeptideData, TargetNormalization}, peptdeep_utils::remove_mass_shift};
 
 
 
@@ -17,9 +17,9 @@ pub fn load_peptide_data<P: AsRef<Path>>(
     model_arch: &str,
     nce: Option<i32>,
     instrument: Option<String>,
-    normalize_rt: Option<String>,
+    normalize_target: Option<String>,
     modifications: &HashMap<(String, Option<char>), ModificationMap>,
-) -> Result<(Vec<PeptideData>, RTNormalization)> {
+) -> Result<(Vec<PeptideData>, TargetNormalization)> {
     let file = File::open(&path)
         .with_context(|| format!("Failed to open file: {:?}", path.as_ref()))?;
     let reader = BufReader::new(file);
@@ -34,7 +34,13 @@ pub fn load_peptide_data<P: AsRef<Path>>(
 
     let headers = rdr.headers()?.clone();
     let mut peptides = Vec::new();
-    let mut rt_values = Vec::new();
+    let mut target_values = Vec::new();
+
+    let normalize_field = if model_arch.contains("ccs") {
+        "ccs"
+    } else {
+        "retention time"
+    };
 
     for result in rdr.records() {
         let record = result?;
@@ -51,7 +57,6 @@ pub fn load_peptide_data<P: AsRef<Path>>(
         let sequence_str = String::from_utf8_lossy(&sequence_bytes);
 
         let naked_sequence = Arc::from(remove_mass_shift(&sequence_str).as_bytes().to_vec().into_boxed_slice());
-
         let mods: Arc<[u8]> = Arc::from(get_modification_string(&sequence_str, modifications).into_bytes().into_boxed_slice());
         let mod_sites: Arc<[u8]> = Arc::from(get_modification_indices(&sequence_str).into_bytes().into_boxed_slice());
 
@@ -98,10 +103,12 @@ pub fn load_peptide_data<P: AsRef<Path>>(
                 }),
             _ => None,
         };
-        
 
-        if let Some(rt) = retention_time {
-            rt_values.push(rt);
+        if let Some(val) = match normalize_field {
+            "ccs" => ccs,
+            _ => retention_time,
+        } {
+            target_values.push(val);
         }
 
         peptides.push(PeptideData {
@@ -120,29 +127,38 @@ pub fn load_peptide_data<P: AsRef<Path>>(
         });
     }
 
-    match RTNormalization::from_str(normalize_rt) {
-        RTNormalization::ZScore(_, _) if !rt_values.is_empty() => {
-            let mean = rt_values.iter().copied().sum::<f32>() / rt_values.len() as f32;
-            let std = (rt_values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / rt_values.len() as f32).sqrt();
+    match TargetNormalization::from_str(normalize_target) {
+        TargetNormalization::ZScore(_, _) if !target_values.is_empty() => {
+            let mean = target_values.iter().copied().sum::<f32>() / target_values.len() as f32;
+            let std = (target_values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / target_values.len() as f32).sqrt();
             for peptide in &mut peptides {
-                if let Some(rt) = peptide.retention_time.as_mut() {
-                    *rt = (*rt - mean) / std;
+                match normalize_field {
+                    "ccs" => if let Some(val) = peptide.ccs.as_mut() {
+                        *val = (*val - mean) / std;
+                    },
+                    _ => if let Some(val) = peptide.retention_time.as_mut() {
+                        *val = (*val - mean) / std;
+                    },
                 }
             }
-            Ok((peptides, RTNormalization::ZScore(mean, std)))
+            Ok((peptides, TargetNormalization::ZScore(mean, std)))
         }
-        RTNormalization::MinMax(_, _) if !rt_values.is_empty() => {
-            let min = *rt_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-            let max = *rt_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+        TargetNormalization::MinMax(_, _) if !target_values.is_empty() => {
+            let min = *target_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let max = *target_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
             let range = max - min;
             for peptide in &mut peptides {
-                if let Some(rt) = peptide.retention_time.as_mut() {
-                    *rt = (*rt - min) / range;
+                match normalize_field {
+                    "ccs" => if let Some(val) = peptide.ccs.as_mut() {
+                        *val = (*val - min) / range;
+                    },
+                    _ => if let Some(val) = peptide.retention_time.as_mut() {
+                        *val = (*val - min) / range;
+                    },
                 }
             }
-            Ok((peptides, RTNormalization::MinMax(min, max)))
+            Ok((peptides, TargetNormalization::MinMax(min, max)))
         }
-        _ => Ok((peptides, RTNormalization::None))
+        _ => Ok((peptides, TargetNormalization::None)),
     }
 }
-
