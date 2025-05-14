@@ -1056,11 +1056,11 @@ impl Encoder26aaModCnnTransformerAttnSum {
         }
 
         let x = self.input_cnn.forward(&x)?;
-
+        let x = x.contiguous()?;
         let x = self.proj_cnn_to_transformer.forward(&x)?;
-
+        let x = x.contiguous()?;
         let x = self.input_transformer.forward(&x)?;
-
+        let x = x.contiguous()?;
         let x = self.attn_sum.forward(&x)?;
 
         Ok(x)
@@ -1177,11 +1177,11 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
         log::trace!("[Encoder26aaModChargeCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
 
         let x = self.input_cnn.forward(&x)?;
-
+        let x = x.contiguous()?;
         let x = self.proj_cnn_to_transformer.forward(&x)?;
-
+        let x = x.contiguous()?;
         let x = self.input_transformer.forward(&x)?;
-
+        let x = x.contiguous()?;
         let x = self.attn_sum.forward(&x)?;
 
         Ok(x)
