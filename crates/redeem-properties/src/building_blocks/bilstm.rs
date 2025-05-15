@@ -77,11 +77,17 @@ impl BidirectionalLSTM {
         let mut state_bw = rnn::LSTMState { h: h0_backward, c: c0_backward };
     
         let mut out_bw_states = Vec::with_capacity(seq_len);
-        for t in (0..seq_len).rev() {
+        for t in 0..seq_len {
             let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?;
-            state_bw = lstm_backward.step(&xt, &state_bw)?;
-            out_bw_states.push(state_bw.clone());
+        
+            log::debug!("[step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
+            log::debug!("[step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
+            log::debug!("[step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
+        
+            state_fw = lstm_forward.step(&xt, &state_fw)?;
+            out_fw_states.push(state_fw.clone());
         }
+        
         out_bw_states.reverse();
         let out_bw = Tensor::stack(&out_bw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
         let last_bw_h = out_bw_states.last().unwrap().h().clone();
@@ -112,10 +118,19 @@ impl BidirectionalLSTM {
         let xs = xs.contiguous()?;
         log::debug!("xs after contiguous shape: {:?}, is_contiguous: {}", xs.shape(), xs.is_contiguous());
     
+        log::debug!("forward_with_state: xs shape = {:?}, strides = {:?}", xs.shape(), xs.stride());
+        log::debug!("h0_1 shape: {:?}, strides: {:?}", h0.shape(), h0.stride());
+        log::debug!("c0_1 shape: {:?}, strides: {:?}", c0.shape(), c0.stride());
+
         let (out1, (hn1, cn1)) = self.apply_bidirectional_layer(&xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1)?;
     
         let out1 = out1.contiguous()?;
         log::debug!("out1 after first layer shape: {:?}, is_contiguous: {}", out1.shape(), out1.is_contiguous());
+
+        log::debug!("forward_with_state: out1 shape = {:?}, strides = {:?}", out1.shape(), out1.stride());
+        log::debug!("h0_2 shape: {:?}, strides: {:?}", h0.shape(), h0.stride());
+        log::debug!("c0_2 shape: {:?}, strides: {:?}", c0.shape(), c0.stride());
+
     
         let (out2, (hn2, cn2)) = self.apply_bidirectional_layer(&out1, &self.forward_lstm2, &self.backward_lstm2, &h0_2, &c0_2)?;
     
