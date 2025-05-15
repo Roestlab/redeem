@@ -122,7 +122,7 @@ fn main() -> Result<()> {
         3,
         Some((0.15, 1.0))
     );
-    let predictions = learner.fit(x, y.clone(), metadata);
+    let (predictions, _ranks) = learner.fit(x, y.clone(), metadata)?;
 
     println!("Labels: {:?}", y);
 

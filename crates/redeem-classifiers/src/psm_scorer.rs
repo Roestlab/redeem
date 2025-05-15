@@ -321,7 +321,7 @@ impl SemiSupervisedLearner {
     /// # Returns
     ///
     /// The predictions for the input features
-    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> Array1<f32> {
+    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> anyhow::Result<(Array1<f32>, Array1<f32>)> {
 
         let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
 
@@ -331,9 +331,7 @@ impl SemiSupervisedLearner {
         let (_best_feat, _best_positives, mut new_labels, best_desc, _best_feature_scores) =
             self.init_best_feature(&experiment, self.train_fdr);
 
-        // println!("Original labels: {:?}", experiment.y);
         experiment.y = new_labels.clone();
-        // println!("New labels: {:?}", experiment.y);
 
         let folds = self.create_folds(&experiment, self.xeval_num_iter, self.class_pct.map(|(t, _d)| t), self.class_pct.map(|(_t, d)| d));
 
@@ -380,11 +378,15 @@ impl SemiSupervisedLearner {
 
         // Final prediction on the entire dataset
         log::info!("Final prediction on the entire dataset");
-        let experiment = Experiment::new(x, y, psm_metadata);
+        let mut experiment = Experiment::new(x, y, psm_metadata);
 
         // self.model
         //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
-        Array1::from(self.model.predict_proba(&experiment.x))
+        let final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
+        experiment.update_rank_feature(&final_predictions, &experiment.psm_metadata.clone());
+        let updated_ranks = experiment.get_rank_column()?; 
+
+        Ok((final_predictions, updated_ranks))
     }
 }
 

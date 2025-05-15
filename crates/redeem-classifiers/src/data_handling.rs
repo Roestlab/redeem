@@ -143,6 +143,24 @@ impl Experiment {
         );
     }
 
+    /// Extracts the "rank" feature column as a 1D array.
+    ///
+    /// # Returns
+    /// * `Ok(Array1<f32>)` containing the rank values (one per row in `x`)
+    /// * `Err` if "rank" is not found in the feature names
+    pub fn get_rank_column(&self) -> anyhow::Result<Array1<f32>> {
+        let Some(rank_idx) = self
+            .psm_metadata
+            .feature_names
+            .iter()
+            .position(|name| name == "rank")
+        else {
+            anyhow::bail!("'rank' feature not found in feature_names");
+        };
+
+        Ok(self.x.column(rank_idx).to_owned())
+    }
+
 
     pub fn get_top_test_peaks(&self) -> Experiment {
         let mask = &self.is_train.mapv(|x| !x) & &self.is_top_peak;
