@@ -98,6 +98,9 @@ impl RTModelWrapper {
             learning_rate,
             epochs,
             early_stopping_patience,
+            "training",
+            true,
+            true,
         )
     }
 

@@ -465,6 +465,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// This method initializes model weights from scratch and trains over the given peptide feature data for a specified
     /// number of epochs. Optionally performs validation and tracks both training and validation loss statistics.
     /// Early stopping is applied if the validation loss does not improve for a consecutive number of epochs.
+    /// 
+    /// A Cosine Annealing with Warmup learning rate scheduler is used to adjust the learning rate during training. The initial warmup period is set to 10% of the total training steps.
     ///
     /// # Arguments
     /// * `training_data` - Vector of peptide records used for training.
@@ -475,14 +477,12 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// * `learning_rate` - Learning rate for the AdamW optimizer.
     /// * `epochs` - Maximum number of training epochs.
     /// * `early_stopping_patience` - Number of epochs to wait before stopping if validation loss does not improve.
+    /// * `context` - A string representing the context for logging, e.g., "training" or "fine-tuning".
+    /// * `save_checkpoints` - Flag to save model checkpoints during training.
+    /// * `track_metrics` - Flag to track training and validation metrics.
     ///
     /// # Returns
-    /// A `Vec` of tuples where each tuple contains:
-    /// * `epoch` - Epoch number.
-    /// * `avg_train_loss` - Average training loss for the epoch.
-    /// * `avg_val_loss` - Optional average validation loss for the epoch.
-    /// * `train_std` - Standard deviation of training loss across batches.
-    /// * `val_std` - Optional standard deviation of validation loss across batches.
+    /// [`TrainingStepMetrics`] - A struct containing training and validation loss statistics, learning rates, and other metrics.
     fn train(
         &mut self,
         training_data: &Vec<PeptideData>,
@@ -496,13 +496,17 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         learning_rate: f64,
         epochs: usize,
         early_stopping_patience: usize,
+        context: &str, 
+        save_checkpoints: bool,
+        track_metrics: bool,
     ) -> Result<TrainingStepMetrics> {
         let num_batches = (training_data.len() + batch_size - 1) / batch_size;
         let total_steps = num_batches * epochs;
-        let warmup_steps = total_steps / 10; // 10% of total steps
+        let warmup_steps = total_steps / 10; 
 
         info!(
-            "Training {} model from on {} peptide features ({} batches) for {} epochs",
+            "{} {} model on {} peptide features ({} batches) for {} epochs",
+            context,
             self.get_model_arch(),
             training_data.len(),
             num_batches,
@@ -540,7 +544,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         let mut epoch_losses = vec![];
 
         for epoch in 0..epochs {
-            let progress = Progress::new(num_batches, &format!("[training] Epoch {}: ", epoch));
+            let progress = Progress::new(num_batches, &format!("[{}] Epoch {}: ", context, epoch));
             let mut batch_losses = vec![];
 
             training_data.chunks(batch_size).enumerate().try_for_each(
@@ -571,21 +575,24 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         _ => None,
                     };
 
-                    step_metrics.epochs.push(epoch);
-                    step_metrics.steps.push(step_idx);
-                    step_metrics
-                        .learning_rates
-                        .push(lr_scheduler.get_last_lr() as f64);
-                    step_metrics.losses.push(loss_val);
-                    step_metrics.phases.push(TrainingPhase::Train);
-                    step_metrics.accuracies.push(acc);
-                    step_metrics.precisions.push(None);
-                    step_metrics.recalls.push(None);
-                    step_idx += 1;
+                    if track_metrics{
+                        step_metrics.epochs.push(epoch);
+                        step_metrics.steps.push(step_idx);
+                        step_metrics
+                            .learning_rates
+                            .push(lr_scheduler.get_last_lr() as f64);
+                        step_metrics.losses.push(loss_val);
+                        step_metrics.phases.push(TrainingPhase::Train);
+                        step_metrics.accuracies.push(acc);
+                        step_metrics.precisions.push(None);
+                        step_metrics.recalls.push(None);
+                        step_idx += 1;
+                    }
+                    
 
                     progress.update_description(&format!(
-                        "[training] Epoch {}: Loss: {:.4}",
-                        epoch, loss_val
+                        "[{}] Epoch {}: Loss: {:.4}",
+                        context, epoch, loss_val
                     ));
                     progress.inc();
 
@@ -633,17 +640,19 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     })
                     .collect::<Result<_>>()?;
 
-                for (val_loss, idx, lr, acc) in &val_results {
-                    step_metrics.epochs.push(epoch);
-                    step_metrics.steps.push(val_step_idx + idx);
-                    step_metrics.learning_rates.push(*lr);
-                    step_metrics.losses.push(*val_loss);
-                    step_metrics.phases.push(TrainingPhase::Validation);
-                    step_metrics.accuracies.push(*acc);
-                    step_metrics.precisions.push(None);
-                    step_metrics.recalls.push(None);
+                if track_metrics{
+                    for (val_loss, idx, lr, acc) in &val_results {
+                        step_metrics.epochs.push(epoch);
+                        step_metrics.steps.push(val_step_idx + idx);
+                        step_metrics.learning_rates.push(*lr);
+                        step_metrics.losses.push(*val_loss);
+                        step_metrics.phases.push(TrainingPhase::Validation);
+                        step_metrics.accuracies.push(*acc);
+                        step_metrics.precisions.push(None);
+                        step_metrics.recalls.push(None);
+                    }
+                    val_step_idx += val_results.len();
                 }
-                val_step_idx += val_results.len();
 
                 let val_losses: Vec<f32> =
                     val_results.iter().map(|(loss, _, _, _)| *loss).collect();
@@ -666,45 +675,18 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 if avg_val_loss < best_val_loss {
                     best_val_loss = avg_val_loss;
                     epochs_without_improvement = 0;
-
-                    // Check if the prior checkpoint exists, if it does delete it
-                    let checkpoint_path = format!(
-                        "redeem_{}_best_val_ckpt_model_epoch_{}.safetensors",
-                        self.get_model_arch(),
-                        epoch - 1
-                    );
-                    if PathBuf::from(&checkpoint_path).exists() {
-                        std::fs::remove_file(&checkpoint_path)?;
+                    if save_checkpoints{
+                        self.save_epoch_checkpoint(epoch, "val")?;
                     }
-
-                    let checkpoint_path = format!(
-                        "redeem_{}_best_val_ckpt_model_epoch_{}.safetensors",
-                        self.get_model_arch(),
-                        epoch
-                    );
-                    self.get_mut_varmap().save(&checkpoint_path)?;
                 } else {
                     epochs_without_improvement += 1;
                     if epochs_without_improvement >= early_stopping_patience {
                         info!("Early stopping triggered after {} epochs without validation loss improvement.", early_stopping_patience);
                         return Ok(step_metrics);
                     }
-                    let checkpoint_path = format!(
-                        "redeem_{}_ckpt_model_epoch_{}.safetensors",
-                        self.get_model_arch(),
-                        epoch - 1
-                    );
-                    // Check if the prior checkpoint exists, if it does delete it
-                    if PathBuf::from(&checkpoint_path).exists() {
-                        std::fs::remove_file(&checkpoint_path)?;
+                    if save_checkpoints{
+                        self.save_epoch_checkpoint(epoch, "train")?;
                     }
-                    // Save the current checkpoint
-                    let checkpoint_path = format!(
-                        "redeem_{}_ckpt_model_epoch_{}.safetensors",
-                        self.get_model_arch(),
-                        epoch
-                    );
-                    self.get_mut_varmap().save(&checkpoint_path)?;
                 }
             } else {
                 epoch_losses.push((epoch, avg_loss, None, std_loss, None));
@@ -713,37 +695,17 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     epoch, avg_loss, std_loss
                 ));
                 progress.finish();
-
-                let checkpoint_path = format!(
-                    "redeem_{}_ckpt_model_epoch_{}.safetensors",
-                    self.get_model_arch(),
-                    epoch - 1
-                );
-                // Check if the prior checkpoint exists, if it does delete it
-                if PathBuf::from(&checkpoint_path).exists() {
-                    std::fs::remove_file(&checkpoint_path)?;
+                if save_checkpoints{
+                    self.save_epoch_checkpoint(epoch, "train")?;
                 }
-                // Save the current checkpoint
-                let checkpoint_path = format!(
-                    "redeem_{}_ckpt_model_epoch_{}.safetensors",
-                    self.get_model_arch(),
-                    epoch
-                );
-                self.get_mut_varmap().save(&checkpoint_path)?;
             }
         }
 
         Ok(step_metrics)
     }
 
-    /// Fine-tune the model on a batch of training data.
-    ///
-    /// # Arguments
-    /// * `training_data` - A vector of `PeptideData` instances representing the training data.
-    /// * `modifications` - A map of modifications and their corresponding feature vectors.
-    /// * `batch_size` - The batch size to use for training.
-    /// * `learning_rate` - The learning rate to use for training.
-    /// * `epochs` - The number of epochs to train for.
+    /// Fine-tune the model on new data using the main [`ModelInterface::train`] method.
+    /// This is a wrapper that disables validation and early stopping.
     fn fine_tune(
         &mut self,
         training_data: &Vec<PeptideData>,
@@ -755,160 +717,21 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         learning_rate: f64,
         epochs: usize,
     ) -> Result<()> {
-        // let num_batches = if training_data.len() < batch_size {
-        //     1
-        // } else {
-        //     let full_batches = training_data.len() / batch_size;
-        //     if training_data.len() % batch_size > 0 {
-        //         full_batches + 1
-        //     } else {
-        //         full_batches
-        //     }
-        // };
+        let _metrics = self.train(
+            training_data,
+            None, // No validation data
+            modifications,
+            batch_size,
+            batch_size, // Validation batch size is same but unused
+            learning_rate,
+            epochs,
+            usize::MAX, // Disable early stopping
+            "fine-tuning",
+            false, // No checkpoints
+            false, // No metrics
+        )?;
 
-        // info!(
-        //     "Fine-tuning {} model on {} peptide features ({} batches) for {} epochs",
-        //     self.get_model_arch(),
-        //     training_data.len(),
-        //     num_batches,
-        //     epochs
-        // );
-
-        // let params = candle_nn::ParamsAdamW {
-        //     lr: learning_rate,
-        //     ..Default::default()
-        // };
-        // let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
-
-        // for epoch in 0..epochs {
-        //     let progress = Progress::new(num_batches, &format!("[fine-tuning] Epoch {}: ", epoch));
-        //     let mut total_loss = 0.0;
-
-        //     for batch_idx in 0..num_batches {
-        //         let start = batch_idx * batch_size;
-        //         let end = (start + batch_size).min(training_data.len());
-        //         let batch_data = &training_data[start..end];
-
-        //         let peptides: Vec<String> = batch_data
-        //             .iter()
-        //             .map(|p| remove_mass_shift(&p.sequence))
-        //             .collect();
-        //         let mods: Vec<String> = batch_data
-        //             .iter()
-        //             .map(|p| get_modification_string(&p.sequence, &modifications))
-        //             .collect();
-        //         let mod_sites: Vec<String> = batch_data
-        //             .iter()
-        //             .map(|p| get_modification_indices(&p.sequence))
-        //             .collect();
-
-        //         let charges = batch_data
-        //             .iter()
-        //             .filter_map(|p| p.charge)
-        //             .collect::<Vec<_>>();
-        //         let charges = if charges.len() == batch_data.len() {
-        //             Some(charges)
-        //         } else {
-        //             None
-        //         };
-
-        //         let nces = batch_data.iter().filter_map(|p| p.nce).collect::<Vec<_>>();
-        //         let nces = if nces.len() == batch_data.len() {
-        //             Some(nces)
-        //         } else {
-        //             None
-        //         };
-
-        //         let instruments = batch_data
-        //             .iter()
-        //             .filter_map(|p| p.instrument.clone())
-        //             .collect::<Vec<_>>();
-        //         let instruments = if instruments.len() == batch_data.len() {
-        //             Some(instruments)
-        //         } else {
-        //             None
-        //         };
-
-        //         let input_batch = self
-        //             .encode_peptides(&peptides, &mods, &mod_sites, charges, nces, instruments)?
-        //             .to_device(self.get_device())?;
-
-        //         log::trace!(
-        //             "[ModelInterface::fine_tune] input_batch shape: {:?}, device: {:?}",
-        //             input_batch.shape(),
-        //             input_batch.device()
-        //         );
-
-        //         let batch_targets = match self.property_type() {
-        //             PropertyType::RT => PredictionResult::RTResult(
-        //                 batch_data
-        //                     .iter()
-        //                     .map(|p| p.retention_time.unwrap_or_default())
-        //                     .collect(),
-        //             ),
-        //             PropertyType::CCS => PredictionResult::CCSResult(
-        //                 batch_data
-        //                     .iter()
-        //                     .map(|p| p.ion_mobility.unwrap_or_default())
-        //                     .collect(),
-        //             ),
-        //             PropertyType::MS2 => PredictionResult::MS2Result(
-        //                 batch_data
-        //                     .iter()
-        //                     .map(|p| p.ms2_intensities.clone().unwrap_or_default())
-        //                     .collect(),
-        //             ),
-        //         };
-
-        //         let target_batch = match batch_targets {
-        //             PredictionResult::RTResult(ref values)
-        //             | PredictionResult::CCSResult(ref values) => {
-        //                 Tensor::new(values.clone(), &self.get_device())?
-        //             }
-        //             PredictionResult::MS2Result(ref spectra) => {
-        //                 let max_len = spectra.iter().map(|s| s.len()).max().unwrap_or(1);
-        //                 let feature_dim = spectra
-        //                     .get(0)
-        //                     .and_then(|s| s.get(0))
-        //                     .map(|v| v.len())
-        //                     .unwrap_or(1);
-        //                 let mut padded_spectra = spectra.clone();
-        //                 for s in &mut padded_spectra {
-        //                     s.resize(max_len, vec![0.0; feature_dim]);
-        //                 }
-        //                 Tensor::new(padded_spectra.concat(), &self.get_device())?.reshape((
-        //                     batch_data.len(),
-        //                     max_len,
-        //                     feature_dim,
-        //                 ))?
-        //             }
-        //         }
-        //         .to_device(self.get_device())?;
-
-        //         let predicted = self.forward(&input_batch)?;
-        //         let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
-        //         opt.backward_step(&loss)?;
-
-        //         total_loss += loss.to_vec0::<f32>().unwrap_or(990.0);
-
-        //         progress.update_description(&format!(
-        //             "[fine-tuning] Epoch {}: Loss: {}",
-        //             epoch,
-        //             loss.to_vec0::<f32>()?
-        //         ));
-        //         progress.inc();
-        //     }
-
-        //     let avg_loss = total_loss / num_batches as f32;
-        //     progress.update_description(&format!(
-        //         "[fine-tuning] Epoch {}: Avg. Batch Loss: {}",
-        //         epoch, avg_loss
-        //     ));
-        //     progress.finish();
-        // }
-
-        // Ok(())
-        todo!()
+        Ok(())
     }
 
     /// Perform inference over a batch of peptides.
@@ -1055,23 +878,47 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             .encode_peptides(naked_sequences, mods, mod_sites, charges, nces, instruments)?
             .to_device(self.get_device())?;
 
-        let target_values: Vec<f32> = match self.property_type() {
-            PropertyType::RT => batch
-                .retention_times
-                .iter()
-                .map(|v| v.unwrap_or(0.0))
-                .collect(),
-            PropertyType::CCS => batch
-                .ccs
-                .iter()
-                .map(|v| v.unwrap_or(0.0))
-                .collect(),
+        let target_tensor = match self.property_type() {
+            PropertyType::RT => {
+                let target_values: Vec<f32> = batch
+                    .retention_times
+                    .iter()
+                    .map(|v| v.unwrap_or(0.0))
+                    .collect();
+                Tensor::new(target_values, &self.get_device())?
+            }
+            PropertyType::CCS => {
+                let target_values: Vec<f32> = batch
+                    .ccs
+                    .iter()
+                    .map(|v| v.unwrap_or(0.0))
+                    .collect();
+                Tensor::new(target_values, &self.get_device())?
+            }
             PropertyType::MS2 => {
-                return Err(anyhow::anyhow!("MS2 training is not yet implemented"))
+                let mut targets = Vec::new();
+                for (i, opt_peptide) in batch.ms2_intensities.iter().enumerate() {
+                    let peptide = opt_peptide.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("Missing MS2 intensities for peptide at index {i}")
+                    })?;
+                    for row in peptide {
+                        for val in row {
+                            targets.push(*val);
+                        }
+                    }
+                }
+                let shape = (
+                    batch.ms2_intensities.len(),
+                    batch.ms2_intensities[0]
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Missing MS2 intensities in batch"))?
+                        .len(),
+                    8,
+                );
+                Tensor::from_vec(targets, shape, &self.get_device())?
             }
         };
 
-        let target_tensor = Tensor::new(target_values, &self.get_device())?;
         Ok((input_batch, target_tensor))
     }
 
@@ -1108,6 +955,35 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             path
         );
         self.get_mut_varmap().clone().save(&PathBuf::from(path))?;
+        Ok(())
+    }
+
+    /// Save epoch checkpoint and delete prior checkpoint
+    fn save_epoch_checkpoint(&mut self, epoch: usize, ctx: &str) -> Result<()> {
+        let insert_ctx = match ctx {
+            "train" => "_",
+            "val" => "_best_val_",
+            _ => panic!("Invalid context for saving checkpoint. Must be 'train' or 'val'."),
+        };
+
+        // Check if the prior checkpoint exists, if it does delete it
+        let checkpoint_path = format!(
+            "redeem_{}{}ckpt_model_epoch_{}.safetensors",
+            self.get_model_arch(),
+            insert_ctx,
+            epoch - 1
+        );
+        if PathBuf::from(&checkpoint_path).exists() {
+            std::fs::remove_file(&checkpoint_path)?;
+        }
+        // Save the current checkpoint
+        let checkpoint_path = format!(
+            "redeem_{}{}ckpt_model_epoch_{}.safetensors",
+            self.get_model_arch(),
+            insert_ctx,
+            epoch
+        );
+        self.get_mut_varmap().save(&checkpoint_path)?;
         Ok(())
     }
 
