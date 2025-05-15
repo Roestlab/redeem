@@ -110,8 +110,11 @@ impl BidirectionalLSTM {
         let h0_2 = h0.narrow(0, 2, 2)?;
         let c0_2 = c0.narrow(0, 2, 2)?;
 
-        let (out1, (hn1, cn1)) = self.apply_bidirectional_layer(xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1)?;
+        let xs = xs.contiguous()?;
 
+        let (out1, (hn1, cn1)) = self.apply_bidirectional_layer(&xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1)?;
+
+        let out1 = out1.contiguous()?;
         let (out2, (hn2, cn2)) = self.apply_bidirectional_layer(&out1, &self.forward_lstm2, &self.backward_lstm2, &h0_2, &c0_2)?;
 
         let hn = Tensor::cat(&[hn1, hn2], 0)?;
