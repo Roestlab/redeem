@@ -4,6 +4,7 @@ use redeem_properties::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
 use redeem_properties::models::ccs_cnn_tf_model::CCSCNNTFModel;
 use redeem_properties::models::model_interface::ModelInterface;
 use redeem_properties::models::rt_cnn_lstm_model::RTCNNLSTMModel;
+use redeem_properties::models::rt_cnn_transformer_model::RTCNNTFModel;
 use redeem_properties::utils::data_handling::{PeptideData, TargetNormalization};
 use redeem_properties::utils::peptdeep_utils::{load_modifications, MODIFICATION_MAP};
 use redeem_properties::utils::utils::get_device;
@@ -46,7 +47,7 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
             true,
             device.clone(),
         )?),
-        "rt_cnn_tf" => Box::new(RTCNNLSTMModel::new(
+        "rt_cnn_tf" => Box::new(RTCNNTFModel::new(
             &config.model_path,
             None,
             0,
