@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use maud::{PreEscaped, html};
 use redeem_properties::models::model_interface::ModelInterface;
-use redeem_properties::models::rt_model::load_retention_time_model;
 use redeem_properties::models::{
     ccs_cnn_lstm_model::CCSCNNLSTMModel, ccs_cnn_tf_model::CCSCNNTFModel,
     rt_cnn_lstm_model::RTCNNLSTMModel, rt_cnn_transformer_model::RTCNNTFModel,
@@ -33,7 +32,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         &config.model_arch,
         Some(config.nce),
         Some(config.instrument.clone()),
-        Some(config.rt_normalization.clone().unwrap()),
+        Some(config.normalization.clone().unwrap()),
         &modifications,
     )?;
     log::info!("Loaded {} training peptides", train_peptides.len());
@@ -45,7 +44,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
             &config.model_arch,
             Some(config.nce),
             Some(config.instrument.clone()),
-            Some(config.rt_normalization.clone().unwrap()),
+            Some(config.normalization.clone().unwrap()),
             &modifications,
         )
         .context("Failed to load validation data")?;

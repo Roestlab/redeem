@@ -13,7 +13,7 @@ pub struct PropertyTrainConfig {
     pub train_data: String,
     pub validation_data: Option<String>,
     pub output_file: String,
-    pub rt_normalization: Option<String>,
+    pub normalization: Option<String>,
     pub model_arch: String,
     pub device: String,
     pub batch_size: usize,
@@ -33,7 +33,7 @@ impl Default for PropertyTrainConfig {
             train_data: String::new(),
             validation_data: None,
             output_file: String::from("rt_cnn_tf.safetensors"),
-            rt_normalization: Some(String::from("min_max")),
+            normalization: Some(String::from("min_max")),
             model_arch: String::from("rt_cnn_tf"),
             device: String::from("cpu"),
             batch_size: 64,
@@ -79,7 +79,7 @@ impl PropertyTrainConfig {
         load_or_default!(train_data);
         load_or_default!(validation_data);
         load_or_default!(output_file);
-        load_or_default!(rt_normalization);
+        load_or_default!(normalization);
         load_or_default!(model_arch);
         load_or_default!(device);
         load_or_default!(batch_size);

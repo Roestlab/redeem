@@ -8,9 +8,11 @@ use crate::properties::util::validate_tsv_or_csv_file;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PropertyInferenceConfig {
+    pub version: String,
     pub model_path: String,
     pub inference_data: String,
     pub output_file: String,
+    pub normalization: Option<String>,
     pub model_arch: String,
     pub device: String,
     pub batch_size: usize,
@@ -21,9 +23,11 @@ pub struct PropertyInferenceConfig {
 impl Default for PropertyInferenceConfig {
     fn default() -> Self {
         PropertyInferenceConfig {
+            version: clap::crate_version!().to_string(),
             model_path: String::new(),
             inference_data: String::new(),
             output_file: String::from("redeem_inference.csv"),
+            normalization: Some(String::from("min_max")),
             model_arch: String::from("rt_cnn_tf"),
             device: String::from("cpu"),
             batch_size: 64,
@@ -64,6 +68,7 @@ impl PropertyInferenceConfig {
         load_or_default!(model_path);
         load_or_default!(inference_data);
         load_or_default!(output_file);
+        load_or_default!(normalization);
         load_or_default!(model_arch);
         load_or_default!(device);
         load_or_default!(batch_size);
