@@ -54,17 +54,20 @@ impl BidirectionalLSTM {
     ) -> Result<(Tensor, (Tensor, Tensor))> {
         let (_batch_size, seq_len, _input_size) = input.dims3()?;
     
+        log::debug!("Entering apply_bidirectional_layer");
+    
         // Initial states for forward
         let h0_forward = h0.i(0)?;
         let c0_forward = c0.i(0)?;
-        let state_fw = rnn::LSTMState { h: h0_forward, c: c0_forward };
-
+        let state_fw = rnn::LSTMState { h: h0_forward.clone(), c: c0_forward.clone() };
+    
         let input = input.contiguous()?;
+        log::debug!("Forward input shape: {:?}, is_contiguous: {}", input.shape(), input.is_contiguous());
+    
         let out_fw_states = lstm_forward.seq_init(&input, &state_fw)?;
-        let out_fw = Tensor::stack(
-            &out_fw_states.iter().map(|s| s.h()).collect::<Vec<_>>(),
-            1,
-        )?;
+        let out_fw = Tensor::stack(&out_fw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
+        log::debug!("out_fw shape: {:?}, is_contiguous: {}", out_fw.shape(), out_fw.is_contiguous());
+    
         let last_fw_h = out_fw_states.last().unwrap().h().clone();
         let last_fw_c = out_fw_states.last().unwrap().c().clone();
     
@@ -76,17 +79,17 @@ impl BidirectionalLSTM {
                 .collect::<Result<Vec<_>>>()?,
             1,
         )?.contiguous()?;
-            
+        log::debug!("Backward input_reversed shape: {:?}, is_contiguous: {}", input_reversed.shape(), input_reversed.is_contiguous());
+    
         // Initial states for backward
         let h0_backward = h0.i(1)?;
         let c0_backward = c0.i(1)?;
-        let state_bw = rnn::LSTMState { h: h0_backward, c: c0_backward };
+        let state_bw = rnn::LSTMState { h: h0_backward.clone(), c: c0_backward.clone() };
     
         let out_bw_states = lstm_backward.seq_init(&input_reversed, &state_bw)?;
-        let out_bw = Tensor::stack(
-            &out_bw_states.iter().map(|s| s.h()).collect::<Vec<_>>(),
-            1,
-        )?;
+        let out_bw = Tensor::stack(&out_bw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
+        log::debug!("out_bw shape: {:?}, is_contiguous: {}", out_bw.shape(), out_bw.is_contiguous());
+    
         let last_bw_h = out_bw_states.last().unwrap().h().clone();
         let last_bw_c = out_bw_states.last().unwrap().c().clone();
     
@@ -94,31 +97,35 @@ impl BidirectionalLSTM {
         let hn = Tensor::stack(&[last_fw_h.clone(), last_bw_h.clone()], 0)?;
         let cn = Tensor::stack(&[last_fw_c, last_bw_c], 0)?;
         let output = Tensor::cat(&[out_fw, out_bw], 2)?;
+        log::debug!("Combined output shape: {:?}, is_contiguous: {}", output.shape(), output.is_contiguous());
     
         Ok((output, (hn, cn)))
     }
-    
-    
+       
 
     /// Forward with hidden states returned
     pub fn forward_with_state(&self, xs: &Tensor) -> Result<(Tensor, (Tensor, Tensor))> {
+        log::debug!("Input xs shape: {:?}, is_contiguous: {}", xs.shape(), xs.is_contiguous());
+    
         let (batch_size, _, _) = xs.dims3()?;
-        let h0 = self.h0.unsqueeze(1)?.repeat((1, batch_size, 1))?;
-        let c0 = self.c0.unsqueeze(1)?.repeat((1, batch_size, 1))?;
-
-
+        let h0 = self.h0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
+        let c0 = self.c0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
+    
         let h0_1 = h0.narrow(0, 0, 2)?;
         let c0_1 = c0.narrow(0, 0, 2)?;
         let h0_2 = h0.narrow(0, 2, 2)?;
         let c0_2 = c0.narrow(0, 2, 2)?;
-
+    
         let xs = xs.contiguous()?;
-
+        log::debug!("xs after contiguous shape: {:?}, is_contiguous: {}", xs.shape(), xs.is_contiguous());
+    
         let (out1, (hn1, cn1)) = self.apply_bidirectional_layer(&xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1)?;
-
+    
         let out1 = out1.contiguous()?;
+        log::debug!("out1 after first layer shape: {:?}, is_contiguous: {}", out1.shape(), out1.is_contiguous());
+    
         let (out2, (hn2, cn2)) = self.apply_bidirectional_layer(&out1, &self.forward_lstm2, &self.backward_lstm2, &h0_2, &c0_2)?;
-
+    
         let hn = Tensor::cat(&[hn1, hn2], 0)?;
         let cn = Tensor::cat(&[cn1, cn2], 0)?;
         Ok((out2, (hn, cn)))
