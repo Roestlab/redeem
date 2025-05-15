@@ -321,7 +321,7 @@ impl SemiSupervisedLearner {
     /// # Returns
     ///
     /// The predictions for the input features
-    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> anyhow::Result<(Array1<f32>, Array1<f32>)> {
+    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> anyhow::Result<(Array1<f32>, Array1<u32>)> {
 
         let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
 

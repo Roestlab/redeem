@@ -143,12 +143,12 @@ impl Experiment {
         );
     }
 
-    /// Extracts the "rank" feature column as a 1D array.
+    /// Extracts the "rank" feature column as a 1D array of `u32`s.
     ///
     /// # Returns
-    /// * `Ok(Array1<f32>)` containing the rank values (one per row in `x`)
+    /// * `Ok(Array1<u32>)` containing the rank values (one per row in `x`)
     /// * `Err` if "rank" is not found in the feature names
-    pub fn get_rank_column(&self) -> anyhow::Result<Array1<f32>> {
+    pub fn get_rank_column(&self) -> anyhow::Result<Array1<u32>> {
         let Some(rank_idx) = self
             .psm_metadata
             .feature_names
@@ -158,7 +158,20 @@ impl Experiment {
             anyhow::bail!("'rank' feature not found in feature_names");
         };
 
-        Ok(self.x.column(rank_idx).to_owned())
+        let rank_f32 = self.x.column(rank_idx);
+
+        let rank_u32 = rank_f32
+            .iter()
+            .map(|&val| {
+                if val.is_finite() && val >= 0.0 {
+                    val.round() as u32
+                } else {
+                    0 // fallback: treat NaNs or negatives as rank 0 (could also bail or panic if preferred)
+                }
+            })
+            .collect::<Array1<u32>>();
+
+        Ok(rank_u32)
     }
 
 
