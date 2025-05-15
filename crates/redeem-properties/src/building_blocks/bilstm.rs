@@ -58,8 +58,9 @@ impl BidirectionalLSTM {
         let h0_forward = h0.i(0)?;
         let c0_forward = c0.i(0)?;
         let state_fw = rnn::LSTMState { h: h0_forward, c: c0_forward };
-    
-        let out_fw_states = lstm_forward.seq_init(input, &state_fw)?;
+
+        let input = input.contiguous()?;
+        let out_fw_states = lstm_forward.seq_init(&input, &state_fw)?;
         let out_fw = Tensor::stack(
             &out_fw_states.iter().map(|s| s.h()).collect::<Vec<_>>(),
             1,
@@ -74,7 +75,7 @@ impl BidirectionalLSTM {
                 .map(|t| input.i((.., t..=t, ..)))
                 .collect::<Result<Vec<_>>>()?,
             1,
-        )?;
+        )?.contiguous()?;
             
         // Initial states for backward
         let h0_backward = h0.i(1)?;
