@@ -56,51 +56,44 @@ impl BidirectionalLSTM {
     
         log::debug!("Entering apply_bidirectional_layer");
     
-        // Initial states for forward
+        // Forward
         let h0_forward = h0.i(0)?;
         let c0_forward = c0.i(0)?;
-        let state_fw = rnn::LSTMState { h: h0_forward.clone(), c: c0_forward.clone() };
+        let mut state_fw = rnn::LSTMState { h: h0_forward, c: c0_forward };
     
-        let input = input.contiguous()?;
-        log::debug!("Forward input shape: {:?}, is_contiguous: {}", input.shape(), input.is_contiguous());
-    
-        let out_fw_states = lstm_forward.seq_init(&input, &state_fw)?;
+        let mut out_fw_states = Vec::with_capacity(seq_len);
+        for t in 0..seq_len {
+            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?;
+            state_fw = lstm_forward.step(&xt, &state_fw)?;
+            out_fw_states.push(state_fw.clone());
+        }
         let out_fw = Tensor::stack(&out_fw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
-        log::debug!("out_fw shape: {:?}, is_contiguous: {}", out_fw.shape(), out_fw.is_contiguous());
-    
         let last_fw_h = out_fw_states.last().unwrap().h().clone();
         let last_fw_c = out_fw_states.last().unwrap().c().clone();
     
-        // Reverse sequence
-        let input_reversed = Tensor::cat(
-            &(0..seq_len)
-                .rev()
-                .map(|t| input.i((.., t..=t, ..)))
-                .collect::<Result<Vec<_>>>()?,
-            1,
-        )?.contiguous()?;
-        log::debug!("Backward input_reversed shape: {:?}, is_contiguous: {}", input_reversed.shape(), input_reversed.is_contiguous());
-    
-        // Initial states for backward
+        // Backward
         let h0_backward = h0.i(1)?;
         let c0_backward = c0.i(1)?;
-        let state_bw = rnn::LSTMState { h: h0_backward.clone(), c: c0_backward.clone() };
+        let mut state_bw = rnn::LSTMState { h: h0_backward, c: c0_backward };
     
-        let out_bw_states = lstm_backward.seq_init(&input_reversed, &state_bw)?;
+        let mut out_bw_states = Vec::with_capacity(seq_len);
+        for t in (0..seq_len).rev() {
+            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?;
+            state_bw = lstm_backward.step(&xt, &state_bw)?;
+            out_bw_states.push(state_bw.clone());
+        }
+        out_bw_states.reverse();
         let out_bw = Tensor::stack(&out_bw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
-        log::debug!("out_bw shape: {:?}, is_contiguous: {}", out_bw.shape(), out_bw.is_contiguous());
-    
         let last_bw_h = out_bw_states.last().unwrap().h().clone();
         let last_bw_c = out_bw_states.last().unwrap().c().clone();
     
-        // Combine hidden and cell states
-        let hn = Tensor::stack(&[last_fw_h.clone(), last_bw_h.clone()], 0)?;
+        let hn = Tensor::stack(&[last_fw_h, last_bw_h], 0)?;
         let cn = Tensor::stack(&[last_fw_c, last_bw_c], 0)?;
         let output = Tensor::cat(&[out_fw, out_bw], 2)?;
-        log::debug!("Combined output shape: {:?}, is_contiguous: {}", output.shape(), output.is_contiguous());
     
         Ok((output, (hn, cn)))
     }
+    
        
 
     /// Forward with hidden states returned
