@@ -103,8 +103,9 @@ impl BidirectionalLSTM {
     /// Forward with hidden states returned
     pub fn forward_with_state(&self, xs: &Tensor) -> Result<(Tensor, (Tensor, Tensor))> {
         let (batch_size, _, _) = xs.dims3()?;
-        let h0 = self.h0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
-        let c0 = self.c0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
+        let h0 = self.h0.unsqueeze(1)?.repeat((1, batch_size, 1))?;
+        let c0 = self.c0.unsqueeze(1)?.repeat((1, batch_size, 1))?;
+
 
         let h0_1 = h0.narrow(0, 0, 2)?;
         let c0_1 = c0.narrow(0, 0, 2)?;
