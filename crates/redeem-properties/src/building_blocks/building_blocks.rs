@@ -97,10 +97,7 @@ struct AAEmbedding {
 }
 
 impl AAEmbedding {
-    fn new(hidden_size: usize, device: &Device) -> Result<Self> {
-        // Create a VarBuilder
-        let vb = nn::VarBuilder::zeros(DType::F32, device);
-
+    fn new(hidden_size: usize, vb: &nn::VarBuilder) -> Result<Self> {
         // Create the embedding layer
         let embeddings = nn::embedding(AA_EMBEDDING_SIZE, hidden_size, vb.pp("embedding"))?;
 

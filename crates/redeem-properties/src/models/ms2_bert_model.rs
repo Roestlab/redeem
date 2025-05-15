@@ -228,7 +228,7 @@ impl ModelInterface for MS2BertModel {
         // Forward pass through input_nn with dropout
         let in_x = self
             .dropout
-            .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
+            .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, self.is_training)?;
 
         log::trace!(
             "[MS2BertModel::forward] in_x shape (post dropout-input_nn): {:?}, device: {:?}",
