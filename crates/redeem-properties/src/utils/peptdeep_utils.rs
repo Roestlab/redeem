@@ -234,7 +234,7 @@ pub fn load_mod_to_feature_arc(
 ///
 /// # Example
 /// ```
-/// use easypqp_core::data_handling::remove_mass_shift;
+/// use redeem_properties::utils::peptdeep_utils::remove_mass_shift;
 /// 
 /// let peptide = "MGC[+57.0215]AAR";
 /// assert_eq!(remove_mass_shift(peptide), "MGCAAR");
