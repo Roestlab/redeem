@@ -67,7 +67,7 @@ impl BidirectionalLSTM {
             state_fw = lstm_forward.step(&xt, &state_fw)?;
             out_fw_states.push(state_fw.clone());
         }
-        let out_fw = Tensor::stack(&out_fw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
+        let out_fw = Tensor::stack(&out_fw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?;
         let last_fw_h = out_fw_states.last().unwrap().h().clone();
         let last_fw_c = out_fw_states.last().unwrap().c().clone();
     
@@ -89,7 +89,7 @@ impl BidirectionalLSTM {
         }
         
         out_bw_states.reverse();
-        let out_bw = Tensor::stack(&out_bw_states.iter().map(|s| s.h()).collect::<Vec<_>>(), 1)?;
+        let out_bw = Tensor::stack(&out_bw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?;
         let last_bw_h = out_bw_states.last().unwrap().h().clone();
         let last_bw_c = out_bw_states.last().unwrap().c().clone();
     
