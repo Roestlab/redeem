@@ -78,7 +78,9 @@ impl BidirectionalLSTM {
     
         let mut out_bw_states = Vec::with_capacity(seq_len);
         for t in 0..seq_len {
-            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?;
+            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?.clone();
+
+            log::debug!("xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
         
             log::debug!("[step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
             log::debug!("[step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
