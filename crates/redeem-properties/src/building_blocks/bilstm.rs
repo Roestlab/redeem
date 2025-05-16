@@ -63,7 +63,14 @@ impl BidirectionalLSTM {
     
         let mut out_fw_states = Vec::with_capacity(seq_len);
         for t in 0..seq_len {
-            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?;
+            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?.clone();
+
+            log::debug!("[backward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
+        
+            log::debug!("[backward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
+            log::debug!("[backward] [step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
+            log::debug!("[backward] [step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
+            
             state_fw = lstm_forward.step(&xt, &state_fw)?;
             out_fw_states.push(state_fw.clone());
         }
@@ -80,11 +87,11 @@ impl BidirectionalLSTM {
         for t in 0..seq_len {
             let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?.clone();
 
-            log::debug!("xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
+            log::debug!("[backward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
         
-            log::debug!("[step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
-            log::debug!("[step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
-            log::debug!("[step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
+            log::debug!("[backward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
+            log::debug!("[backward] [step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
+            log::debug!("[backward] [step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
         
             state_fw = lstm_forward.step(&xt, &state_fw)?;
             out_fw_states.push(state_fw.clone());
