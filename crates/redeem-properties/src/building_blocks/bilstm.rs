@@ -1,4 +1,4 @@
-use candle_core::{IndexOp, Result, Tensor};
+use candle_core::{DType, IndexOp, Result, Tensor};
 use candle_nn::{rnn, Module, VarBuilder, RNN};
 
 
@@ -44,108 +44,84 @@ impl BidirectionalLSTM {
         })
     }
 
-    fn apply_bidirectional_layer(
-        &self,
-        input: &Tensor,
-        lstm_forward: &rnn::LSTM,
-        lstm_backward: &rnn::LSTM,
-        h0: &Tensor,
-        c0: &Tensor,
-    ) -> Result<(Tensor, (Tensor, Tensor))> {
-        let (_batch_size, seq_len, _input_size) = input.dims3()?;
+    fn apply_bidirectional_layer(&self, input: &Tensor, lstm_forward: &rnn::LSTM, lstm_backward: &rnn::LSTM, h0: &Tensor, c0: &Tensor, layer_idx: &i32) -> Result<(Tensor, (Tensor, Tensor))> {
+        let (batch_size, seq_len, input_size) = input.dims3()?;
     
-        log::debug!("Entering apply_bidirectional_layer");
+        // Print first and last 5 values of the original input
+        let input_vec = input.to_vec3::<f32>()?;
     
-        // Forward
-        let h0_forward = h0.i(0)?;
-        let c0_forward = c0.i(0)?;
-        let mut state_fw = rnn::LSTMState { h: h0_forward, c: c0_forward };
-    
-        let mut out_fw_states = Vec::with_capacity(seq_len);
-        for t in 0..seq_len {
-            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?.clone();
-
-            log::debug!("[forward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
+        // Forward pass
+        let h0_forward = h0.narrow(0, 0, 1)?.reshape((batch_size, h0.dim(2)?))?;
+        let c0_forward = c0.narrow(0, 0, 1)?.reshape((batch_size, c0.dim(2)?))?;
         
-            log::debug!("[forward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
-            log::debug!("[forward] [step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
-            log::debug!("[forward] [step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
+        let state_forward = rnn::LSTMState{ h: h0_forward.clone(), c: c0_forward.clone() };
 
-            state_fw = lstm_forward.step(&xt, &state_fw)?;
-            out_fw_states.push(state_fw.clone());
+        let output_forward_states: Vec<rnn::LSTMState> = lstm_forward.seq_init(&input, &state_forward)?;
+        let output_forward = Tensor::stack(&output_forward_states.iter().map(|state| state.h().clone()).collect::<Vec<_>>(), 1)?;
+        let last_forward_state = output_forward_states.last().unwrap().h().clone();
+    
+        // Backward pass
+        let h0_backward = h0.narrow(0, 1, 1)?.reshape((batch_size, h0.dim(2)?))?;
+        let c0_backward = c0.narrow(0, 1, 1)?.reshape((batch_size, c0.dim(2)?))?;
+
+        let state_backward = rnn::LSTMState{ h: h0_backward.clone(), c: c0_backward.clone() };
+    
+        // Correctly reverse the input sequence
+        let mut reversed_input = vec![vec![vec![0.0; input_size]; seq_len]; batch_size];
+        for b in 0..batch_size {
+            for t in 0..seq_len {
+                for i in 0..input_size {
+                    reversed_input[b][seq_len - t - 1][i] = input_vec[b][t][i];
+                }
+            }
         }
-        let out_fw = Tensor::stack(&out_fw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?.contiguous()?;
-        let last_fw_h = out_fw_states.last().unwrap().h().clone().contiguous()?;
-        let last_fw_c = out_fw_states.last().unwrap().c().clone().contiguous()?;
-    
-        // Backward
-        let h0_backward = h0.i(1)?;
-        let c0_backward = c0.i(1)?;
-        let mut state_bw = rnn::LSTMState { h: h0_backward, c: c0_backward };
-    
-        let mut out_bw_states = Vec::with_capacity(seq_len);
-        for t in 0..seq_len {
-            let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?.clone();
+        let input_reversed = Tensor::new(reversed_input, input.device())?
+            .to_dtype(DType::F32)?
+            .reshape((batch_size, seq_len, input_size))?;
 
-            log::debug!("[backward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
-        
-            log::debug!("[backward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
-            log::debug!("[backward] [step][fw] h shape: {:?}, strides: {:?}", state_bw.h.shape(), state_bw.h.stride());
-            log::debug!("[backward] [step][fw] c shape: {:?}, strides: {:?}", state_bw.c.shape(), state_bw.c.stride());
-        
-            state_bw = lstm_backward.step(&xt, &state_bw)?;
-            out_bw_states.push(state_bw.clone());
-        }
-        
-        out_bw_states.reverse();
-        let out_bw = Tensor::stack(&out_bw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?.contiguous()?;
-        let last_bw_h = out_bw_states.last().unwrap().h().clone().contiguous()?;
-        let last_bw_c = out_bw_states.last().unwrap().c().clone().contiguous()?;
+        // Print first and last 5 values of the reversed input
+        // let reversed_input_vec = input_reversed.to_vec3::<f32>()?;
+
     
-        let hn = Tensor::stack(&[last_fw_h, last_bw_h], 0)?;
-        let cn = Tensor::stack(&[last_fw_c, last_bw_c], 0)?;
-        let output = Tensor::cat(&[out_fw, out_bw], 2)?;
+        let output_backward_states = lstm_backward.seq_init(&input_reversed, &state_backward)?;
+        let output_backward = Tensor::stack(&output_backward_states.iter().map(|state| state.h().clone()).collect::<Vec<_>>(), 1)?;
+        
+        // Use the last state of the backward LSTM (which corresponds to the first element of the original sequence)
+        let last_backward_state = output_backward_states.last().unwrap().h().clone();
+    
+        // Combine the forward and backward hidden states for hn
+        let hn = Tensor::cat(&[last_forward_state.unsqueeze(0)?, last_backward_state.unsqueeze(0)?], 0)?; // Shape: [2, 1, 128]
+        let hn_concat = Tensor::cat(&[last_forward_state, last_backward_state], 1)?; // Shape: [1, 256]
+
+        // Combine the forward and backwards cell states for cn
+        let cn = Tensor::cat(&[output_forward_states.last().unwrap().c().clone(), output_backward_states.last().unwrap().c().clone()], 0)?; // Shape: [2, 1, 128]
+    
+        // The output_backward is already in the correct order for the original sequence
+        let output = Tensor::cat(&[output_forward, output_backward], 2)?; // Shape: [1, 13, 256]
     
         Ok((output, (hn, cn)))
     }
     
-       
-
-    /// Forward with hidden states returned
+    
+    // New method that returns output and states
     pub fn forward_with_state(&self, xs: &Tensor) -> Result<(Tensor, (Tensor, Tensor))> {
-        log::debug!("Input xs shape: {:?}, is_contiguous: {}", xs.shape(), xs.is_contiguous());
-    
-        let (batch_size, _, _) = xs.dims3()?;
-        let h0 = self.h0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
-        let c0 = self.c0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
-    
+        let (batch_size, seq_len, input_size) = xs.dims3()?;
+
+        let h0 = &self.h0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
+        let c0 = &self.c0.expand((self.num_layers * 2, batch_size, self.hidden_size))?;
+
         let h0_1 = h0.narrow(0, 0, 2)?;
-        let c0_1 = c0.narrow(0, 0, 2)?;
         let h0_2 = h0.narrow(0, 2, 2)?;
+        let c0_1 = c0.narrow(0, 0, 2)?;
         let c0_2 = c0.narrow(0, 2, 2)?;
-    
-        let xs = xs.contiguous()?;
-        log::debug!("xs after contiguous shape: {:?}, is_contiguous: {}", xs.shape(), xs.is_contiguous());
-    
-        log::debug!("forward_with_state: xs shape = {:?}, strides = {:?}", xs.shape(), xs.stride());
-        log::debug!("h0_1 shape: {:?}, strides: {:?}", h0.shape(), h0.stride());
-        log::debug!("c0_1 shape: {:?}, strides: {:?}", c0.shape(), c0.stride());
 
-        let (out1, (hn1, cn1)) = self.apply_bidirectional_layer(&xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1)?;
-    
-        let out1 = out1.contiguous()?;
-        log::debug!("out1 after first layer shape: {:?}, is_contiguous: {}", out1.shape(), out1.is_contiguous());
+        let (layer1_output, (hn1, cn1)) = self.apply_bidirectional_layer(xs, &self.forward_lstm1, &self.backward_lstm1, &h0_1, &c0_1, &1)?;
+        let (layer2_output, (hn2, cn2)) = self.apply_bidirectional_layer(&layer1_output, &self.forward_lstm2, &self.backward_lstm2, &h0_2, &c0_2, &2)?;
 
-        log::debug!("forward_with_state: out1 shape = {:?}, strides = {:?}", out1.shape(), out1.stride());
-        log::debug!("h0_2 shape: {:?}, strides: {:?}", h0.shape(), h0.stride());
-        log::debug!("c0_2 shape: {:?}, strides: {:?}", c0.shape(), c0.stride());
+        let final_hn = Tensor::cat(&[hn1, hn2], 0)?;
+        let final_cn = Tensor::cat(&[cn1, cn2], 0)?;
 
-    
-        let (out2, (hn2, cn2)) = self.apply_bidirectional_layer(&out1, &self.forward_lstm2, &self.backward_lstm2, &h0_2, &c0_2)?;
-    
-        let hn = Tensor::cat(&[hn1, hn2], 0)?;
-        let cn = Tensor::cat(&[cn1, cn2], 0)?;
-        Ok((out2, (hn, cn)))
+        Ok((layer2_output, (final_hn, final_cn)))
     }
 
     pub fn input_size(&self) -> usize {
