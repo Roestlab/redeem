@@ -65,18 +65,18 @@ impl BidirectionalLSTM {
         for t in 0..seq_len {
             let xt = input.i((.., t..=t, ..))?.squeeze(1)?.contiguous()?.clone();
 
-            log::debug!("[backward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
+            log::debug!("[forward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
         
-            log::debug!("[backward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
-            log::debug!("[backward] [step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
-            log::debug!("[backward] [step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
-            
+            log::debug!("[forward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
+            log::debug!("[forward] [step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
+            log::debug!("[forward] [step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
+
             state_fw = lstm_forward.step(&xt, &state_fw)?;
             out_fw_states.push(state_fw.clone());
         }
-        let out_fw = Tensor::stack(&out_fw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?;
-        let last_fw_h = out_fw_states.last().unwrap().h().clone();
-        let last_fw_c = out_fw_states.last().unwrap().c().clone();
+        let out_fw = Tensor::stack(&out_fw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?.contiguous()?;
+        let last_fw_h = out_fw_states.last().unwrap().h().clone().contiguous()?;
+        let last_fw_c = out_fw_states.last().unwrap().c().clone().contiguous()?;
     
         // Backward
         let h0_backward = h0.i(1)?;
@@ -90,17 +90,17 @@ impl BidirectionalLSTM {
             log::debug!("[backward] xt shape: {:?}, strides: {:?}, is_contiguous: {}", xt.shape(), xt.stride(), xt.is_contiguous());
         
             log::debug!("[backward] [step][fw] xt shape: {:?}, strides: {:?}", xt.shape(), xt.stride());
-            log::debug!("[backward] [step][fw] h shape: {:?}, strides: {:?}", state_fw.h.shape(), state_fw.h.stride());
-            log::debug!("[backward] [step][fw] c shape: {:?}, strides: {:?}", state_fw.c.shape(), state_fw.c.stride());
+            log::debug!("[backward] [step][fw] h shape: {:?}, strides: {:?}", state_bw.h.shape(), state_bw.h.stride());
+            log::debug!("[backward] [step][fw] c shape: {:?}, strides: {:?}", state_bw.c.shape(), state_bw.c.stride());
         
-            state_fw = lstm_forward.step(&xt, &state_fw)?;
-            out_fw_states.push(state_fw.clone());
+            state_bw = lstm_backward.step(&xt, &state_bw)?;
+            out_bw_states.push(state_bw.clone());
         }
         
         out_bw_states.reverse();
-        let out_bw = Tensor::stack(&out_bw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?;
-        let last_bw_h = out_bw_states.last().unwrap().h().clone();
-        let last_bw_c = out_bw_states.last().unwrap().c().clone();
+        let out_bw = Tensor::stack(&out_bw_states.iter().map(|s: &rnn::LSTMState| s.h()).collect::<Vec<_>>(), 1)?.contiguous()?;
+        let last_bw_h = out_bw_states.last().unwrap().h().clone().contiguous()?;
+        let last_bw_c = out_bw_states.last().unwrap().c().clone().contiguous()?;
     
         let hn = Tensor::stack(&[last_fw_h, last_bw_h], 0)?;
         let cn = Tensor::stack(&[last_fw_c, last_bw_c], 0)?;
