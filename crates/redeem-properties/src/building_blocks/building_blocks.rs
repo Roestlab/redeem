@@ -1,14 +1,19 @@
 use anyhow::{Context, Result as AnyHowResult};
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn as nn;
+use candle_nn::{self as nn, linear};
 use candle_transformers as transformers;
+use serde::de;
 use core::num;
 use std::fmt;
+use std::time::Instant;
 
 use crate::building_blocks::bilstm::BidirectionalLSTM;
 use crate::building_blocks::featurize::aa_one_hot;
 use crate::building_blocks::nn::{BertEncoderModule, ModuleList};
 use crate::building_blocks::sequential::{seq, Sequential};
+use crate::utils::utils::get_tensor_stats;
+
+use super::nn::TransformerEncoder;
 
 /// constants used by PeptDeep Models
 pub const MOD_FEATURE_SIZE: usize = 109; // TODO: derive from constants yaml
@@ -23,24 +28,19 @@ pub struct DecoderLinear {
 
 impl DecoderLinear {
     pub fn new(in_features: usize, out_features: usize, vb: &nn::VarBuilder) -> Result<Self> {
-        let weight = Tensor::zeros((in_features, 64), DType::F32, vb.device())?;
-        let bias = Tensor::zeros(64, DType::F32, vb.device())?;
-
-        let linear1 = nn::Linear::new(weight, Some(bias));
+        let linear1 = nn::linear(in_features, 64, vb.pp("nn.0"))?;
         let prelu = nn::PReLU::new(Tensor::zeros(64, DType::F32, vb.device())?, false);
-
-        let weight = Tensor::zeros((64, out_features), DType::F32, vb.device())?;
-        let bias = Tensor::zeros(64, DType::F32, vb.device())?;
-
-        let linear2 = nn::Linear::new(weight, Some(bias));
+        let linear2 = nn::linear(64, out_features, vb.pp("nn.2"))?;
 
         let mut nn = seq();
         nn = nn.add(linear1);
         nn = nn.add(prelu);
         nn = nn.add(linear2);
-
+    
         Ok(Self { nn })
     }
+    
+    
 
     pub fn from_varstore(
         varstore: &nn::VarBuilder,
@@ -70,9 +70,18 @@ impl DecoderLinear {
 
 impl Module for DecoderLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.nn.forward(x)
+        match self.nn.forward(x) {
+            Ok(output) => {
+                Ok(output)
+            }
+            Err(e) => {
+                log::error!("[DecoderLinear] forward pass failed: {:?}", e);
+                Err(e)
+            }
+        }
     }
 }
+
 
 impl fmt::Debug for DecoderLinear {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -88,10 +97,7 @@ struct AAEmbedding {
 }
 
 impl AAEmbedding {
-    fn new(hidden_size: usize, device: &Device) -> Result<Self> {
-        // Create a VarBuilder
-        let vb = nn::VarBuilder::zeros(DType::F32, device);
-
+    fn new(hidden_size: usize, vb: &nn::VarBuilder) -> Result<Self> {
         // Create the embedding layer
         let embeddings = nn::embedding(AA_EMBEDDING_SIZE, hidden_size, vb.pp("embedding"))?;
 
@@ -100,7 +106,6 @@ impl AAEmbedding {
 
     fn from_varstore(varstore: &nn::VarBuilder, hidden_size: usize, name: &str) -> Result<Self> {
         let weight = varstore.get((AA_EMBEDDING_SIZE, hidden_size), name)?;
-        log::trace!("[AAEmbedding::from_varstore] weight shape (AA_EMBEDDING_SIZE, hidden_size): {:?}, device: {:?}", weight.shape(), weight.device());
         let embeddings = nn::Embedding::new(weight, hidden_size);
         Ok(Self { embeddings })
     }
@@ -108,13 +113,7 @@ impl AAEmbedding {
 
 impl Module for AAEmbedding {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        log::trace!("[AAEmbedding::forward] x shape: {:?}, device: {:?}, min: {:?}, max: {:?}",
-                    x.shape(), x.device(), x.min_all(), x.max_all());
-
         let x = x.to_dtype(DType::I64)?;
-        log::trace!("[AAEmbedding::forward] x (converted to i64) shape: {:?}, device: {:?}, min: {:?}, max: {:?}",
-                    x.shape(), x.device(), x.min_all(), x.max_all());
-
         self.embeddings.forward(&x)
     }
 }
@@ -195,10 +194,9 @@ struct ModEmbeddingFixFirstK {
 }
 
 impl ModEmbeddingFixFirstK {
-    fn new(mod_feature_size: usize, out_features: usize, device: &Device) -> Result<Self> {
+    fn new(mod_feature_size: usize, out_features: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
         let k = 6;
-        let vb = nn::VarBuilder::zeros(DType::F32, device);
-        let nn = nn::linear(mod_feature_size - k, out_features - k, vb.pp("linear"))?;
+        let nn = nn::linear_no_bias(mod_feature_size - k, out_features - k, varbuilder.pp("nn"))?;
         Ok(Self { k, nn })
     }
 
@@ -240,17 +238,8 @@ pub struct Input26aaModPositionalEncoding {
 }
 
 impl Input26aaModPositionalEncoding {
-    fn new(out_features: usize, max_len: usize, device: &Device) -> Result<Self> {
-        let mod_hidden = 8;
-        let mod_nn = ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden, device)?;
-        let aa_emb = AAEmbedding::new(out_features - mod_hidden, device)?;
-        let pos_encoder = PositionalEncoding::new(out_features, max_len, device)?;
-
-        Ok(Self {
-            mod_nn,
-            aa_emb,
-            pos_encoder,
-        })
+    fn new(_out_features: usize, _max_len: usize, _device: &Device) -> Result<Self> {
+        todo!("new untrained instance of Input26aaModPositionalEncoding not implemented");
     }
 
     pub fn from_varstore(
@@ -278,19 +267,10 @@ impl Input26aaModPositionalEncoding {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-        log::trace!("[Input26aaModPositionalEncoding::forward] aa_indices shape: {:?}, device: {:?}, min: {:?}, max: {:?}", 
-                aa_indices.shape(), aa_indices.device(), aa_indices.min_all(),aa_indices.max_all());
-    
-        log::trace!("[Input26aaModPositionalEncoding::forward] mod_x shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
-
         let mod_x = self.mod_nn.forward(mod_x)?;
-        log::trace!("[Input26aaModPositionalEncoding::forward] mod_x (after mod_nn) shape: {:?}, device: {:?}", mod_x.shape(), mod_x.device());
         let x = self.aa_emb.forward(aa_indices)?;
-        log::trace!("[Input26aaModPositionalEncoding::forward] x (after aa_emb) shape: {:?}, device: {:?}", x.shape(), x.device());
-
         // Concatenate x and mod_x along the last dimension
         let concatenated = Tensor::cat(&[&x, &mod_x], 2)?;
-        log::trace!("[Input26aaModPositionalEncoding::forward] concatenated shape: {:?}, device: {:?}", concatenated.shape(), concatenated.device());
         self.pos_encoder.forward(&concatenated)
     }
 }
@@ -302,7 +282,7 @@ pub struct MetaEmbedding {
 }
 
 impl MetaEmbedding {
-    fn new(out_features: usize, device: &Device) -> Result<Self> {
+    fn _new(out_features: usize, device: &Device) -> Result<Self> {
         let nn = nn::linear(
             MAX_INSTRUMENT_NUM + 1,
             out_features - 1,
@@ -321,34 +301,6 @@ impl MetaEmbedding {
         let nn = nn::Linear::new(weight.unwrap(), Some(bias.unwrap()));
         Ok(Self { nn })
     }
-
-    // fn one_hot(&self, indices: &Tensor, num_classes: usize) -> AnyHowResult<Tensor> {
-    //     let batch_size = indices.dim(0)?;
-
-    //     let mut one_hot_data = vec![0.0f32; batch_size * num_classes];
-
-    //     for i in 0..batch_size {
-    //         let index = indices.get(i)?.to_scalar::<i64>()?;
-    //         let class_idx = index as usize;
-
-    //         if class_idx < num_classes {
-    //             one_hot_data[i * num_classes + class_idx] = 1.0;
-    //         } else {
-    //             return Err(anyhow::anyhow!(
-    //                 "Index {} out of bounds for one-hot encoding",
-    //                 class_idx
-    //             ));
-    //         }
-    //     }
-
-    //     log::trace!("one hot encoded data of shape: {:?} on device: {:?}", (batch_size, num_classes), indices.device());
-
-    //     log::trace!("one hot encoded data: {:?}", Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
-    //     .context("Failed to create tensor from one-hot data"));
-
-    //     Tensor::from_slice(&one_hot_data, (batch_size, num_classes), indices.device())
-    //         .context("Failed to create tensor from one-hot data")
-    // }
 
     fn one_hot(&self, indices: &Tensor, num_classes: usize) -> Result<Tensor> {
         let batch_size = indices.dim(0)?;
@@ -375,8 +327,6 @@ impl MetaEmbedding {
         // Create a tensor from the one-hot data
         let one_hot = Tensor::from_slice(&one_hot_data, (batch_size, num_classes), device)?;
 
-        log::trace!("[MetaEmbedding::one_hot] one hot encoded data shape: {:?}, device: {:?}", one_hot.shape(), one_hot.device());
-
         Ok(one_hot)
     }
 
@@ -386,39 +336,23 @@ impl MetaEmbedding {
         nces: &Tensor,
         instrument_indices: &Tensor,
     ) -> Result<Tensor> {
-        // Log input tensors
-        log::trace!("[MetaEmbedding::forward] charges shape: {:?}, device: {:?}", charges.shape(), charges.device());
-        log::trace!("[MetaEmbedding::forward] nces shape: {:?}, device: {:?}", nces.shape(), nces.device());
-        log::trace!("[MetaEmbedding::forward] instrument_indices shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
-        log::trace!("[MetaEmbedding::forward] charges: {:?}", charges.to_vec2::<f32>()?);
-
-        //  // Ensure instrument_indices is a 1D tensor
-        // let instrument_indices = instrument_indices.squeeze(1)?; // Remove the second dimension
-        // log::trace!("[MetaEmbedding::forward] instrument_indices (after squeeze) shape: {:?}, device: {:?}", instrument_indices.shape(), instrument_indices.device());
 
 
         // One-hot encode the instrument indices
         let inst_x = self.one_hot(&instrument_indices.to_dtype(DType::I64)?, MAX_INSTRUMENT_NUM)?;
 
-        log::trace!("[MetaEmbedding::forward] inst_x shape: {:?}, device: {:?}", inst_x.shape(), inst_x.device());
-
         // Ensure all tensors are on the same device
         let charges = &charges.to_device(inst_x.device())?;
         let nces = &nces.to_device(inst_x.device())?;
-        log::trace!("[MetaEmbedding::forward] charges (after to_device) shape: {:?}, device: {:?}", charges.shape(), charges.device());
-        log::trace!("[MetaEmbedding::forward] nces (after to_device) shape: {:?}, device: {:?}", nces.shape(), nces.device());
 
         // Concatenate the one-hot encoded instrument indices with NCEs
         let combined_input = Tensor::cat(&[&inst_x, nces], 1)?;
-        log::trace!("[MetaEmbedding::forward] combined_input shape: {:?}, device: {:?}", combined_input.shape(), combined_input.device());
 
         // Pass through the linear layer
         let meta_x = self.nn.forward(&combined_input)?;
-        log::trace!("[MetaEmbedding::forward] meta_x shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         // Concatenate the output with charges
         let meta_x = Tensor::cat(&[&meta_x, charges], 1)?;
-        log::trace!("[MetaEmbedding::forward] final meta_x shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
 
         Ok(meta_x)
     }
@@ -432,13 +366,13 @@ pub struct HiddenHfaceTransformer {
 }
 
 impl HiddenHfaceTransformer {
-    fn new(
-        hidden_dim: usize,
-        hidden_expand: usize,
-        nheads: usize,
-        nlayers: usize,
-        dropout: f64,
-        output_attentions: bool
+    fn _new(
+        _hidden_dim: usize,
+        _hidden_expand: usize,
+        _nheads: usize,
+        _nlayers: usize,
+        _dropout: f64,
+        _output_attentions: bool
     ) -> Result<Self> {
         unimplemented!()
     }
@@ -450,7 +384,7 @@ impl HiddenHfaceTransformer {
         nheads: usize,
         nlayers: usize,
         dropout: f64,
-        output_attentions: bool
+        _output_attentions: bool
     ) -> Result<Self> {
         let config = transformers::models::bert::Config {
             hidden_size: hidden_dim,
@@ -583,8 +517,45 @@ struct SeqCNN {
 }
 
 impl SeqCNN {
-    fn new() -> Self {
-        unimplemented!();
+    pub fn new(embedding_hidden: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
+        let cnn_short = nn::conv1d(
+            embedding_hidden,
+            embedding_hidden,
+            3,
+            nn::Conv1dConfig {
+                padding: 1,
+                ..Default::default()
+            },
+            varbuilder.pp("cnn_short"),
+        )?;
+
+        let cnn_medium = nn::conv1d(
+            embedding_hidden,
+            embedding_hidden,
+            5,
+            nn::Conv1dConfig {
+                padding: 2,
+                ..Default::default()
+            },
+            varbuilder.pp("cnn_medium"),
+        )?;
+
+        let cnn_long = nn::conv1d(
+            embedding_hidden,
+            embedding_hidden,
+            7,
+            nn::Conv1dConfig {
+                padding: 3,
+                ..Default::default()
+            },
+            varbuilder.pp("cnn_long"),
+        )?;
+
+        Ok(Self {
+            cnn_short,
+            cnn_medium,
+            cnn_long,
+        })
     }
 
     pub fn from_varstore(
@@ -638,11 +609,20 @@ impl Module for SeqCNN {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.transpose(1, 2)?;
 
-        let short = self.cnn_short.forward(&x)?;
+        let short = match self.cnn_short.forward(&x) {
+            Ok(output) => output,
+            Err(e) => {
+                log::error!("[SeqCNN::forward] cnn_short.forward failed: {:?}", e);
+                return Err(e);
+            }
+        };
+
         let medium = self.cnn_medium.forward(&x)?;
+
         let long = self.cnn_long.forward(&x)?;
 
         let output = Tensor::cat(&[x, short, medium, long], 1)?;
+
         Ok(output.transpose(1, 2)?)
     }
 }
@@ -654,7 +634,7 @@ struct SeqLSTM {
 }
 
 impl SeqLSTM {
-    fn new() -> Self {
+    fn _new() -> Self {
         unimplemented!();
     }
 
@@ -675,6 +655,90 @@ impl Module for SeqLSTM {
     }
 }
 
+/// Transformer block applied on sequence input using a custom Transformer encoder implementation.
+/// This replaces the LSTM with a Transformer encoder for sequence modeling.
+#[derive(Debug, Clone)]
+pub struct SeqTransformer {
+    encoder: TransformerEncoder,
+    training: bool,
+}
+
+impl SeqTransformer {
+    /// Construct a new transformer encoder block for sequence modeling.
+    ///
+    /// # Arguments
+    /// * `varbuilder` - The variable builder for creating the model parameters.
+    /// * `input_dim` - The input embedding dimension (e.g., CNN output).
+    /// * `model_dim` - The internal model dimension of the transformer.
+    /// * `ff_dim` - The feedforward hidden layer dimension.
+    /// * `num_heads` - Number of attention heads.
+    /// * `num_layers` - Number of transformer encoder layers.
+    /// * `max_len` - Maximum input sequence length.
+    /// * `dropout_prob` - Dropout probability.
+    /// * `device` - The device to place the tensors on.
+    pub fn new(
+        varbuilder: &nn::VarBuilder,
+        input_dim: usize,
+        model_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout: f32,
+        device: &Device,
+    ) -> Result<Self> {
+        let encoder = TransformerEncoder::new(
+            varbuilder,
+            input_dim,
+            model_dim,
+            ff_dim,
+            num_heads,
+            num_layers,
+            max_len,
+            dropout,
+            device,
+        )?;
+        Ok(Self { encoder, training: true })
+    }
+
+    /// Load a transformer encoder from a varstore (used when loading from pre-trained weights).
+    pub fn from_varstore(
+        varstore: nn::VarBuilder,
+        input_dim: usize,
+        model_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        device: &Device,
+    ) -> Result<Self> {
+        let encoder = TransformerEncoder::new(
+            &varstore,
+            input_dim,
+            model_dim,
+            ff_dim,
+            num_heads,
+            num_layers,
+            max_len,
+            dropout_prob,
+            device,
+        )?;
+        Ok(Self { encoder, training: true })
+    }
+
+    pub fn set_training(&mut self, training: bool) {
+        self.training = training;
+    }
+}
+
+impl Module for SeqTransformer {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        Ok(self.encoder.forward_with_mask(x, None, self.training)?)
+    }
+}
+
+
 /// apply linear transformation and tensor rescaling with softmax
 #[derive(Debug, Clone)]
 struct SeqAttentionSum {
@@ -682,6 +746,14 @@ struct SeqAttentionSum {
 }
 
 impl SeqAttentionSum {
+    pub fn new(hidden_dim: usize, varbuilder: &nn::VarBuilder) -> Result<Self> {
+        let attention = nn::linear_no_bias(
+            hidden_dim,
+            1,
+            varbuilder.pp("attn.0"))?;
+        Ok(Self { attention })
+    }
+
     pub fn from_varstore(varstore: nn::VarBuilder, hidden_dim: usize, name: &str) -> Result<Self> {
         let attention = nn::Linear::new(varstore.get((1, hidden_dim), name).unwrap(), None);
         Ok(Self { attention })
@@ -690,7 +762,14 @@ impl SeqAttentionSum {
 
 impl Module for SeqAttentionSum {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let attention_weights = self.attention.forward(x)?;
+        let attention_weights = match self.attention.forward(x) {
+            Ok(weights) => weights,
+            Err(e) => {
+                log::error!("Attention forward pass failed: {}", e);
+                return Err(e);
+            }
+        };
+        
 
         // Apply softmax to normalize weights
         // TODO: This is done in the model itself in the PyTorch implementation
@@ -719,7 +798,7 @@ pub struct Encoder26aaModCnnLstmAttnSum {
 }
 
 impl Encoder26aaModCnnLstmAttnSum {
-    fn new() -> Self {
+    fn _new() -> Self {
         unimplemented!();
     }
 
@@ -763,15 +842,26 @@ impl Encoder26aaModCnnLstmAttnSum {
     }
 
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
-
         let mod_x = self.mod_nn.forward(mod_x)?;
+
         let additional_tensors: Vec<&Tensor> = vec![&mod_x];
+
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        // log::trace!("[Encoder26aaModCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
         let x = self.input_cnn.forward(&x)?;
+        let (b, s, d) = x.dims3()?;
+        println!("x (post input_cnn): batch size: {b}, seq len: {s}, embedding dim: {d}");
+
         let x = self.input_lstm.forward(&x)?;
+        let (b, s, d) = x.dims3()?;
+        println!("x (post input_lstm): batch size: {b}, seq len: {s}, embedding dim: {d}");
+
         let x = self.attn_sum.forward(&x)?;
+
         Ok(x)
     }
 }
@@ -786,7 +876,7 @@ pub struct Encoder26aaModChargeCnnLstmAttnSum {
 }
 
 impl Encoder26aaModChargeCnnLstmAttnSum {
-    fn new() -> Self {
+    fn _new() -> Self {
         unimplemented!();
     }
 
@@ -832,28 +922,278 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor, charges: &Tensor) -> Result<Tensor> {
 
         let mod_x = self.mod_nn.forward(mod_x)?;
+
         let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
         let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
+        
         let x = aa_one_hot(&aa_indices, &additional_tensors)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::trace!("[Encoder26aaModChargeCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
         let x = self.input_cnn.forward(&x)?;
+
         let x = self.input_lstm.forward(&x)?;
+
         let x = self.attn_sum.forward(&x)?;
+
+        Ok(x)
+    }
+}
+
+
+/// Encode AAs (26 AA letters) and modifications using CNN + Transformer + AttentionSum.
+#[derive(Debug, Clone)]
+pub struct Encoder26aaModCnnTransformerAttnSum {
+    mod_nn: ModEmbeddingFixFirstK,
+    input_cnn: SeqCNN,
+    proj_cnn_to_transformer: candle_nn::Linear,
+    input_transformer: SeqTransformer,
+    attn_sum: SeqAttentionSum,
+}
+
+impl Encoder26aaModCnnTransformerAttnSum {
+    pub fn from_varstore(
+        varstore: &nn::VarBuilder,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        names_mod_nn: Vec<&str>,
+        names_input_cnn_weight: Vec<&str>,
+        names_input_cnn_bias: Vec<&str>,
+        transformer_pp: &str,
+        names_attn_sum: Vec<&str>,
+        device: &Device,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::from_varstore(
+                &varstore,
+                MOD_FEATURE_SIZE,
+                mod_hidden_dim,
+                names_mod_nn[0],
+            )?,
+            input_cnn: SeqCNN::from_varstore(
+                varstore.clone(),
+                input_dim,
+                names_input_cnn_weight,
+                names_input_cnn_bias,
+            )?,
+            proj_cnn_to_transformer: candle_nn::Linear::new(
+                varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight")?,
+                None,
+            ),
+            input_transformer: SeqTransformer::from_varstore(
+                varstore.pp(transformer_pp).clone(),
+                input_dim * 4,
+                hidden_dim,
+                ff_dim,
+                num_heads,
+                num_layers,
+                max_len,
+                dropout_prob,
+                device,
+            )?,
+            attn_sum: SeqAttentionSum::from_varstore(
+                varstore.clone(),
+                hidden_dim,
+                names_attn_sum[0],
+            )?,
+        })
+    }
+
+    /// Construct a CNN+Transformer+Attention encoder from scratch (no pretrained weights).
+    pub fn new(
+        varbuilder: &nn::VarBuilder,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        device: &Device,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, &varbuilder.pp("mod_nn"))?,
+            input_cnn: SeqCNN::new(input_dim, &varbuilder.pp("input_cnn"))?,
+            proj_cnn_to_transformer: candle_nn::linear_no_bias(input_dim * 4, hidden_dim, varbuilder.pp("proj_cnn_to_transformer"))?,
+            input_transformer: SeqTransformer::new(
+                &varbuilder.pp("input_transformer"),
+                input_dim * 4,
+                hidden_dim,
+                ff_dim,
+                num_heads,
+                num_layers,
+                max_len,
+                dropout_prob,
+                device,
+            )?,
+            attn_sum: SeqAttentionSum::new(hidden_dim, &varbuilder.pp("attn_sum"))?,
+        })
+    }
+
+    pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
+        let mod_x = self.mod_nn.forward(mod_x)?;
+
+        let additional_tensors: Vec<&Tensor> = vec![&mod_x];
+
+        let x = aa_one_hot(aa_indices, &additional_tensors)
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        // log::trace!("[Encoder26aaModCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
+        if !mean.is_finite() || !min.is_finite() || !max.is_finite() {
+            log::error!("ERROR [Encoder26aaModCnnTransformerAttnSum] aa_one_hot produced non-finite tensor stats: mean={mean}, min={min}, max={max}");
+            candle_core::bail!("ERROR: Non-finite values found in peptide encoding output.");
+        }
+
+        let x = self.input_cnn.forward(&x)?;
+        let x = x.contiguous()?;
+
+        let x = self.proj_cnn_to_transformer.forward(&x)?;
+        let x = x.contiguous()?;
+
+        let x = self.input_transformer.forward(&x)?;
+        let x = x.contiguous()?;
+        let x = self.attn_sum.forward(&x)?;
+
+        Ok(x)
+    }
+}
+
+
+/// Encode AAs (26 AA letters), modifications and Charge state using CNN + Transformer + AttentionSum.
+#[derive(Debug, Clone)]
+pub struct Encoder26aaModChargeCnnTransformerAttnSum {
+    mod_nn: ModEmbeddingFixFirstK,
+    input_cnn: SeqCNN,
+    proj_cnn_to_transformer: candle_nn::Linear,
+    input_transformer: SeqTransformer,
+    attn_sum: SeqAttentionSum,
+}
+
+impl Encoder26aaModChargeCnnTransformerAttnSum {
+    pub fn from_varstore(
+        varstore: &nn::VarBuilder,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        names_mod_nn: Vec<&str>,
+        names_input_cnn_weight: Vec<&str>,
+        names_input_cnn_bias: Vec<&str>,
+        transformer_pp: &str,
+        names_attn_sum: Vec<&str>,
+        device: &Device,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim + 1;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::from_varstore(
+                &varstore,
+                MOD_FEATURE_SIZE,
+                mod_hidden_dim,
+                names_mod_nn[0],
+            )?,
+            input_cnn: SeqCNN::from_varstore(
+                varstore.clone(),
+                input_dim,
+                names_input_cnn_weight,
+                names_input_cnn_bias,
+            )?,
+            proj_cnn_to_transformer: candle_nn::Linear::new(
+                varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight")?,
+                None),            
+            input_transformer: SeqTransformer::from_varstore(
+                varstore.pp(transformer_pp).clone(),
+                input_dim * 4,
+                hidden_dim,
+                ff_dim,
+                num_heads,
+                num_layers,
+                max_len,
+                dropout_prob,
+                device,
+            )?,
+            attn_sum: SeqAttentionSum::from_varstore(
+                varstore.clone(),
+                hidden_dim,
+                names_attn_sum[0],
+            )?,
+        })
+    }
+
+    /// Construct a CNN+Transformer+Attention encoder from scratch (no pretrained weights).
+    pub fn new(
+        varbuilder: &nn::VarBuilder,
+        mod_hidden_dim: usize,
+        hidden_dim: usize,
+        ff_dim: usize,
+        num_heads: usize,
+        num_layers: usize,
+        max_len: usize,
+        dropout_prob: f32,
+        device: &Device,
+    ) -> Result<Self> {
+        let input_dim = AA_EMBEDDING_SIZE + mod_hidden_dim + 1;
+        Ok(Self {
+            mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, &varbuilder.pp("mod_nn"))?,
+            input_cnn: SeqCNN::new(input_dim, &varbuilder.pp("input_cnn"))?,
+            proj_cnn_to_transformer: candle_nn::linear_no_bias(input_dim*4, hidden_dim, varbuilder.pp("proj_cnn_to_transformer"))?,
+            input_transformer: SeqTransformer::new(
+                &varbuilder.pp("input_transformer"),
+                input_dim * 4,
+                hidden_dim,
+                ff_dim,
+                num_heads,
+                num_layers,
+                max_len,
+                dropout_prob,
+                device,
+            )?,
+            attn_sum: SeqAttentionSum::new(hidden_dim, &varbuilder.pp("attn_sum"))?,
+        })
+    }
+
+    pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor, charges: &Tensor) -> Result<Tensor> {
+        let mod_x = self.mod_nn.forward(mod_x)?;
+        let charges_repeated = charges.unsqueeze(1)?.repeat(&[1, mod_x.dim(1)?, 1])?;
+
+        let additional_tensors: Vec<&Tensor> = vec![&mod_x, &charges_repeated];
+
+        let x = aa_one_hot(aa_indices, &additional_tensors)
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+        let (mean, min, max) = get_tensor_stats(&x)?;
+        log::trace!("[Encoder26aaModChargeCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+
+        let x = self.input_cnn.forward(&x)?;
+        let x = x.contiguous()?;
+        let x = self.proj_cnn_to_transformer.forward(&x)?;
+        let x = x.contiguous()?;
+        let x = self.input_transformer.forward(&x)?;
+        let x = x.contiguous()?;
+        let x = self.attn_sum.forward(&x)?;
+
         Ok(x)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::models::model_interface::ModelInterface;
-    use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
-    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
     use candle_nn::VarBuilder;
     use std::path::PathBuf;
-    use std::time::Instant;
-    // use itertools::izip;
 
     use super::*;
 

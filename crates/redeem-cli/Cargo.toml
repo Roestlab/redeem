@@ -1,0 +1,33 @@
+[package]
+name = "redeem-cli"
+version = "0.1.0"
+edition = "2024"
+authors = ["Justin Sing <justincsing@gmail.com>"]
+description = "A repository of deep-learning models for mass spectrometry data"
+
+[[bin]]
+name = "redeem"
+path = "src/main.rs"
+
+[dependencies]
+redeem-properties = { path = "../redeem-properties" }
+env_logger = "0.11.8"
+log = "0.4"
+clap = { version="4.0", features = ["cargo", "unicode"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+csv = "1.1"
+report-builder = "0.1.0"
+maud = "0.27.0"
+plotly = "0.12.1"
+rand = "0.8"
+
+[dependencies.candle-core]
+version = "0.8.4"
+default-features = false
+features = []
+
+[features]
+default = []
+cuda = ["candle-core/cuda"]

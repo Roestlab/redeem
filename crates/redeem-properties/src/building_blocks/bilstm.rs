@@ -1,6 +1,6 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, IndexOp, Result, Tensor};
 use candle_nn::{rnn, Module, VarBuilder, RNN};
-// use crate::utils::logging::print_tensor;
+
 
 #[derive(Debug, Clone)]
 pub struct BidirectionalLSTM {
@@ -16,72 +16,26 @@ pub struct BidirectionalLSTM {
 }
 
 impl BidirectionalLSTM {
-
     pub fn new(
         input_size: usize,
         hidden_size: usize,
         num_layers: usize,
         vb: &VarBuilder,
     ) -> Result<Self> {
-
         let h0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_h0")?;
         let c0 = vb.get((num_layers * 2, 1, hidden_size), "rnn_c0")?;
 
-        let lstm_config = rnn::LSTMConfig {
-            layer_idx: 0,
-            direction: rnn::Direction::Forward,
-            ..Default::default()
-        };
+        let lstm1_fw = rnn::lstm(input_size, hidden_size, rnn::LSTMConfig::default(), vb.pp("rnn"))?;
+        let lstm1_bw = rnn::lstm(input_size, hidden_size, rnn::LSTMConfig { direction: rnn::Direction::Backward, ..Default::default() }, vb.pp("rnn"))?;
 
-        let lstm_config_rev = rnn::LSTMConfig {
-            layer_idx: 0,
-            direction: rnn::Direction::Backward,
-            ..Default::default()
-        };
-
-        let forward_lstm1 = rnn::lstm(
-            input_size, 
-            hidden_size, 
-            lstm_config.clone(), 
-            vb.pp("rnn").clone()
-        )?;
-        let backward_lstm1 = rnn::lstm(
-            input_size, 
-            hidden_size, 
-            lstm_config_rev.clone(), 
-            vb.pp("rnn").clone()
-        )?;
-        
-        let lstm_config2 = rnn::LSTMConfig {
-            layer_idx: 1,
-            direction: rnn::Direction::Forward,
-            ..Default::default()
-        };
-
-        let lstm_config2_rev = rnn::LSTMConfig {
-            layer_idx: 1,
-            direction: rnn::Direction::Backward,
-            ..Default::default()
-        };
-
-        let forward_lstm2 = rnn::lstm(
-            2 * hidden_size, 
-            hidden_size, 
-            lstm_config2.clone(), 
-            vb.pp("rnn").clone()
-        )?;
-        let backward_lstm2 = rnn::lstm(
-            2 * hidden_size, 
-            hidden_size, 
-            lstm_config2_rev.clone(), 
-            vb.pp("rnn").clone()
-        )?;
+        let lstm2_fw = rnn::lstm(2 * hidden_size, hidden_size, rnn::LSTMConfig { layer_idx: 1, ..Default::default() }, vb.pp("rnn"))?;
+        let lstm2_bw = rnn::lstm(2 * hidden_size, hidden_size, rnn::LSTMConfig { layer_idx: 1, direction: rnn::Direction::Backward, ..Default::default() }, vb.pp("rnn"))?;
 
         Ok(Self {
-            forward_lstm1,
-            backward_lstm1,
-            forward_lstm2,
-            backward_lstm2,
+            forward_lstm1: lstm1_fw,
+            backward_lstm1: lstm1_bw,
+            forward_lstm2: lstm2_fw,
+            backward_lstm2: lstm2_bw,
             h0,
             c0,
             input_size,
@@ -89,7 +43,6 @@ impl BidirectionalLSTM {
             num_layers,
         })
     }
-
 
     fn apply_bidirectional_layer(&self, input: &Tensor, lstm_forward: &rnn::LSTM, lstm_backward: &rnn::LSTM, h0: &Tensor, c0: &Tensor, layer_idx: &i32) -> Result<(Tensor, (Tensor, Tensor))> {
         let (batch_size, seq_len, input_size) = input.dims3()?;
@@ -127,7 +80,7 @@ impl BidirectionalLSTM {
             .reshape((batch_size, seq_len, input_size))?;
 
         // Print first and last 5 values of the reversed input
-        let reversed_input_vec = input_reversed.to_vec3::<f32>()?;
+        // let reversed_input_vec = input_reversed.to_vec3::<f32>()?;
 
     
         let output_backward_states = lstm_backward.seq_init(&input_reversed, &state_backward)?;
@@ -170,46 +123,6 @@ impl BidirectionalLSTM {
 
         Ok((layer2_output, (final_hn, final_cn)))
     }
-    
-
-    /// Print the weights of the BiLSTM
-    pub fn print_weights(&self, vb: &VarBuilder) -> Result<()> {
-        fn print_first_few(tensor: &Tensor, name: &str) -> Result<()> {
-            let flattened = tensor.flatten_all()?;
-            let num_elements = flattened.dim(0)?;
-            let num_to_print = 5.min(num_elements);
-            println!("{} shape: {:?}", name, tensor.shape());
-            println!("{} (first few values): {:?}", name, flattened.narrow(0, 0, num_to_print)?.to_vec1::<f32>()?);
-            Ok(())
-        }
-
-        fn print_lstm_weights(vb: &VarBuilder, layer: usize, direction: &str) -> Result<()> {
-            let prefix = format!("rt_encoder.hidden_nn.rnn.weight_");
-            let ih_name = format!("{}ih_l{}{}", prefix, layer, direction);
-            let hh_name = format!("{}hh_l{}{}", prefix, layer, direction);
-            
-            // println!("LSTM layer {} {} weights:", layer, direction);
-            if layer == 1{
-                print_first_few(&vb.get((512, 256), &ih_name)?, &format!("  {}", ih_name))?;
-            } else {
-                print_first_few(&vb.get((512, 140), &ih_name)?, &format!("  {}", ih_name))?;
-            }
-            
-            print_first_few(&vb.get((512, 128), &hh_name)?, &format!("  {}", hh_name))?;
-            
-            Ok(())
-        }
-
-        // Print forward LSTM weights
-        print_lstm_weights(vb, 0, "")?;
-        print_lstm_weights(vb, 1, "")?;
-
-        // Print backward LSTM weights
-        print_lstm_weights(vb, 0, "_reverse")?;
-        print_lstm_weights(vb, 1, "_reverse")?;
-
-        Ok(())
-    }
 
     pub fn input_size(&self) -> usize {
         self.input_size
@@ -222,20 +135,15 @@ impl BidirectionalLSTM {
     pub fn num_layers(&self) -> usize {
         self.num_layers
     }
-
 }
 
-
 impl Module for BidirectionalLSTM {
-
-    /// Forward pass of the BiLSTM
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // This method now only returns the output tensor
         let (output, _) = self.forward_with_state(xs)?;
         Ok(output)
     }
-
 }
+
 
 #[cfg(test)]
 mod test {

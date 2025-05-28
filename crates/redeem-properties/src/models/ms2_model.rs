@@ -1,11 +1,12 @@
-use std::path::Path;
-use candle_core::{Device, Tensor};
-use anyhow::{Result, anyhow};
-use crate::models::model_interface::{ModelInterface,PredictionResult};
+use crate::models::model_interface::{ModelInterface, PredictionResult};
 use crate::models::ms2_bert_model::MS2BertModel;
 use crate::utils::data_handling::PeptideData;
-use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
+use anyhow::{anyhow, Result};
+use candle_core::{Device, Tensor};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 // Enum for different types of MS2 models
 pub enum MS2ModelArch {
@@ -21,10 +22,31 @@ pub struct MS2ModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
 
+impl Clone for MS2ModelWrapper {
+    fn clone(&self) -> Self {
+        MS2ModelWrapper {
+            model: self.model.clone(),
+        }
+    }
+}
+
 impl MS2ModelWrapper {
-    pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        model_path: P,
+        constants_path: P,
+        arch: &str,
+        device: Device,
+    ) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "ms2_bert" => Box::new(MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
+            "ms2_bert" => Box::new(MS2BertModel::new(
+                model_path,
+                Some(constants_path),
+                0,
+                8,
+                4,
+                true,
+                device,
+            )?),
             // Add other cases here as you implement more models
             _ => return Err(anyhow!("Unsupported MS2 model architecture: {}", arch)),
         };
@@ -32,12 +54,40 @@ impl MS2ModelWrapper {
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &[String], mod_sites: &[String], charge: Vec<i32>, nce: Vec<i32>, intsrument: Vec<String>) -> Result<PredictionResult> {
-        self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), Some(nce), Some(intsrument))
+    pub fn predict(
+        &self,
+        peptide_sequence: &[Arc<[u8]>],
+        mods: &[Arc<[u8]>],
+        mod_sites: &[Arc<[u8]>],
+        charge: Vec<i32>,
+        nce: Vec<i32>,
+        intsrument: Vec<Option<Arc<[u8]>>>,
+    ) -> Result<PredictionResult> {
+        self.model.predict(
+            peptide_sequence,
+            mods,
+            mod_sites,
+            Some(charge),
+            Some(nce),
+            Some(intsrument),
+        )
     }
 
-    pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size: usize, learning_rate: f64, epochs: usize) -> Result<()> {
-        self.model.fine_tune(training_data, modifications, batch_size,  learning_rate, epochs)
+    pub fn fine_tune(
+        &mut self,
+        training_data: &Vec<PeptideData>,
+        modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
+        learning_rate: f64,
+        epochs: usize,
+    ) -> Result<()> {
+        self.model.fine_tune(
+            training_data,
+            modifications,
+            batch_size,
+            learning_rate,
+            epochs,
+        )
     }
 
     pub fn set_evaluation_mode(&mut self) {
@@ -62,7 +112,12 @@ impl MS2ModelWrapper {
 }
 
 // Public API Function to load a new MS2 model
-pub fn load_ms2_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<MS2ModelWrapper> {
+pub fn load_ms2_model<P: AsRef<Path>>(
+    model_path: P,
+    constants_path: P,
+    arch: &str,
+    device: Device,
+) -> Result<MS2ModelWrapper> {
     MS2ModelWrapper::new(model_path, constants_path, arch, device)
 }
 
@@ -78,7 +133,7 @@ pub fn load_ms2_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &s
 //     fn peptide_ms2_prediction() {
 //         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
 //         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
-        
+
 //         assert!(
 //             model_path.exists(),
 //             "\n╔══════════════════════════════════════════════════════════════════╗\n\
@@ -93,7 +148,7 @@ pub fn load_ms2_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &s
 //              ╚══════════════════════════════════════════════════════════════════╝\n",
 //             model_path
 //         );
-        
+
 //         assert!(
 //             constants_path.exists(),
 //             "\n╔══════════════════════════════════════════════════════════════════╗\n\
@@ -110,12 +165,12 @@ pub fn load_ms2_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &s
 //         );
 
 //         let result = load_ms2_model(&model_path, &constants_path, "ms2_bert", Device::Cpu);
-        
+
 //         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
 
 //         let mut model = result.unwrap();
 //         // model.print_summary();
-        
+
 //         // Print the model's weights
 //         // model.print_weights();
 

@@ -6,7 +6,7 @@ edition = "2021"
 rust-version = "1.76"
 description = "A repository of deep-learning models for mass spectrometry data"
 readme = "README.md"
-license = "MIT"
+
 
 [dependencies]
 anyhow = "1.0"

@@ -1,43 +1,121 @@
-use std::path::Path;
-use candle_core::{Device, Tensor};
-use anyhow::{Result, anyhow};
-use crate::models::model_interface::{ModelInterface,PredictionResult};
 use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
+use crate::models::ccs_cnn_tf_model::CCSCNNTFModel;
+use crate::models::model_interface::{ModelInterface, PredictionResult};
 use crate::utils::data_handling::PeptideData;
-use std::collections::HashMap;
 use crate::utils::peptdeep_utils::ModificationMap;
+use crate::utils::stats::TrainingStepMetrics;
+use anyhow::{anyhow, Result};
+use candle_core::Device;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 // Enum for different types of CCS models
 pub enum CCSModelArch {
     CCSCNNLSTM,
-    // Add other architectures here as needed
+    CCSCNNTF,
 }
 
 // Constants for different types of CCS models
-pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm"];
+pub const CCSMODEL_ARCHS: &[&str] = &["ccs_cnn_lstm", "ccs_cnn_tf"];
 
 // A wrapper struct for CCS models
 pub struct CCSModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
 
+impl Clone for CCSModelWrapper {
+    fn clone(&self) -> Self {
+        CCSModelWrapper {
+            model: self.model.clone(),
+        }
+    }
+}
+
 impl CCSModelWrapper {
-    pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        model_path: P,
+        constants_path: P,
+        arch: &str,
+        device: Device,
+    ) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
-            // Add other cases here as you implement more models
+            "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(
+                model_path,
+                Some(constants_path),
+                0,
+                8,
+                4,
+                true,
+                device,
+            )?),
+            "ccs_cnn_tf" => Box::new(CCSCNNTFModel::new(
+                model_path,
+                Some(constants_path),
+                0,
+                8,
+                4,
+                true,
+                device,
+            )?),
             _ => return Err(anyhow!("Unsupported CCS model architecture: {}", arch)),
         };
 
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &[String], mod_sites: &[String], charge: Vec<i32>) -> Result<PredictionResult> {
-        self.model.predict(peptide_sequence, mods, mod_sites, Some(charge), None, None)
+    pub fn predict(
+        &self,
+        peptide_sequence: &[Arc<[u8]>],
+        mods: &[Arc<[u8]>],
+        mod_sites: &[Arc<[u8]>],
+        charge: Vec<i32>,
+    ) -> Result<PredictionResult> {
+        self.model
+            .predict(peptide_sequence, mods, mod_sites, Some(charge), None, None)
     }
 
-    pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size: usize, learning_rate: f64, epochs: usize) -> Result<()> {
-        self.model.fine_tune(training_data, modifications, batch_size, learning_rate, epochs)
+    pub fn train(
+        &mut self,
+        training_data: &Vec<PeptideData>,
+        val_data: Option<&Vec<PeptideData>>,
+        modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
+        val_batch_size: usize,
+        learning_rate: f64,
+        epochs: usize,
+        early_stopping_patience: usize,
+    ) -> Result<TrainingStepMetrics> {
+        self.model.train(
+            training_data,
+            val_data,
+            modifications,
+            batch_size,
+            val_batch_size,
+            learning_rate,
+            epochs,
+            early_stopping_patience,
+            "training",
+            true,
+            true,
+        )
+    }
+
+    pub fn fine_tune(
+        &mut self,
+        training_data: &Vec<PeptideData>,
+        modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
+        learning_rate: f64,
+        epochs: usize,
+    ) -> Result<()> {
+        self.model.fine_tune(
+            training_data,
+            modifications,
+            batch_size,
+            learning_rate,
+            epochs,
+        )
     }
 
     pub fn set_evaluation_mode(&mut self) {
@@ -62,7 +140,12 @@ impl CCSModelWrapper {
 }
 
 // Public API Function to load a new CCS model
-pub fn load_collision_cross_section_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<CCSModelWrapper> {
+pub fn load_collision_cross_section_model<P: AsRef<Path>>(
+    model_path: P,
+    constants_path: P,
+    arch: &str,
+    device: Device,
+) -> Result<CCSModelWrapper> {
     CCSModelWrapper::new(model_path, constants_path, arch, device)
 }
 
@@ -78,7 +161,7 @@ pub fn load_collision_cross_section_model<P: AsRef<Path>>(model_path: P, constan
 //     fn peptide_ccs_prediction() {
 //         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
 //         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
-        
+
 //         assert!(
 //             model_path.exists(),
 //             "\n╔══════════════════════════════════════════════════════════════════╗\n\
@@ -93,7 +176,7 @@ pub fn load_collision_cross_section_model<P: AsRef<Path>>(model_path: P, constan
 //              ╚══════════════════════════════════════════════════════════════════╝\n",
 //             model_path
 //         );
-        
+
 //         assert!(
 //             constants_path.exists(),
 //             "\n╔══════════════════════════════════════════════════════════════════╗\n\
@@ -110,12 +193,12 @@ pub fn load_collision_cross_section_model<P: AsRef<Path>>(model_path: P, constan
 //         );
 
 //         let result = load_collision_cross_section_model(&model_path, &constants_path, "ccs_cnn_lstm", Device::Cpu);
-        
+
 //         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
 
 //         let mut model = result.unwrap();
 //         // model.print_summary();
-        
+
 //         // Print the model's weights
 //         // model.print_weights();
 

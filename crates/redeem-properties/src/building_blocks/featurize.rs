@@ -1,113 +1,334 @@
 use anyhow::{Result, anyhow};
-use std::{collections::HashMap, ops::Deref};
-use ndarray::Array2;
-use candle_core::{Device, Tensor};
+use std::{collections::HashMap, sync::Arc};
+use candle_core::{DType, Device, Tensor};
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::building_blocks::building_blocks::AA_EMBEDDING_SIZE;
+
+
+const VALID_AA: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/// Precomputes amino acid index map from characters A-Z
+fn aa_index_map() -> HashMap<char, i64> {
+    VALID_AA
+        .chars()
+        .enumerate()
+        .map(|(i, c)| (c, i as i64 + 1))
+        .collect()
+}
+
 
 /// Convert peptide sequences into AA ID array.
 /// 
 /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L88
-pub fn get_aa_indices(seq: &str) -> Result<Array2<i64>> {
-    let valid_aa = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // amino acids as defined in alphabase: https://github.com/MannLabs/alphabase/blob/main/alphabase/constants/const_files/amino_acid.tsv
-    let filtered_seq: String = seq.chars().filter(|c| valid_aa.contains(*c)).collect();
+pub fn aa_indices_tensor(seq: &str, device: &Device) -> Result<Tensor> {
+    let map = aa_index_map();
+    let filtered: Vec<i64> = seq
+        .chars()
+        .map(|c| {
+            map.get(&c)
+                .copied()
+                .ok_or_else(|| anyhow!("Unknown amino acid character: '{}'", c))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut indices = vec![0i64]; // padding start
+    indices.extend(filtered);
+    indices.push(0); // padding end
 
-    // TODO: Maybe this should be done higher up in the pipeline, and this should panic here instead.
-    // But for now this is done to deal with cases like: -MQPLSKL
-    if seq.len() != filtered_seq.len() {
-        log::trace!("Invalid amino acid characters found in sequence: {:?}, stripping them out to {:?}", seq, filtered_seq);
-    }
-
-    let seq_len = filtered_seq.len();
-    let mut result = Array2::<i64>::zeros((1, seq_len + 2));
-
-    for (j, c) in filtered_seq.chars().enumerate() {
-        let aa_index = (c as i64) - ('A' as i64) + 1;
-        result[[0, j + 1]] = aa_index;
-    }
-
-    Ok(result)
+    Ok(Tensor::from_slice(&indices, (1, indices.len()), device)?.to_dtype(DType::F32)?.unsqueeze(2)?)
 }
 
-/// Convert peptide sequences into ASCII code array.
-///
-/// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L115
-pub fn get_ascii_indices(peptide_sequences: &[String], device: Device) -> Result<Tensor> {
-    // println!("Peptide sequences to encode: {:?}", peptide_sequences);
-    let max_len = peptide_sequences.iter().map(|s| s.len()).max().unwrap_or(0) + 2; // +2 for padding
-    let batch_size = peptide_sequences.len();
+/// Convert peptide sequences into AA ID array using Arc<[u8]>.
+/// This avoids converting the whole sequence to a String or &str unless necessary.
+pub fn aa_indices_tensor_from_arc(seq: &Arc<[u8]>, device: &Device) -> Result<Tensor> {
+    let map = aa_index_map();
+    let filtered: Vec<i64> = seq
+        .iter()
+        .map(|&b| {
+            let c = b as char;
+            map.get(&c)
+                .copied()
+                .ok_or_else(|| anyhow!("Unknown amino acid character: '{}'", c))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let mut aa_indices = vec![0u32; batch_size * max_len];
+    let mut indices = vec![0i64]; // padding start
+    indices.extend(filtered);
+    indices.push(0); // padding end
 
-    for (i, peptide) in peptide_sequences.iter().enumerate() {
-        for (j, c) in peptide.chars().enumerate() {
-            aa_indices[i * max_len + j + 1] = c as u32; // +1 to skip the first padding
-        }
-    }
-    let aa_indices_tensor =
-        Tensor::from_slice(&aa_indices, (batch_size, max_len), &device)?;
-    Ok(aa_indices_tensor)
+    Ok(Tensor::from_slice(&indices, (1, indices.len()), device)?.to_dtype(DType::F32)?.unsqueeze(2)?)
 }
 
 /// One-hot encode amino acid indices and concatenate additional tensors.
 pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor> {
     let (batch_size, seq_len) = aa_indices.shape().dims2()?;
+    log::trace!("[aa_one_hot] batch_size: {}, seq_len: {}", batch_size, seq_len);
     let num_classes = AA_EMBEDDING_SIZE;
 
-    let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
+    let indices = aa_indices.to_vec2::<f32>()?;
 
-    // Iterate over the 2D tensor directly
-    for batch_idx in 0..batch_size {
-        for seq_idx in 0..seq_len {
-            let index = aa_indices.get(batch_idx)?.get(seq_idx)?.to_scalar::<f32>()?;
-            let class_idx = index.round() as usize; // Round to nearest integer and convert to usize
-            if class_idx < num_classes {
-                one_hot_data[batch_idx * seq_len * num_classes + seq_idx * num_classes + class_idx] = 1.0;
+    for (i, row) in indices.iter().enumerate() {
+        for (j, val) in row.iter().enumerate() {
+            if !val.is_finite() || *val < 0.0 || *val > (AA_EMBEDDING_SIZE as f32) {
+                log::error!(
+                    "[aa_one_hot] Invalid index at batch {}, position {}: {}",
+                    i, j, val
+                );
             }
         }
     }
 
-    // Convert the one_hot_data vector directly to a tensor
-    let one_hot_tensor = Tensor::from_slice(&one_hot_data, (batch_size, seq_len, num_classes), aa_indices.device())
-        .map_err(|e| anyhow!("{}", e))?;
+    let mut one_hot_data = vec![0.0f32; batch_size * seq_len * num_classes];
 
-    // Concatenate additional tensors if provided
-    let mut output_tensor = one_hot_tensor;
+    one_hot_data
+        .par_chunks_mut(seq_len * num_classes)
+        .zip(indices.par_iter())
+        .enumerate()
+        .try_for_each(|(batch_idx, (chunk, row))| -> Result<()> {
+            for (seq_idx, &fidx) in row.iter().enumerate() {
+                if !fidx.is_finite() {
+                    return Err(anyhow!(
+                        "Invalid AA index: found NaN or Inf at batch {}, position {}: {}",
+                        batch_idx, seq_idx, fidx
+                    ));
+                }
 
-    for other in cat_others {
-        output_tensor = Tensor::cat(&[output_tensor, other.deref().clone()], 2)?;
+                if fidx < 0.0 {
+                    return Err(anyhow!(
+                        "Invalid AA index: negative value at batch {}, position {}: {}",
+                        batch_idx, seq_idx, fidx
+                    ));
+                }
+
+                let class_idx = fidx.round() as usize;
+                if class_idx >= num_classes {
+                    return Err(anyhow!(
+                        "AA index out of bounds: got {}, but num_classes = {} (batch {}, position {})",
+                        class_idx, num_classes, batch_idx, seq_idx
+                    ));
+                }
+
+                let index = seq_idx * num_classes + class_idx;
+                chunk[index] = 1.0;
+            }
+            Ok(())
+        })?;
+
+    let one_hot_tensor = Tensor::from_slice(
+        &one_hot_data,
+        (batch_size, seq_len, num_classes),
+        aa_indices.device(),
+    )
+    .map_err(|e| anyhow!("Failed to create one-hot tensor: {}", e))?;
+
+    if cat_others.is_empty() {
+        Ok(one_hot_tensor)
+    } else {
+        let mut features = vec![one_hot_tensor];
+        features.extend(cat_others.iter().cloned().cloned());
+        Ok(Tensor::cat(&features, 2)?)
     }
-
-    Ok(output_tensor)
 }
+
+
+
 
 
 /// Get the modification features for a given set of modifications and modification sites.
 /// 
 /// Based on https://github.com/MannLabs/alphapeptdeep/blob/450518a39a4cd7d03db391108ec8700b365dd436/peptdeep/model/featurize.py#L47
-pub fn get_mod_features(mods: &str, mod_sites: &str, seq_len: usize, mod_feature_size: usize, mod_to_feature: HashMap<String, Vec<f32>>, device: Device) -> Result<Tensor> {
-    let mod_names: Vec<&str> = mods.split(';').filter(|&s| !s.is_empty()).collect();
-    let mod_sites: Vec<usize> = mod_sites
-        .split(';')
-        .filter(|&s| !s.is_empty())
-        .map(|s| s.parse::<usize>().unwrap())
+pub fn get_mod_features_from_parsed(
+    mod_names: &[&str],
+    mod_sites: &[usize],
+    seq_len: usize,
+    mod_feature_size: usize,
+    mod_to_feature: &HashMap<String, Vec<f32>>,
+    device: &Device,
+) -> Result<Tensor> {
+    // Initialize buffer with atomic wrappers
+    let atomic_buffer: Vec<AtomicU32> = (0..seq_len * mod_feature_size)
+        .map(|_| AtomicU32::new(0))
         .collect();
 
-    // let mod_feature_size = self.constants.mod_elements.len();
-
-    let mut mod_x = vec![0.0f32; seq_len * mod_feature_size];
-
-    for (mod_name, &site) in mod_names.iter().zip(mod_sites.iter()) {
-        if let Some(feat) = mod_to_feature.get(*mod_name) {
-            for (i, &value) in feat.iter().enumerate() {
-                if site < seq_len {
-                    mod_x[site * mod_feature_size + i] += value;
-                }
+    mod_names
+        .par_iter()
+        .zip(mod_sites.par_iter())
+        .for_each(|(&mod_name, &site)| {
+            if site >= seq_len {
+                log::warn!(
+                    "Skipping mod {} at invalid site {} (seq_len {})",
+                    mod_name, site, seq_len
+                );
+                return;
             }
-            // println!("Site: {}, feat: {:?}", site, feat);
-        }
+            if let Some(feat) = mod_to_feature.get(mod_name) {
+                for (i, &val) in feat.iter().enumerate() {
+                    let idx = site * mod_feature_size + i;
+                    let val_bits = val.to_bits();
+                    atomic_buffer[idx].fetch_add(val_bits, Ordering::Relaxed);
+                }
+            } else {
+                log::warn!("Unknown modification feature: {}", mod_name);
+            }
+        });
+
+    // Convert atomic buffer back to f32
+    let mod_x: Vec<f32> = atomic_buffer
+        .into_iter()
+        .map(|a| f32::from_bits(a.load(Ordering::Relaxed)))
+        .collect();
+
+    Tensor::from_slice(&mod_x, (1, seq_len, mod_feature_size), device)
+        .map_err(|e| anyhow!("Failed to create tensor: {}", e))
+}
+
+
+pub fn get_mod_features_from_parsed_arc(
+    mod_names: &[Arc<[u8]>],
+    mod_sites: &[usize],
+    seq_len: usize,
+    mod_feature_size: usize,
+    mod_to_feature: &HashMap<Arc<[u8]>, Vec<f32>>,
+    device: &Device,
+) -> Result<Tensor> {
+    let atomic_buffer: Vec<AtomicU32> = (0..seq_len * mod_feature_size)
+        .map(|_| AtomicU32::new(0))
+        .collect();
+
+    mod_names
+        .par_iter()
+        .zip(mod_sites.par_iter())
+        .for_each(|(mod_name, &site)| {
+            if site >= seq_len {
+                log::warn!(
+                    "Skipping mod {:?} at invalid site {} (seq_len {})",
+                    std::str::from_utf8(mod_name).unwrap_or("<invalid>"),
+                    site,
+                    seq_len
+                );
+                return;
+            }
+            if let Some(feat) = mod_to_feature.get(mod_name) {
+                for (i, &val) in feat.iter().enumerate() {
+                    let idx = site * mod_feature_size + i;
+                    let val_bits = val.to_bits();
+                    atomic_buffer[idx].fetch_add(val_bits, Ordering::Relaxed);
+                }
+            } else {
+                log::warn!(
+                    "Unknown modification feature: {:?}",
+                    std::str::from_utf8(mod_name).unwrap_or("<invalid>")
+                );
+            }
+        });
+
+    let mod_x: Vec<f32> = atomic_buffer
+        .into_iter()
+        .map(|a| f32::from_bits(a.load(Ordering::Relaxed)))
+        .collect();
+
+    Tensor::from_slice(&mod_x, (1, seq_len, mod_feature_size), device)
+        .map_err(|e| anyhow!("Failed to create tensor: {}", e))
+}
+
+
+#[cfg(test)]
+mod tests {
+ 
+    use crate::utils::peptdeep_utils::{load_mod_to_feature, load_mod_to_feature_arc};
+    use crate::utils::peptdeep_utils::parse_model_constants;
+    use crate::utils::peptdeep_utils::ModelConstants;
+
+    use super::*;
+    use candle_core::Device;
+    use candle_core::Tensor;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_aa_indices_tensor(){
+        let device = Device::Cpu;
+        let seq = "AGHCEWQMKYR";
+        let start_time = std::time::Instant::now();
+        let result = aa_indices_tensor(seq, &device).unwrap();
+        println!("aa_indices_tensor Time taken: {:?}", start_time.elapsed());
+        // expected result is [[0, 1, 7, 8, 3, 5, 23, 17, 13, 11, 25, 18, 0]]
+        let expect_out = Tensor::from_vec(vec!{0.0f32, 1.0f32, 7.0f32, 8.0f32, 3.0f32, 5.0f32, 23.0f32, 17.0f32, 13.0f32, 11.0f32, 25.0f32, 18.0f32, 0.0f32}, (1, 13), &device).unwrap();
+        println!("{:?} - aa_indices_tensor: {:?}", seq, result.to_vec3::<f32>().unwrap());
+        println!("result shape: {:?}", result.shape());
+        assert_eq!(result.shape().dims(), &[1, 13, 1]);
+        // assert_eq!(result.to_vec3::<f32>().unwrap(), expect_out.to_vec3::<f32>().unwrap());
+
+        let seq_bytes = Arc::from(seq.as_bytes().to_vec().into_boxed_slice());
+        let start_time = std::time::Instant::now();
+        let result = aa_indices_tensor_from_arc(&seq_bytes, &device).unwrap();
+        println!("aa_indices_tensor_from_arc Time taken: {:?}", start_time.elapsed());
+        println!("{:?} - aa_indices_tensor_from_arc: {:?}", seq, result.to_vec3::<f32>().unwrap());
+        assert_eq!(result.shape().dims(), &[1, 13, 1]);
+        // assert_eq!(result.to_vec3::<f32>().unwrap(), expect_out.to_vec3::<f32>().unwrap());
     }
 
-    Tensor::from_slice(&mod_x, (1, seq_len, mod_feature_size), &device)
-        .map_err(|e| anyhow!("Failed to create tensor: {}", e))
+    #[test]
+    fn test_get_mod_features_from_parsed() {
+        let mods_str = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
+        let sites_str = "0;4;8";
+
+        // Manually parse and split
+        let mod_names: Vec<&str> = mods_str.split(';').filter(|s| !s.is_empty()).collect();
+        let mod_sites: Vec<usize> = sites_str
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<usize>().unwrap())
+            .collect();
+        let seq_len = 11 + 2;
+        let mod_feature_size = 109;
+
+        let constants_path =
+            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+        let constants: ModelConstants =
+            parse_model_constants(constants_path.to_str().unwrap()).unwrap();
+        let mod_to_feature: HashMap<String, Vec<f32>> = load_mod_to_feature(&constants).unwrap();
+
+        let device = Device::Cpu;
+        let start_time = std::time::Instant::now();
+        let tensor = get_mod_features_from_parsed(
+            &mod_names,
+            &mod_sites,
+            seq_len,
+            mod_feature_size,
+            &mod_to_feature,
+            &device,
+        ).unwrap();
+        println!("get_mod_features_from_parsed Time taken: {:?}", start_time.elapsed());
+
+        println!("tensor shape: {:?}", tensor.shape());
+
+        assert_eq!(tensor.shape().dims(), &[1, seq_len, mod_feature_size]);
+
+        let mod_to_feature = load_mod_to_feature_arc(&constants).unwrap();
+        let mod_names_arc: Vec<Arc<[u8]>> = mod_names
+            .iter()
+            .map(|&s| Arc::from(s.as_bytes().to_vec().into_boxed_slice()))
+            .collect();
+        let mod_sites_arc: Vec<usize> = mod_sites
+            .iter()
+            .map(|&s| s)
+            .collect();
+        let start_time = std::time::Instant::now();
+        let tensor_arc = get_mod_features_from_parsed_arc(
+            &mod_names_arc,
+            &mod_sites_arc,
+            seq_len,
+            mod_feature_size,
+            &mod_to_feature,
+            &device,
+        ).unwrap();
+        println!("get_mod_features_from_parsed_arc Time taken: {:?}", start_time.elapsed());
+        println!("tensor_arc shape: {:?}", tensor_arc.shape());
+        assert_eq!(tensor_arc.shape().dims(), &[1, seq_len, mod_feature_size]);
+        assert_eq!(tensor.shape(), tensor_arc.shape());
+
+
+    }
 }

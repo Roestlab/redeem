@@ -1,5 +1,5 @@
 [workspace]
-members = [ "crates/redeem-classifiers",
+members = [ "crates/redeem-classifiers", "crates/redeem-cli",
     "crates/redeem-properties"
 ]
 

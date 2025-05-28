@@ -1,45 +1,135 @@
 // rt_model.rs
 
-use std::path::Path;
-use candle_core::{Device, Tensor};
-use anyhow::{Result, anyhow};
-use crate::models::model_interface::{ModelInterface,PredictionResult};
+use crate::models::model_interface::{ModelInterface, PredictionResult};
 use crate::models::rt_cnn_lstm_model::RTCNNLSTMModel;
-use crate::utils::data_handling::PeptideData;
-use std::collections::HashMap;
+use crate::models::rt_cnn_transformer_model::RTCNNTFModel;
+use crate::utils::data_handling::{PeptideData, TargetNormalization};
 use crate::utils::peptdeep_utils::ModificationMap;
+use crate::utils::stats::TrainingStepMetrics;
+use anyhow::{anyhow, Result};
+use candle_core::{Device, Tensor};
+use candle_nn::VarMap;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::path::Path;
+use std::sync::Arc;
 
 // Enum for different types of retention time models
 pub enum RTModelArch {
     RTCNNLSTM,
-    // Add other architectures here as needed
+    RTCNNTF,
 }
 
 // Constants for different types of retention time models
-pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm"];
+pub const RTMODEL_ARCHS: &[&str] = &["rt_cnn_lstm", "rt_cnn_tf"];
 
 // A wrapper struct for RT models
 pub struct RTModelWrapper {
     model: Box<dyn ModelInterface + Send + Sync>,
 }
 
+impl Clone for RTModelWrapper {
+    fn clone(&self) -> Self {
+        RTModelWrapper {
+            model: self.model.clone(), // uses clone_box() behind the scenes
+        }
+    }
+}
+
 impl RTModelWrapper {
-    pub fn new<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        model_path: P,
+        constants_path: Option<P>,
+        arch: &str,
+        device: Device,
+    ) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
-            "rt_cnn_lstm" => Box::new(RTCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device)?),
-            // Add other cases here as you implement more models
+            "rt_cnn_lstm" => Box::new(RTCNNLSTMModel::new(
+                model_path,
+                constants_path,
+                0,
+                8,
+                4,
+                true,
+                device,
+            )?),
+            "rt_cnn_tf" => Box::new(RTCNNTFModel::new(
+                model_path,
+                constants_path,
+                0,
+                8,
+                4,
+                true,
+                device,
+            )?),
             _ => return Err(anyhow!("Unsupported RT model architecture: {}", arch)),
         };
 
         Ok(Self { model })
     }
 
-    pub fn predict(&self, peptide_sequence: &[String], mods: &[String], mod_sites: &[String]) -> Result<PredictionResult> {
-        self.model.predict(peptide_sequence, mods, mod_sites, None, None, None)
+    pub fn predict(
+        &self,
+        peptide_sequence: &[Arc<[u8]>],
+        mods: &[Arc<[u8]>],
+        mod_sites: &[Arc<[u8]>],
+    ) -> Result<PredictionResult> {
+        self.model
+            .predict(peptide_sequence, mods, mod_sites, None, None, None)
     }
 
-    pub fn fine_tune(&mut self, training_data: &Vec<PeptideData>, modifications: HashMap<(String, Option<char>), ModificationMap>, batch_size:usize, learning_rate: f64, epochs: usize) -> Result<()> {
-        self.model.fine_tune(training_data, modifications, batch_size, learning_rate, epochs)
+    pub fn train(
+        &mut self,
+        training_data: &Vec<PeptideData>,
+        val_data: Option<&Vec<PeptideData>>,
+        modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
+        val_batch_size: usize,
+        learning_rate: f64,
+        epochs: usize,
+        early_stopping_patience: usize,
+    ) -> Result<TrainingStepMetrics> {
+        self.model.train(
+            training_data,
+            val_data,
+            modifications,
+            batch_size,
+            val_batch_size,
+            learning_rate,
+            epochs,
+            early_stopping_patience,
+            "training",
+            true,
+            true,
+        )
+    }
+
+    pub fn fine_tune(
+        &mut self,
+        training_data: &Vec<PeptideData>,
+        modifications: HashMap<(String, Option<char>), ModificationMap>,
+        batch_size: usize,
+        learning_rate: f64,
+        epochs: usize,
+    ) -> Result<()> {
+        self.model.fine_tune(
+            training_data,
+            modifications,
+            batch_size,
+            learning_rate,
+            epochs,
+        )
+    }
+
+    pub fn inference(
+        &mut self,
+        inference_data: &Vec<PeptideData>,
+        batch_size: usize,
+        modifications: HashMap<(String, Option<char>), ModificationMap>,
+        rt_norm_params: TargetNormalization,
+    ) -> Result<Vec<PeptideData>> {
+        self.model
+            .inference(inference_data, batch_size, modifications, rt_norm_params)
     }
 
     pub fn set_evaluation_mode(&mut self) {
@@ -64,7 +154,12 @@ impl RTModelWrapper {
 }
 
 // Public API Function to load a new RT model
-pub fn load_retention_time_model<P: AsRef<Path>>(model_path: P, constants_path: P, arch: &str, device: Device) -> Result<RTModelWrapper> {
+pub fn load_retention_time_model<P: AsRef<Path>>(
+    model_path: P,
+    constants_path: Option<P>,
+    arch: &str,
+    device: Device,
+) -> Result<RTModelWrapper> {
     RTModelWrapper::new(model_path, constants_path, arch, device)
 }
 
@@ -80,7 +175,7 @@ pub fn load_retention_time_model<P: AsRef<Path>>(model_path: P, constants_path: 
 //         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
 //         // let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt_resaved_model.pth");
 //         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
-        
+
 //         assert!(
 //             model_path.exists(),
 //             "\n╔══════════════════════════════════════════════════════════════════╗\n\
@@ -95,7 +190,7 @@ pub fn load_retention_time_model<P: AsRef<Path>>(model_path: P, constants_path: 
 //              ╚══════════════════════════════════════════════════════════════════╝\n",
 //             model_path
 //         );
-        
+
 //         assert!(
 //             constants_path.exists(),
 //             "\n╔══════════════════════════════════════════════════════════════════╗\n\
@@ -112,12 +207,12 @@ pub fn load_retention_time_model<P: AsRef<Path>>(model_path: P, constants_path: 
 //         );
 
 //         let result = load_retention_time_model(&model_path, &constants_path, "rt_cnn_lstm", Device::Cpu);
-        
+
 //         assert!(result.is_ok(), "Failed to load model: {:?}", result.err());
 
 //         let mut model = result.unwrap();
 //         model.print_summary();
-        
+
 //         // Print the model's weights
 //         model.print_weights();
 

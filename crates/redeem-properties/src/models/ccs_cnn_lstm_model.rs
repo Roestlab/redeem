@@ -1,28 +1,20 @@
-use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
-use candle_nn::{
-    ops, Dropout, Module, Optimizer, VarBuilder, VarMap,
-};
-use log::info;
-use ndarray::Array2;
-use serde::Deserialize;
+use anyhow::Result;
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::{Dropout, Module, VarBuilder, VarMap};
+
 use std::collections::HashMap;
-use std::process::Output;
-use std::{char, fmt, vec};
 use std::path::Path;
+use std::sync::Arc;
+use std::{fmt, vec};
 
 use crate::building_blocks::building_blocks::{
-    DecoderLinear, Encoder26aaModChargeCnnLstmAttnSum, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
+    DecoderLinear, Encoder26aaModChargeCnnLstmAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::building_blocks::featurize::{aa_one_hot, get_aa_indices, get_mod_features};
-use crate::utils::logging::Progress;
-use crate::utils::data_handling::PeptideData;
-use crate::utils::peptdeep_utils::{extract_masses_and_indices, get_modification_indices, remove_mass_shift};
 use crate::{
-    models::model_interface::{ModelInterface, PropertyType, PredictionResult,load_tensors_from_model, create_var_map},
-    utils::peptdeep_utils::{
-        load_mod_to_feature, parse_instrument_index, parse_model_constants, ModelConstants,
+    models::model_interface::{
+        create_var_map, load_tensors_from_model, ModelInterface, PropertyType,
     },
+    utils::peptdeep_utils::{load_mod_to_feature_arc, parse_model_constants, ModelConstants},
 };
 
 // Constants
@@ -32,11 +24,11 @@ const NCE_FACTOR: f64 = 0.01;
 // Main Model Struct
 #[derive(Clone)]
 /// Represents an AlphaPeptDeep MS2BERT model.
-pub struct CCSCNNLSTMModel<'a> {
-    var_store: VarBuilder<'a>,
+pub struct CCSCNNLSTMModel {
+    var_store: VarBuilder<'static>,
     varmap: VarMap,
     constants: ModelConstants,
-    mod_to_feature: HashMap<String, Vec<f32>>,
+    mod_to_feature: HashMap<Arc<[u8]>, Vec<f32>>,
     fixed_sequence_len: usize,
     // Total number of fragment types of a fragmentation position to predict
     num_frag_types: usize,
@@ -52,28 +44,32 @@ pub struct CCSCNNLSTMModel<'a> {
 }
 
 // Automatically implement Send and Sync if all fields are Send and Sync
-unsafe impl<'a> Send for CCSCNNLSTMModel<'a> {}
-unsafe impl<'a> Sync for CCSCNNLSTMModel<'a> {}
+unsafe impl Send for CCSCNNLSTMModel {}
+unsafe impl Sync for CCSCNNLSTMModel {}
 
 // Code Model Implementation
-impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
+impl ModelInterface for CCSCNNLSTMModel {
     fn property_type(&self) -> PropertyType {
         PropertyType::CCS
     }
 
     fn model_arch(&self) -> &'static str {
-        "ccs_cnn_lstm"   
+        "ccs_cnn_lstm"
+    }
+
+    fn new_untrained(_device: Device) -> Result<Self> {
+        unimplemented!("Untrained model creation is not implemented for this architecture.");
     }
 
     /// Create a new CCSCNNLSTMModel instance model from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         fixed_sequence_len: usize,
         num_frag_types: usize,
         num_modloss_types: usize,
         mask_modloss: bool,
-        device: Device
+        device: Device,
     ) -> Result<Self> {
         let tensor_data = load_tensors_from_model(model_path.as_ref(), &device)?;
 
@@ -82,11 +78,13 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
 
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let constants: ModelConstants =
-            parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
+        let constants = match constants_path {
+            Some(path) => parse_model_constants(path.as_ref().to_str().unwrap())?,
+            None => ModelConstants::default(),
+        };
 
         // Load the mod_to_feature mapping
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
 
         let dropout = Dropout::new(0.1);
 
@@ -95,9 +93,7 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
             8,
             128,
             2,
-            vec![
-                "ccs_encoder.mod_nn.nn.weight"
-            ],
+            vec!["ccs_encoder.mod_nn.nn.weight"],
             vec![
                 "ccs_encoder.input_cnn.cnn_short.weight",
                 "ccs_encoder.input_cnn.cnn_medium.weight",
@@ -106,11 +102,12 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
             vec![
                 "ccs_encoder.input_cnn.cnn_short.bias",
                 "ccs_encoder.input_cnn.cnn_medium.bias",
-                "ccs_encoder.input_cnn.cnn_long.bias"
+                "ccs_encoder.input_cnn.cnn_long.bias",
             ],
             "ccs_encoder.hidden_nn",
-            vec!["ccs_encoder.attn_sum.attn.0.weight"]
-        ).unwrap();
+            vec!["ccs_encoder.attn_sum.attn.0.weight"],
+        )
+        .unwrap();
 
         let ccs_decoder = DecoderLinear::from_varstore(
             &var_store,
@@ -138,13 +135,12 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
             is_training: false,
             dropout,
             ccs_encoder,
-            ccs_decoder
+            ccs_decoder,
         })
     }
-    
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
+        let (_batch_size, _seq_len, _) = xs.shape().dims3()?;
 
         // Separate input into aa_indices, mod_x, charge
         let start_mod_x = 1;
@@ -154,15 +150,17 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         let mod_x_out = xs.i((.., .., start_mod_x..start_mod_x + MOD_FEATURE_SIZE))?;
         let charge_out = xs.i((.., 0..1, start_charge..start_charge + 1))?;
         let charge_out = charge_out.squeeze(2)?;
-        
-        let x = self.ccs_encoder.forward(&aa_indices_out, &mod_x_out, &charge_out)?;
+
+        let x = self
+            .ccs_encoder
+            .forward(&aa_indices_out, &mod_x_out, &charge_out)?;
         let x = self.dropout.forward(&x, true)?;
         let x = Tensor::cat(&[x, charge_out], 1)?;
         let x = self.ccs_decoder.forward(&x)?;
 
         Ok(x.squeeze(1)?)
     }
-    
+
     /// Set model to evaluation mode for inference
     /// This disables dropout and other training-specific layers.
     fn set_evaluation_mode(&mut self) {
@@ -192,38 +190,38 @@ impl<'a> ModelInterface for CCSCNNLSTMModel<'a> {
         self.constants.mod_elements.len()
     }
 
-    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+    fn get_mod_to_feature(&self) -> &HashMap<Arc<[u8]>, Vec<f32>> {
         &self.mod_to_feature
     }
 
     fn get_min_pred_intensity(&self) -> f32 {
-        unimplemented!("Method not implemented for architecture: {}", self.model_arch())
+        unimplemented!(
+            "Method not implemented for architecture: {}",
+            self.model_arch()
+        )
     }
-
 
     fn get_mut_varmap(&mut self) -> &mut VarMap {
         &mut self.varmap
     }
-    
+
     fn print_summary(&self) {
         todo!()
     }
-    
+
     fn print_weights(&self) {
         todo!()
     }
-    
 }
 
-
 // // Forward Module Trait Implementation
-// impl <'a> Module for CCSCNNLSTMModel<'a> {
+// impl  Module for CCSCNNLSTMModel {
 //     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
 //         ModelInterface::forward(self, input)
-//     }    
+//     }
 // }
 
-impl<'a> fmt::Debug for CCSCNNLSTMModel<'a> {
+impl fmt::Debug for CCSCNNLSTMModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "ModelCCS_LSTM(")?;
         writeln!(f, "  (dropout): Dropout(p={}, inplace={})", 0.1, false)?;
@@ -239,14 +237,26 @@ impl<'a> fmt::Debug for CCSCNNLSTMModel<'a> {
 
         // CNN
         writeln!(f, "    (input_cnn): SeqCNN(")?;
-        writeln!(f, "      (cnn_short): Conv1d(36, 36, kernel_size=(3,), stride=(1,), padding=(1,))")?;
-        writeln!(f, "      (cnn_medium): Conv1d(36, 36, kernel_size=(5,), stride=(1,), padding=(2,))")?;
-        writeln!(f, "      (cnn_long): Conv1d(36, 36, kernel_size=(7,), stride=(1,), padding=(3,))")?;
+        writeln!(
+            f,
+            "      (cnn_short): Conv1d(36, 36, kernel_size=(3,), stride=(1,), padding=(1,))"
+        )?;
+        writeln!(
+            f,
+            "      (cnn_medium): Conv1d(36, 36, kernel_size=(5,), stride=(1,), padding=(2,))"
+        )?;
+        writeln!(
+            f,
+            "      (cnn_long): Conv1d(36, 36, kernel_size=(7,), stride=(1,), padding=(3,))"
+        )?;
         writeln!(f, "    )")?;
 
         // Hidden LSTM
         writeln!(f, "    (hidden_nn): SeqLSTM(")?;
-        writeln!(f, "      (rnn): LSTM(144, 128, num_layers=2, batch_first=True, bidirectional=True)")?;
+        writeln!(
+            f,
+            "      (rnn): LSTM(144, 128, num_layers=2, batch_first=True, bidirectional=True)"
+        )?;
         writeln!(f, "    )")?;
 
         // Attention Sum
@@ -275,23 +285,21 @@ impl<'a> fmt::Debug for CCSCNNLSTMModel<'a> {
             "      (2): Linear(in_features=64, out_features=1, bias=True)"
         )?;
         writeln!(f, "    )")?;
-        
+
         writeln!(f, "  )")?;
-        
+
         write!(f, ")")
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::model_interface::ModelInterface;
     use crate::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
-    use crate::utils::peptdeep_utils::load_modifications;
-    use crate::utils::data_handling::PeptideData;
+    use crate::models::model_interface::ModelInterface;
     use candle_core::Device;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     #[test]
     fn test_load_pretrained_ccs_cnn_lstm_model() {
@@ -299,7 +307,8 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model =
+            CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
         println!("{:?}", model);
     }
@@ -310,17 +319,29 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model =
+            CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = "AGHCEWQMKYR";
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
+        let peptide_sequences = Arc::from("AGHCEWQMKYR".as_bytes().to_vec().into_boxed_slice());
+        let mods = Arc::from(
+            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"
+                .as_bytes()
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let mod_sites = Arc::from("0;4;8".as_bytes().to_vec().into_boxed_slice());
         let charge = Some(2);
         let nce = Some(20);
-        let instrument = Some("QE");
+        let instrument = Some(Arc::from("QE".as_bytes().to_vec().into_boxed_slice()));
 
-        let result =
-            model.encode_peptide(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+        let result = model.encode_peptide(
+            &peptide_sequences,
+            &mods,
+            &mod_sites,
+            charge,
+            nce,
+            instrument.as_ref(),
+        );
 
         println!("{:?}", result);
 
@@ -330,22 +351,31 @@ mod tests {
     }
 
     #[test]
-    fn test_predict(){
+    fn test_predict() {
         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = CCSCNNLSTMModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = vec!["AGHCEWQMKYR".to_string(), "AGHCEWQMKYR".to_string()];
-        let mods = vec!["Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(), "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string()];
-        let mod_sites = vec!["0;4;8".to_string(), "0;4;8".to_string()];
+        let model =
+            CCSCNNLSTMModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
+
+        let seq: Arc<[u8]> = Arc::from(b"AGHCEWQMKYR".to_vec().into_boxed_slice());
+        let mods: Arc<[u8]> = Arc::from(
+            b"Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let mod_sites: Arc<[u8]> = Arc::from(b"0;4;8".to_vec().into_boxed_slice());
+
+        let peptide_sequences = vec![seq.clone(), seq];
+        let mods = vec![mods.clone(), mods];
+        let mod_sites = vec![mod_sites.clone(), mod_sites];
         let charge = Some(vec![2, 2]);
 
         let result = model.predict(&peptide_sequences, &mods, &mod_sites, charge, None, None);
         println!("{:?}", result);
+
+        assert!(result.is_ok());
     }
-
-    
-
 }

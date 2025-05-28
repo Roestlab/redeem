@@ -5,7 +5,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 
-use crate::data_handling::Experiment;
+use crate::data_handling::{Experiment, PsmMetadata};
 
 use crate::models::utils::{ModelParams, ModelType};
 #[cfg(feature = "xgboost")]
@@ -321,9 +321,9 @@ impl SemiSupervisedLearner {
     /// # Returns
     ///
     /// The predictions for the input features
-    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>) -> Array1<f32> {
+    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> anyhow::Result<(Array1<f32>, Array1<u32>)> {
 
-        let mut experiment = Experiment::new(x.clone(), y.clone());
+        let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
 
         experiment.log_input_data_summary();
 
@@ -331,9 +331,7 @@ impl SemiSupervisedLearner {
         let (_best_feat, _best_positives, mut new_labels, best_desc, _best_feature_scores) =
             self.init_best_feature(&experiment, self.train_fdr);
 
-        // println!("Original labels: {:?}", experiment.y);
         experiment.y = new_labels.clone();
-        // println!("New labels: {:?}", experiment.y);
 
         let folds = self.create_folds(&experiment, self.xeval_num_iter, self.class_pct.map(|(t, _d)| t), self.class_pct.map(|(_t, d)| d));
 
@@ -373,15 +371,22 @@ impl SemiSupervisedLearner {
 
             new_labels = experiment.update_labels(&all_predictions, self.train_fdr, best_desc);
             experiment.y = new_labels;
+
+            experiment.update_rank_feature(&all_predictions, &experiment.psm_metadata.clone());
+
         }
 
         // Final prediction on the entire dataset
         log::info!("Final prediction on the entire dataset");
-        let experiment = Experiment::new(x, y);
+        let mut experiment = Experiment::new(x, y, psm_metadata);
 
         // self.model
         //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
-        Array1::from(self.model.predict_proba(&experiment.x))
+        let final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
+        experiment.update_rank_feature(&final_predictions, &experiment.psm_metadata.clone());
+        let updated_ranks = experiment.get_rank_column()?; 
+
+        Ok((final_predictions, updated_ranks))
     }
 }
 
@@ -453,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "xgboost")]
     fn test_xgb_semi_supervised_learner() {
         // Load the test data from the TSV files
         let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
@@ -485,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "linfa")]
     fn test_svm_semi_supervised_learner() {
         // Load the test data from the TSV files
         let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();

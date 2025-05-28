@@ -1,32 +1,19 @@
-use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor, Var, D};
-use candle_nn::{
-    ops, Conv1d, Conv1dConfig, Dropout, Linear, Module, Optimizer, PReLU, VarBuilder, VarMap,
-};
-use log::info;
-use ndarray::Array2;
-use serde::Deserialize;
-use std::collections::HashMap;
+use anyhow::Result;
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::{Dropout, Module, VarBuilder, VarMap};
 use std::fmt;
 use std::path::Path;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    building_blocks::{
-        building_blocks::{
-            DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
-            ModLossNN, AA_EMBEDDING_SIZE, MOD_FEATURE_SIZE,
-        },
-        featurize::{aa_one_hot, get_aa_indices, get_mod_features},
+    building_blocks::building_blocks::{
+        DecoderLinear, HiddenHfaceTransformer, Input26aaModPositionalEncoding, MetaEmbedding,
+        ModLossNN, MOD_FEATURE_SIZE,
     },
-    models::model_interface::{load_tensors_from_model, create_var_map, ModelInterface, PropertyType},
-    utils::{
-        data_handling::PeptideData,
-        logging::Progress,
-        peptdeep_utils::{
-            get_modification_indices, get_modification_string, load_mod_to_feature,
-            parse_model_constants, remove_mass_shift, ModelConstants,
-        },
+    models::model_interface::{
+        create_var_map, load_tensors_from_model, ModelInterface, PropertyType,
     },
+    utils::peptdeep_utils::{load_mod_to_feature_arc, parse_model_constants, ModelConstants},
 };
 
 // Constants
@@ -36,11 +23,11 @@ const NCE_FACTOR: f64 = 0.01;
 // Main Model Struct
 #[derive(Clone)]
 /// Represents an AlphaPeptDeep MS2BERT model.
-pub struct MS2BertModel<'a> {
-    var_store: VarBuilder<'a>,
+pub struct MS2BertModel {
+    var_store: VarBuilder<'static>,
     varmap: VarMap,
     constants: ModelConstants,
-    mod_to_feature: HashMap<String, Vec<f32>>,
+    mod_to_feature: HashMap<Arc<[u8]>, Vec<f32>>,
     fixed_sequence_len: usize,
     // Total number of fragment types of a fragmentation position to predict
     num_frag_types: usize,
@@ -60,11 +47,11 @@ pub struct MS2BertModel<'a> {
 }
 
 // Automatically implement Send and Sync if all fields are Send and Sync
-unsafe impl<'a> Send for MS2BertModel<'a> {}
-unsafe impl<'a> Sync for MS2BertModel<'a> {}
+unsafe impl Send for MS2BertModel {}
+unsafe impl Sync for MS2BertModel {}
 
 // Code Model Implementation
-impl<'a> ModelInterface for MS2BertModel<'a> {
+impl ModelInterface for MS2BertModel {
     fn property_type(&self) -> PropertyType {
         PropertyType::MS2
     }
@@ -73,10 +60,14 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         "ms2_bert"
     }
 
+    fn new_untrained(_device: Device) -> Result<Self> {
+        unimplemented!("Untrained model creation is not implemented for this architecture.");
+    }
+
     /// Create a new MS2BERT model from the given model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         fixed_sequence_len: usize,
         num_frag_types: usize,
         num_modloss_types: usize,
@@ -90,11 +81,13 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
 
         let var_store = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let constants: ModelConstants =
-            parse_model_constants(constants_path.as_ref().to_str().unwrap())?;
+        let constants = match constants_path {
+            Some(path) => parse_model_constants(path.as_ref().to_str().unwrap())?,
+            None => ModelConstants::default(),
+        };
 
         // Load the mod_to_feature mapping
-        let mod_to_feature = load_mod_to_feature(&constants)?;
+        let mod_to_feature = load_mod_to_feature_arc(&constants)?;
 
         let dropout = Dropout::new(0.1);
 
@@ -183,7 +176,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
-        let (batch_size, seq_len, _) = xs.shape().dims3()?;
+        let (_batch_size, seq_len, _) = xs.shape().dims3()?;
 
         // Separate the input tensor into the different parts
 
@@ -206,18 +199,42 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         let nce_out = nce_out.squeeze(2)?; // Squeeze to remove dimensions of size 1 if needed
         let instrument_out = instrument_out.squeeze(2)?.squeeze(1)?; // Squeeze to remove dimensions of size 1 if needed
 
-        log::trace!("[MS2BertModel::forward] aa_indices_out shape: {:?}, device: {:?}", aa_indices_out.shape(), aa_indices_out.device());
-        log::trace!("[MS2BertModel::forward] mod_x_out shape: {:?}, device: {:?}", mod_x_out.shape(), mod_x_out.device());
-        log::trace!("[MS2BertModel::forward] charge_out shape: {:?}, device: {:?}", charge_out.shape(), charge_out.device());
-        log::trace!("[MS2BertModel::forward] nce_out shape: {:?}, device: {:?}", nce_out.shape(), nce_out.device());
-        log::trace!("[MS2BertModel::forward] instrument_out shape: {:?}, device: {:?}", instrument_out.shape(), instrument_out.device());
+        log::trace!(
+            "[MS2BertModel::forward] aa_indices_out shape: {:?}, device: {:?}",
+            aa_indices_out.shape(),
+            aa_indices_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] mod_x_out shape: {:?}, device: {:?}",
+            mod_x_out.shape(),
+            mod_x_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] charge_out shape: {:?}, device: {:?}",
+            charge_out.shape(),
+            charge_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] nce_out shape: {:?}, device: {:?}",
+            nce_out.shape(),
+            nce_out.device()
+        );
+        log::trace!(
+            "[MS2BertModel::forward] instrument_out shape: {:?}, device: {:?}",
+            instrument_out.shape(),
+            instrument_out.device()
+        );
 
         // Forward pass through input_nn with dropout
         let in_x = self
             .dropout
-            .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, true)?;
+            .forward(&self.input_nn.forward(&aa_indices_out, &mod_x_out)?, self.is_training)?;
 
-        log::trace!("[MS2BertModel::forward] in_x shape (post dropout-input_nn): {:?}, device: {:?}", in_x.shape(), in_x.device());
+        log::trace!(
+            "[MS2BertModel::forward] in_x shape (post dropout-input_nn): {:?}, device: {:?}",
+            in_x.shape(),
+            in_x.device()
+        );
 
         // Prepare metadata for meta_nn
         let meta_x = self
@@ -225,17 +242,27 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
             .forward(&charge_out, &nce_out, &instrument_out)?
             .unsqueeze(1)?
             .repeat(vec![1, seq_len as usize, 1])?;
-        log::trace!("[MS2BertModel::forward] meta_x (post meta_nn) shape: {:?}, device: {:?}", meta_x.shape(), meta_x.device());
+        log::trace!(
+            "[MS2BertModel::forward] meta_x (post meta_nn) shape: {:?}, device: {:?}",
+            meta_x.shape(),
+            meta_x.device()
+        );
 
         // Concatenate in_x and meta_x along dimension 2
         let combined_input = Tensor::cat(&[in_x.clone(), meta_x], 2)?;
-        log::trace!("[MS2BertModel::forward] combined_input shape: {:?}, device: {:?}", combined_input.shape(), combined_input.device());
+        log::trace!(
+            "[MS2BertModel::forward] combined_input shape: {:?}, device: {:?}",
+            combined_input.shape(),
+            combined_input.device()
+        );
 
         // Forward pass through hidden_nn
-        let hidden_x = self
-            .hidden_nn
-            .forward(&combined_input.clone(), None)?;
-        log::trace!("[MS2BertModel::forward] hidden_x shape: {:?}, device: {:?}", hidden_x.shape(), hidden_x.device());
+        let hidden_x = self.hidden_nn.forward(&combined_input.clone(), None)?;
+        log::trace!(
+            "[MS2BertModel::forward] hidden_x shape: {:?}, device: {:?}",
+            hidden_x.shape(),
+            hidden_x.device()
+        );
 
         // // Handle attentions if needed (similar to PyTorch)
         // if self.output_attentions {
@@ -247,11 +274,19 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         // Apply dropout and combine with input
         let x_tmp = (hidden_x + combined_input * 0.2)?;
         let hidden_output = self.dropout.forward(&x_tmp, true)?;
-        log::trace!("[MS2BertModel::forward] hidden_output shape: {:?}, device: {:?}", hidden_output.shape(), hidden_output.device());
+        log::trace!(
+            "[MS2BertModel::forward] hidden_output shape: {:?}, device: {:?}",
+            hidden_output.shape(),
+            hidden_output.device()
+        );
 
         // Forward pass through output_nn
         let mut out_x = self.output_nn.forward(&hidden_output)?;
-        log::trace!("[MS2BertModel::forward] out_x shape: {:?}, device: {:?}", out_x.shape(), out_x.device());
+        log::trace!(
+            "[MS2BertModel::forward] out_x shape: {:?}, device: {:?}",
+            out_x.shape(),
+            out_x.device()
+        );
 
         // Handle modloss if applicable (similar logic as PyTorch)
         if self.num_modloss_types > 0 {
@@ -319,7 +354,7 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
         self.constants.mod_elements.len()
     }
 
-    fn get_mod_to_feature(&self) -> &HashMap<String, Vec<f32>> {
+    fn get_mod_to_feature(&self) -> &HashMap<Arc<[u8]>, Vec<f32>> {
         &self.mod_to_feature
     }
 
@@ -338,17 +373,16 @@ impl<'a> ModelInterface for MS2BertModel<'a> {
     fn print_weights(&self) {
         todo!()
     }
-
 }
 
 // // Module Trait Implementation
-// impl<'a> Module for MS2BertModel<'a> {
+// impl Module for MS2BertModel {
 //     fn forward(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
 //         ModelInterface::forward(self, input)
 //     }
 // }
 
-impl<'a> fmt::Debug for MS2BertModel<'a> {
+impl fmt::Debug for MS2BertModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "MS2BertModel(")?;
         writeln!(f, "  (dropout): Dropout(p={})", 0.1)?;
@@ -403,12 +437,7 @@ mod tests {
     use super::*;
     use crate::models::model_interface::ModelInterface;
     use crate::models::ms2_bert_model::MS2BertModel;
-    use crate::utils::peptdeep_utils::load_modifications;
     use candle_core::Device;
-    use csv::Reader;
-    use rayon::vec;
-    use std::collections::HashMap;
-    use std::fs::File;
     use std::path::PathBuf;
 
     #[test]
@@ -431,7 +460,8 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model =
+            MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
         println!("{:?}", model);
     }
@@ -442,23 +472,25 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model =
+            MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = "AGHCEWQMKYR";
-        let mods = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
-        let mod_sites = "0;4;8";
+        let seq = Arc::from(b"AGHCEWQMKYR".to_vec().into_boxed_slice());
+        let mods = Arc::from(
+            b"Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let mod_sites = Arc::from(b"0;4;8".to_vec().into_boxed_slice());
         let charge = Some(2);
         let nce = Some(20);
-        let instrument = Some("QE");
+        let instrument = Some(Arc::from(b"QE".to_vec().into_boxed_slice()));
 
         let result =
-            model.encode_peptide(&peptide_sequences, mods, mod_sites, charge, nce, instrument);
+            model.encode_peptide(&seq, &mods, &mod_sites, charge, nce, instrument.as_ref());
 
         println!("{:?}", result);
-
-        // assert!(result.is_ok());
-        // let encoded_peptides = result.unwrap();
-        // assert_eq!(encoded_peptides.shape().dims2().unwrap(), (1, 27 + 109 + 1 + 1 + 1));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -467,17 +499,26 @@ mod tests {
         let constants_path =
             PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
-        let model = MS2BertModel::new(model_path, constants_path, 0, 8, 4, true, device).unwrap();
+        let model =
+            MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
 
-        let peptide_sequences = vec!["AGHCEWQMKYR".to_string(), "AGHCEWQMKYR".to_string()];
-        let mods = vec![
-            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
-            "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M".to_string(),
-        ];
-        let mod_sites = vec!["0;4;8".to_string(), "0;4;8".to_string()];
+        let seq: Arc<[u8]> = Arc::from(b"AGHCEWQMKYR".to_vec().into_boxed_slice());
+        let mods: Arc<[u8]> = Arc::from(
+            b"Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M"
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let mod_sites: Arc<[u8]> = Arc::from(b"0;4;8".to_vec().into_boxed_slice());
         let charge = Some(vec![2, 2]);
         let nce = Some(vec![20, 20]);
-        let instrument = Some(vec!["QE".to_string(), "QE".to_string()]);
+        let instrument = vec![
+            Arc::from(b"QE".to_vec().into_boxed_slice()),
+            Arc::from(b"QE".to_vec().into_boxed_slice()),
+        ];
+
+        let peptide_sequences = vec![seq.clone(), seq];
+        let mods = vec![mods.clone(), mods];
+        let mod_sites = vec![mod_sites.clone(), mod_sites];
 
         let input_tensor = model
             .encode_peptides(
@@ -486,14 +527,15 @@ mod tests {
                 &mod_sites,
                 charge,
                 nce,
-                instrument,
+                Some(instrument.into_iter().map(Some).collect()),
             )
             .unwrap();
+
         let output = model.forward(&input_tensor).unwrap();
         println!("{:?}", output);
 
         let prediction: Vec<Vec<Vec<f32>>> = output.to_vec3().unwrap();
-
         println!("{:?}", prediction);
+        assert_eq!(prediction.len(), 2);
     }
 }
