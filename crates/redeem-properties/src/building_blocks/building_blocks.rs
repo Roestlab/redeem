@@ -854,11 +854,11 @@ impl Encoder26aaModCnnLstmAttnSum {
 
         let x = self.input_cnn.forward(&x)?;
         let (b, s, d) = x.dims3()?;
-        println!("x (post input_cnn): batch size: {b}, seq len: {s}, embedding dim: {d}");
+        // println!("x (post input_cnn): batch size: {b}, seq len: {s}, embedding dim: {d}");
 
         let x = self.input_lstm.forward(&x)?;
         let (b, s, d) = x.dims3()?;
-        println!("x (post input_lstm): batch size: {b}, seq len: {s}, embedding dim: {d}");
+        // println!("x (post input_lstm): batch size: {b}, seq len: {s}, embedding dim: {d}");
 
         let x = self.attn_sum.forward(&x)?;
 
