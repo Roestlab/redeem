@@ -164,7 +164,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
         let mut overview_section = ReportSection::new("Overview");
 
         overview_section.add_content(html! {
-            "This report summarizes the training process of the ReDeeM model. It includes epoch-level summaries and step-wise dynamics such as learning rate scheduling and accuracy tracking over time. These plots provide insight into model convergence behavior and training stability."
+            "This report summarizes the training process of the {} model. It includes epoch-level summaries and step-wise dynamics such as learning rate scheduling and accuracy tracking over time. These plots provide insight into model convergence behavior and training stability."
         });
 
         let epoch_losses = train_step_metrics.summarize_loss_for_plotting();
@@ -209,17 +209,38 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
             .iter()
             .zip(&inference_results)
             .filter_map(|(true_pep, pred_pep)| {
-                match (true_pep.retention_time, pred_pep.retention_time) {
-                    (Some(t), Some(p)) => {
-                        let t_denorm = match norm_factor {
-                            TargetNormalization::ZScore(mean, std) => t as f64 * std as f64 + mean as f64,
-                            TargetNormalization::MinMax(min, range) => t as f64 * range as f64 + min as f64,
-                            TargetNormalization::None => t as f64,
-                        };
-                        Some((t_denorm, p as f64))
+                // check if model is RT or CCS
+                if config.model_arch == "ccs_cnn_lstm" || config.model_arch == "ccs_cnn_tf" {
+                    match (true_pep.ccs, pred_pep.ccs) {
+                        (Some(t), Some(p)) => {
+                            let t_denorm = match norm_factor {
+                                TargetNormalization::ZScore(mean, std) => t as f64 * std as f64 + mean as f64,
+                                TargetNormalization::MinMax(min, range) => t as f64 * range as f64 + min as f64,
+                                TargetNormalization::None => t as f64,
+                            };
+                            Some((t_denorm, p as f64))
+                        }
+                        _ => None,
+                  
                     }
-                    _ => None,
                 }
+                else if config.model_arch == "rt_cnn_lstm" || config.model_arch == "rt_cnn_tf" {
+                    match (true_pep.retention_time, pred_pep.retention_time) {
+                        (Some(t), Some(p)) => {
+                            let t_denorm = match norm_factor {
+                                TargetNormalization::ZScore(mean, std) => t as f64 * std as f64 + mean as f64,
+                                TargetNormalization::MinMax(min, range) => t as f64 * range as f64 + min as f64,
+                                TargetNormalization::None => t as f64,
+                            };
+                            Some((t_denorm, p as f64))
+                        }
+                        _ => None,
+                  
+                    }
+                } else {
+                    return None;
+                }
+                
             })
             .unzip();
         

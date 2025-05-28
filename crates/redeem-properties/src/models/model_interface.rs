@@ -308,10 +308,10 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         let mod_feature_size = self.get_mod_element_count();
         let mod_to_feature = self.get_mod_to_feature();
 
-        log::trace!(
-            "[ModelInterface::encode_peptide] peptide_sequence: {:?} | mods: {:?} | mod_sites: {:?} | charge: {:?} | nce: {:?} | instrument: {:?}",
-            peptide_sequence, mods, mod_sites, charge, nce, instrument
-        );
+        // log::trace!(
+        //     "[ModelInterface::encode_peptide] peptide_sequence: {:?} | mods: {:?} | mod_sites: {:?} | charge: {:?} | nce: {:?} | instrument: {:?}",
+        //     peptide_sequence, mods, mod_sites, charge, nce, instrument
+        // );
 
         let aa_tensor = aa_indices_tensor_from_arc(peptide_sequence, device)?;
         let (batch_size, seq_len, _) = aa_tensor.shape().dims3()?;
@@ -627,6 +627,9 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
                         let acc = match self.property_type() {
                             PropertyType::RT => {
+                                // print first 5 predictions and targets
+                                println!("Predictions: {:?}", &predictions[0..5]);
+                                println!("Targets: {:?}", &targets[0..5]);
                                 Some(Metrics::accuracy(&predictions, &targets, 0.5))
                             }
                             PropertyType::CCS => {
@@ -739,7 +742,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         &self,
         inference_data: &Vec<PeptideData>,
         batch_size: usize,
-        _modifications: HashMap<
+        modifications: HashMap<
             (String, Option<char>),
             crate::utils::peptdeep_utils::ModificationMap,
         >,
@@ -760,73 +763,33 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             .enumerate()
             .map(|(batch_idx, batch_data)| {
                 let start_idx = batch_idx * batch_size;
-                let batch: PeptideBatchData = batch_data.into();
     
-                let naked_sequences = &batch.naked_sequence;
-                let mods = &batch.mods;
-                let mod_sites = &batch.mod_sites;
+                // Extract input features only (ignore targets)
+                let (input_tensor, _) = self.prepare_batch_inputs(batch_data, &modifications)?;
+                let predicted = self.forward(&input_tensor)?;
     
-                let charges = if batch.charges.iter().all(|c| c.is_some()) {
-                    Some(batch.charges.iter().map(|c| c.unwrap()).collect::<Vec<_>>())
-                } else {
-                    None
-                };
+                let predictions = predicted.to_vec1::<f32>()?;
     
-                let nces = if batch.nces.iter().all(|n| n.is_some()) {
-                    Some(batch.nces.iter().map(|n| n.unwrap()).collect::<Vec<_>>())
-                } else {
-                    None
-                };
+                let updated = predictions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, pred)| {
+                        let mut peptide = batch_data[i].clone();
+                        let value = match target_norm {
+                            TargetNormalization::ZScore(mean, std) => pred * std + mean,
+                            TargetNormalization::MinMax(min, max) => pred * (max - min) + min,
+                            TargetNormalization::None => pred,
+                        };
+                        match self.property_type() {
+                            PropertyType::RT => peptide.retention_time = Some(value),
+                            PropertyType::CCS => peptide.ccs = Some(value),
+                            _ => {}
+                        }
+                        (start_idx + i, peptide)
+                    })
+                    .collect::<Vec<_>>();
     
-                let instruments = if batch.instruments.iter().all(|i| i.is_some()) {
-                    Some(batch.instruments.clone())
-                } else {
-                    None
-                };
-    
-                let input_tensor = self
-                    .encode_peptides(naked_sequences, mods, mod_sites, charges, nces, instruments)?
-                    .to_device(self.get_device())?;
-                let output = self.forward(&input_tensor)?;
-    
-                match self.property_type() {
-                    PropertyType::RT | PropertyType::CCS => {
-                        let predictions = output.to_vec1()?;
-                        let updated: Vec<(usize, PeptideData)> = predictions
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, pred)| {
-                                let mut peptide = batch_data[i].clone();
-                                match self.property_type() {
-                                    PropertyType::RT => {
-                                        peptide.retention_time = Some(match target_norm {
-                                            TargetNormalization::ZScore(mean, std) => pred * std + mean,
-                                            TargetNormalization::MinMax(min, max) => {
-                                                pred * (max - min) + min
-                                            }
-                                            TargetNormalization::None => pred,
-                                        });
-                                    }
-                                    PropertyType::CCS => {
-                                        peptide.ccs = Some(match target_norm {
-                                            TargetNormalization::ZScore(mean, std) => pred * std + mean,
-                                            TargetNormalization::MinMax(min, max) => {
-                                                pred * (max - min) + min
-                                            }
-                                            TargetNormalization::None => pred,
-                                        });
-                                    }
-                                    _ => {}
-                                }
-                                (start_idx + i, peptide)
-                            })
-                            .collect();
-                        Ok(updated)
-                    }
-                    PropertyType::MS2 => Err(anyhow::anyhow!(
-                        "Inference not supported for MS2 models in batch mode"
-                    )),
-                }
+                Ok(updated)
             })
             .collect::<Result<Vec<Vec<(usize, PeptideData)>>>>()?
             .into_iter()
@@ -838,7 +801,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     
         progress.finish();
         Ok(result.into_iter().flatten().collect())
-    }
+    }  
     
 
     /// Extract encoded input and target tensor for a batch of peptides.

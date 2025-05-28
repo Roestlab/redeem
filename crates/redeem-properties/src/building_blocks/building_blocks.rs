@@ -850,12 +850,15 @@ impl Encoder26aaModCnnLstmAttnSum {
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         let (mean, min, max) = get_tensor_stats(&x)?;
-        log::trace!("[Encoder26aaModCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+        // log::trace!("[Encoder26aaModCnnLstmAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
 
-        let start_time = Instant::now();
         let x = self.input_cnn.forward(&x)?;
+        let (b, s, d) = x.dims3()?;
+        println!("x (post input_cnn): batch size: {b}, seq len: {s}, embedding dim: {d}");
 
         let x = self.input_lstm.forward(&x)?;
+        let (b, s, d) = x.dims3()?;
+        println!("x (post input_lstm): batch size: {b}, seq len: {s}, embedding dim: {d}");
 
         let x = self.attn_sum.forward(&x)?;
 
@@ -982,8 +985,8 @@ impl Encoder26aaModCnnTransformerAttnSum {
                 names_input_cnn_bias,
             )?,
             proj_cnn_to_transformer: candle_nn::Linear::new(
-                varstore.get((input_dim * 4, hidden_dim), "proj_cnn_to_transformer.weight")?,
-                Some(varstore.get(hidden_dim, "proj_cnn_to_transformer.bias")?),
+                varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight")?,
+                None,
             ),
             input_transformer: SeqTransformer::from_varstore(
                 varstore.pp(transformer_pp).clone(),
@@ -1020,7 +1023,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
         Ok(Self {
             mod_nn: ModEmbeddingFixFirstK::new(MOD_FEATURE_SIZE, mod_hidden_dim, &varbuilder.pp("mod_nn"))?,
             input_cnn: SeqCNN::new(input_dim, &varbuilder.pp("input_cnn"))?,
-            proj_cnn_to_transformer: candle_nn::linear_no_bias(input_dim*4, hidden_dim, varbuilder.pp("proj_cnn_to_transformer"))?,
+            proj_cnn_to_transformer: candle_nn::linear_no_bias(input_dim * 4, hidden_dim, varbuilder.pp("proj_cnn_to_transformer"))?,
             input_transformer: SeqTransformer::new(
                 &varbuilder.pp("input_transformer"),
                 input_dim * 4,
@@ -1045,17 +1048,19 @@ impl Encoder26aaModCnnTransformerAttnSum {
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         let (mean, min, max) = get_tensor_stats(&x)?;
-        log::trace!("[Encoder26aaModCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
+        // log::trace!("[Encoder26aaModCnnTransformerAttnSum] one-hot output stats - min: {min}, max: {max}, mean: {mean}");
 
         if !mean.is_finite() || !min.is_finite() || !max.is_finite() {
             log::error!("ERROR [Encoder26aaModCnnTransformerAttnSum] aa_one_hot produced non-finite tensor stats: mean={mean}, min={min}, max={max}");
-            candle_core::bail!("ERRORNon-finite values found in peptide encoding output.");
+            candle_core::bail!("ERROR: Non-finite values found in peptide encoding output.");
         }
 
         let x = self.input_cnn.forward(&x)?;
         let x = x.contiguous()?;
+
         let x = self.proj_cnn_to_transformer.forward(&x)?;
         let x = x.contiguous()?;
+
         let x = self.input_transformer.forward(&x)?;
         let x = x.contiguous()?;
         let x = self.attn_sum.forward(&x)?;
@@ -1107,9 +1112,8 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
                 names_input_cnn_bias,
             )?,
             proj_cnn_to_transformer: candle_nn::Linear::new(
-                varstore.get((input_dim * 4, hidden_dim), "proj_cnn_to_transformer.weight")?,
-                Some(varstore.get(hidden_dim, "proj_cnn_to_transformer.bias")?),
-            ),            
+                varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight")?,
+                None),            
             input_transformer: SeqTransformer::from_varstore(
                 varstore.pp(transformer_pp).clone(),
                 input_dim * 4,

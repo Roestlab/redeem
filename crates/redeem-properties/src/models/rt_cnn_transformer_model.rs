@@ -47,6 +47,7 @@ impl ModelInterface for RTCNNTFModel {
         "rt_cnn_tf"   
     }
 
+    /// Create a new RTCNNTFModel to train
     fn new_untrained(device: Device) -> Result<Self> {
         let mut varmap = VarMap::new();
         let varbuilder = VarBuilder::from_varmap(&varmap, DType::F32, &device);
@@ -82,7 +83,7 @@ impl ModelInterface for RTCNNTFModel {
         })
     }
 
-    /// Create a new RTCNNTFModel from the given model and constants files.
+    /// Create a new RTCNNTFModel from the given pretrained model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
         constants_path: Option<P>,
@@ -93,6 +94,7 @@ impl ModelInterface for RTCNNTFModel {
         device: Device,
     ) -> Result<Self> {
         let tensor_data = load_tensors_from_model(model_path.as_ref(), &device)?;
+
         let mut varmap = candle_nn::VarMap::new();
         create_var_map(&mut varmap, tensor_data, &device)?;
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
@@ -112,7 +114,7 @@ impl ModelInterface for RTCNNTFModel {
             256,    // ff_dim
             4,      // num_heads
             2,      // num_layers
-            100,    // max_len (set appropriately for your sequence length)
+            100,    // max_len (sequence length)
             0.1,    // dropout_prob
             vec!["rt_encoder.mod_nn.nn.weight"],
             vec![
