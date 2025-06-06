@@ -14,7 +14,7 @@ impl fmt::Display for ExperimentError {
                 write!(f, "Expected dimension {}, but got {}", expected, actual)
             }
             ExperimentError::SingleClass(is_target) => {
-                if is_target {
+                if *is_target {
                     write!(f, "Only target class present in the dataset")
                 } else {
                     write!(f, "Only decoy class present in the dataset")
