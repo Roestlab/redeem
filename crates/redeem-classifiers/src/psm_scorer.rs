@@ -323,7 +323,7 @@ impl SemiSupervisedLearner {
     /// The predictions for the input features
     pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> anyhow::Result<(Array1<f32>, Array1<u32>)> {
 
-        let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
+        let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone())?;
 
         experiment.log_input_data_summary();
 
@@ -378,7 +378,7 @@ impl SemiSupervisedLearner {
 
         // Final prediction on the entire dataset
         log::info!("Final prediction on the entire dataset");
-        let mut experiment = Experiment::new(x, y, psm_metadata);
+        let mut experiment = Experiment::new(x, y, psm_metadata)?;
 
         // self.model
         //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
