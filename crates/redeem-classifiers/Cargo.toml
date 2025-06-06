@@ -55,3 +55,7 @@ optional = true
 [lib]
 name = "redeem_classifiers"
 path = "src/lib.rs"
+
+
+[dev-dependencies]
+approx = "0.5"

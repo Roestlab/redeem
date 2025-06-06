@@ -6,6 +6,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, SeedableRng};
 
+use crate::error::TdcError;
 use crate::stats::tdc;
 
 #[derive(Debug, Clone)]
@@ -70,7 +71,15 @@ impl Experiment {
     /// the specified FDR threshold.
     pub fn update_labels(&self, scores: &Array1<f32>, eval_fdr: f32, desc: bool) -> Array1<i32> {
         let targets = &self.y.mapv(|v| v == 1);
-        let qvals = tdc(scores, targets, desc);
+        let qvals = tdc(scores, targets, desc).unwrap_or_else(|e| {
+            panic!(
+                "Fatal error in update_labels: {}. \
+                 Scores likely contained {} NaN values when computing qvalues with target-decoy competition. \
+                 This suggests a problem in the scoring function.",
+                e,
+                if let TdcError::NaNFound(n) = e { n } else { 0 }
+            );
+        });
         
         let unlabeled = (&qvals.mapv(|v| v > eval_fdr)) & targets;
         

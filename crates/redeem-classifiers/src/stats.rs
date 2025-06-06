@@ -1,6 +1,8 @@
 use ndarray::{s, Array1, Axis};
 // use ndarray_stats::QuantileExt;
 
+use crate::error::TdcError;
+
 /// Estimate q-values using target-decoy competition.
 ///
 /// This function implements the simple target-decoy competition method to estimate q-values.
@@ -20,13 +22,33 @@ use ndarray::{s, Array1, Axis};
 /// # Returns
 ///
 /// A 1D array with the estimated q-value for each entry. The array is the same length as the `scores` and `target` arrays.
-pub fn tdc(scores: &Array1<f32>, target: &Array1<bool>, desc: bool) -> Array1<f32> {
+pub fn tdc(scores: &Array1<f32>, target: &Array1<bool>, desc: bool) -> Result<Array1<f32>, TdcError> {
+    // Validate inputs
+    if scores.len() != target.len() {
+        return Err(TdcError::LengthMismatch);
+    }
+
+    // Check for NaN values and log information
+    let nan_count = scores.iter().filter(|x| x.is_nan()).count();
+    if nan_count > 0 {
+        // Log first 10 scores for debugging
+        log::error!("First 10 scores: {:?}", scores.iter().take(10).collect::<Vec<_>>());
+        log::error!("Found {} NaN values in scores array (total scores: {})", nan_count, scores.len());
+        return Err(TdcError::NaNFound(nan_count));
+    }
+
     // Sort scores and target
     let mut sorted_indices = (0..scores.len()).collect::<Vec<usize>>();
     if desc {
-        sorted_indices.sort_unstable_by(|&a, &b| scores[b].partial_cmp(&scores[a]).unwrap());
+        sorted_indices.sort_unstable_by(|&a, &b| {
+            scores[b].partial_cmp(&scores[a])
+                .expect("NaN check should have caught this - unexpected comparison failure")
+        });
     } else {
-        sorted_indices.sort_unstable_by(|&a, &b| scores[a].partial_cmp(&scores[b]).unwrap());
+        sorted_indices.sort_unstable_by(|&a, &b| {
+            scores[a].partial_cmp(&scores[b])
+                .expect("NaN check should have caught this - unexpected comparison failure")
+        });
     }
 
     let sorted_scores = sorted_indices.iter().map(|&i| scores[i]).collect::<Array1<f32>>();
@@ -81,7 +103,7 @@ pub fn tdc(scores: &Array1<f32>, target: &Array1<bool>, desc: bool) -> Array1<f3
         final_qvals[idx] = qvals[i];
     }
 
-    final_qvals
+    Ok(final_qvals)
 }
 
 // /// Convert a list of FDRs to q-values.
@@ -172,4 +194,103 @@ fn fdr2qvalue(fdr: &Array1<f32>, num_total: &Array1<usize>, met: &Vec<f32>, indi
     }
 
     qvals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::array;
+    use approx::assert_abs_diff_eq; // For floating-point comparisons
+
+    #[test]
+    fn test_tdc_basic_working_case_descending() {
+        // Test case where higher scores are better (desc = true)
+        let scores = array![3.2, 1.5, 4.0, 2.1, 5.5];
+        let target = array![true, false, true, false, true];
+        
+        let result = tdc(&scores, &target, true).unwrap();
+        
+        // Check basic properties
+        assert_eq!(result.len(), 5);
+        // Q-values should be monotonically increasing
+        for i in 0..result.len()-1 {
+            assert!(result[i] <= result[i+1], "Q-values should be monotonically increasing");
+        }
+        // First entry (highest score) should have lowest q-value
+        assert!(result[4] < result[0]); // 5.5 is highest score at index 4
+    }
+
+    #[test]
+    fn test_tdc_basic_working_case_ascending() {
+        // Test case where lower scores are better (desc = false)
+        let scores = array![3.2, 1.5, 4.0, 2.1, 5.5];
+        let target = array![true, false, true, false, true];
+        
+        let result = tdc(&scores, &target, false).unwrap();
+        
+        assert_eq!(result.len(), 5);
+        // Q-values should be monotonically increasing
+        for i in 0..result.len()-1 {
+            assert!(result[i] <= result[i+1], "Q-values should be monotonically increasing");
+        }
+        // First entry (lowest score) should have lowest q-value
+        assert!(result[1] < result[4]); // 1.5 is lowest score at index 1
+    }
+
+    #[test]
+    fn test_tdc_with_nan_values() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let scores = array![3.2, f32::NAN, 4.0, 2.1, 5.5];
+        let target = array![true, false, true, false, true];
+        
+        let result = tdc(&scores, &target, true);
+        println!("Error result: {:?}", result);  
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TdcError::NaNFound(count) => {
+                println!("Found {} NaN values", count);  
+                assert_eq!(count, 1);
+            },
+            _ => panic!("Expected NaNFound error"),
+        }
+    }
+
+    #[test]
+    fn test_tdc_length_mismatch() {
+        // Test case with mismatched array lengths
+        let scores = array![3.2, 1.5, 4.0];
+        let target = array![true, false];
+        
+        let result = tdc(&scores, &target, true);
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TdcError::LengthMismatch => (),
+            _ => panic!("Expected LengthMismatch error"),
+        }
+    }
+
+    // #[test]
+    // fn test_tdc_edge_cases() {
+    //     // Test edge cases - empty arrays
+    //     let scores = array![];
+    //     let target = array![];
+        
+    //     let result = tdc(&scores, &target, true).unwrap();
+    //     assert_eq!(result.len(), 0);
+
+    //     // All targets
+    //     let scores = array![1.0, 2.0, 3.0];
+    //     let target = array![true, true, true];
+    //     let result = tdc(&scores, &target, true).unwrap();
+    //     assert_abs_diff_eq!(result, array![0.0, 0.0, 0.0], epsilon = 1e-6);
+
+    //     // All decoys
+    //     let scores = array![1.0, 2.0, 3.0];
+    //     let target = array![false, false, false];
+    //     let result = tdc(&scores, &target, true).unwrap();
+    //     // All q-values should be infinity (or very large)
+    //     assert!(result.iter().all(|&x| x > 1e6));
+    // }
 }
