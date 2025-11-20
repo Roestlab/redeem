@@ -116,7 +116,18 @@ fn main() -> Result<()> {
         loss_type: "LogLikelyhood".to_string(),
     };
 
-    let mut learner = SemiSupervisedLearner::new(params, 0.001, 0.01, 3, Some((0.15, 1.0)));
+    let scale = std::env::args().any(|a| a == "--scale");
+    let normalize_scores = std::env::args().any(|a| a == "--normalize-scores");
+
+    let mut learner = SemiSupervisedLearner::new(
+        params,
+        0.001,
+        0.01,
+        3,
+        Some((0.15, 1.0)),
+        scale,
+        normalize_scores,
+    );
     let (predictions, _ranks) = learner.fit(x, y.clone(), metadata)?;
 
     println!("Labels: {:?}", y);

@@ -5,6 +5,7 @@ use rand::thread_rng;
 
 use crate::data_handling::{Experiment, PsmMetadata};
 use crate::math::{Array1, Array2};
+use crate::preprocessing;
 
 use crate::models::gbdt::GBDTClassifier;
 #[cfg(feature = "svm")]
@@ -30,6 +31,12 @@ pub struct SemiSupervisedLearner {
     train_fdr: f32,
     xeval_num_iter: usize,
     class_pct: Option<(f64, f64)>,
+    /// If true, fit a standard scaler on the input features and use the
+    /// scaled features for training and evaluation.
+    scale_features: bool,
+    /// If true, normalize final prediction scores to zero-mean/unit-variance
+    /// before producing the final output.
+    normalize_scores: bool,
 }
 
 impl SemiSupervisedLearner {
@@ -51,6 +58,8 @@ impl SemiSupervisedLearner {
         train_fdr: f32,
         xeval_num_iter: usize,
         class_pct: Option<(f64, f64)>,
+        scale_features: bool,
+        normalize_scores: bool,
     ) -> Self {
         let model: Box<dyn SemiSupervisedModel> = match model_type {
             ModelType::GBDT {
@@ -119,6 +128,8 @@ impl SemiSupervisedLearner {
             train_fdr,
             xeval_num_iter,
             class_pct,
+            scale_features,
+            normalize_scores,
         }
     }
 
@@ -348,6 +359,16 @@ impl SemiSupervisedLearner {
         y: Array1<i32>,
         psm_metadata: PsmMetadata,
     ) -> anyhow::Result<(Array1<f32>, Array1<u32>)> {
+        // Optionally scale features before building the Experiment. We fit the
+        // scaler on the supplied feature matrix and transform the full matrix
+        // so training/evaluation use standardized features.
+        let x = if self.scale_features {
+            log::info!("Fitting scaler and transforming input features");
+            preprocessing::fit_transform(&x)
+        } else {
+            x
+        };
+
         let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
 
         experiment.log_input_data_summary();
@@ -424,7 +445,13 @@ impl SemiSupervisedLearner {
 
         // self.model
         //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
-        let final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
+        let mut final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
+
+        if self.normalize_scores {
+            log::info!("Normalizing final prediction scores (zero-mean, unit-variance)");
+            preprocessing::normalize_scores(final_predictions.as_mut_slice());
+        }
+
         experiment.update_rank_feature(&final_predictions, &experiment.psm_metadata.clone());
         let updated_ranks = experiment.get_rank_column()?;
 
@@ -517,7 +544,7 @@ mod tests {
             early_stopping_rounds: 10,
             verbose_eval: false,
         };
-        let mut learner = SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)));
+    let mut learner = SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)), false, false);
         let predictions = learner.fit(x, y.clone());
 
         println!("Labels: {:?}", y);
@@ -546,7 +573,7 @@ mod tests {
             polynomial_kernel_constant: 1.0,
             polynomial_kernel_degree: 3.0,
         };
-        let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)));
+    let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)), false, false);
         let predictions = learner.fit(x, y.clone());
 
         println!("Labels: {:?}", y);

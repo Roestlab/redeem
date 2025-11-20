@@ -12,6 +12,7 @@ use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::preprocessing;
 use redeem_classifiers::report::{
     plots::{plot_pp, plot_score_histogram},
     report::{Report, ReportSection},
@@ -100,7 +101,13 @@ fn save_predictions_to_csv(
 }
 
 #[cfg(feature = "xgboost")]
-fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
+fn run_psm_scorer(
+    x: &Array2<f32>,
+    y: &Array1<i32>,
+    metadata: &PsmMetadata,
+    scale_features: bool,
+    normalize_scores: bool,
+) -> Result<Array1<f32>> {
     // Create and train your SemiSupervisedLearner
     let xgb_params = ModelType::XGBoost {
         max_depth: 6,
@@ -108,7 +115,15 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
         early_stopping_rounds: 10,
         verbose_eval: false,
     };
-    let mut learner = SemiSupervisedLearner::new(xgb_params, 0.01, 1.0, 5, Some((1.0, 1.0)));
+    let mut learner = SemiSupervisedLearner::new(
+        xgb_params,
+        0.01,
+        1.0,
+        5,
+        Some((1.0, 1.0)),
+        scale_features,
+        normalize_scores,
+    );
     // `fit` expects owned values and returns Result<(predictions, ranks)>
     let (predictions, _ranks) = learner
         .fit(x.clone(), y.clone(), metadata.clone())?;
@@ -130,7 +145,13 @@ fn main() -> Result<()> {
     println!("Loaded features shape: {:?}", x.shape());
     println!("Loaded labels shape: {:?}", y.shape());
 
-    let predictions = run_psm_scorer(&x, &y, &metadata).context("Failed to run PSM scorer")?;
+    // Detect optional flags and pass them to the learner so preprocessing
+    // happens consistently inside the SemiSupervisedLearner.
+    let scale = std::env::args().any(|a| a == "--scale");
+    let normalize_scores = std::env::args().any(|a| a == "--normalize-scores");
+
+    let mut predictions = run_psm_scorer(&x, &y, &metadata, scale, normalize_scores)
+        .context("Failed to run PSM scorer")?;
 
     println!("Labels: {:?}", y);
 

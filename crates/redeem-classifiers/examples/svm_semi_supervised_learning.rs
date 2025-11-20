@@ -14,6 +14,7 @@ use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::preprocessing;
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -98,7 +99,13 @@ pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMet
 // }
 
 #[cfg(feature = "svm")]
-fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
+fn run_psm_scorer(
+    x: &Array2<f32>,
+    y: &Array1<i32>,
+    metadata: &PsmMetadata,
+    scale_features: bool,
+    normalize_scores: bool,
+) -> Result<Array1<f32>> {
     let params = ModelType::SVM {
         eps: 0.1,
         c: (1.0, 1.0),
@@ -107,7 +114,15 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
         polynomial_kernel_constant: 1.0,
         polynomial_kernel_degree: 3.0,
     };
-    let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 500, Some((0.15, 1.0)));
+    let mut learner = SemiSupervisedLearner::new(
+        params,
+        0.001,
+        1.0,
+        500,
+        Some((0.15, 1.0)),
+        scale_features,
+        normalize_scores,
+    );
     let (predictions, _ranks) = learner.fit(x.clone(), y.clone(), metadata.clone())?;
     Ok(predictions)
 }
@@ -139,8 +154,14 @@ fn main() -> Result<()> {
     println!("Loaded features shape: {:?}", x.shape());
     println!("Loaded labels shape: {:?}", y.shape());
 
+    // Detect optional flags and pass them into the SemiSupervisedLearner so
+    // preprocessing is applied consistently inside the learner.
+    let scale = std::env::args().any(|a| a == "--scale");
+    let normalize_scores = std::env::args().any(|a| a == "--normalize-scores");
+
     // Create and train your SemiSupervisedLearner
-    let predictions = run_psm_scorer(&x, &y, &metadata).context("Failed to run PSM scorer")?;
+    let mut predictions = run_psm_scorer(&x, &y, &metadata, scale, normalize_scores)
+        .context("Failed to run PSM scorer")?;
 
     println!("Labels: {:?}", y);
 
