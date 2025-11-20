@@ -5,7 +5,7 @@
 //! plain slices for scores so it can be reused by different model
 //! implementations.
 
-use crate::math::{Array2, ShapeError};
+use crate::math::Array2;
 
 /// Simple standard scaler (per-column mean/std).
 #[derive(Clone, Debug)]

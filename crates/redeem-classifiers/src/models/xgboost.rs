@@ -329,7 +329,7 @@ mod tests {
         ]);
 
         // Convert y to [0, 1]
-        let y = y.mapv(|x| if x == 1 { 0 } else { 1 });
+    let y = y.mapv(|x| if *x == 1 { 0 } else { 1 });
 
         println!("y.to_vec(): {:?}", y.to_vec());
 
