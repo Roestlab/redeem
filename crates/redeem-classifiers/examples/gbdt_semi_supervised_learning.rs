@@ -130,10 +130,16 @@ fn main() -> Result<()> {
     );
     let (predictions, _ranks) = learner.fit(x, y.clone(), metadata)?;
 
-    println!("Labels: {:?}", y);
+    // Print concise samples (avoid dumping huge vectors)
+    // Convert labels to Vec and print a short sample
+    let y_vec_full = y.to_vec();
+    let y_sample = y_vec_full.len().min(10);
+    println!("Labels: len={} first {} = {:?}", y_vec_full.len(), y_sample, &y_vec_full[..y_sample]);
 
-    // Evaluate the predictions
-    println!("Predictions: {:?}", predictions);
+    // Evaluate the predictions (print concise sample)
+    let preds_vec: Vec<f64> = predictions.iter().cloned().collect();
+    let p_sample = preds_vec.len().min(10);
+    println!("Predictions: len={} first {} = {:?}", preds_vec.len(), p_sample, &preds_vec[..p_sample]);
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
 
     // Create a new report

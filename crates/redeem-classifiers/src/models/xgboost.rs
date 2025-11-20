@@ -1,15 +1,12 @@
-use std::collections::HashMap;
-
-use rayon::prelude::*;
-use xgboost::{
+use log::debug;
+use xgb::{
     parameters::{
-        learning::{EvaluationMetric, LearningTaskParametersBuilder, Metrics, Objective},
+        learning::{LearningTaskParametersBuilder, Objective},
         tree::{TreeBoosterParametersBuilder, TreeMethod},
-        BoosterParametersBuilder, BoosterType, TrainingParametersBuilder,
+        BoosterParametersBuilder, BoosterType,
     },
     Booster, DMatrix,
 };
-
 
 use crate::math::Array2;
 use crate::models::utils::{ModelParams, ModelType};
@@ -99,37 +96,40 @@ impl SemiSupervisedModel for XGBoostClassifier {
         );
 
         // Convert feature matrix into DMatrix
-        let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+    // Log matrix shape info to help diagnose potential shape mismatches
+    debug!("Creating DMatrix from dense data: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+    // `from_dense` expects the number of rows as the second argument.
+    let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>())
             .unwrap();
 
         // println!("TRAIN dmat: {:?}", dmat);
 
         let mut eval_matrix = None;
-        let dmat_eval = if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
+        if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
+            debug!("Creating eval DMatrix: rows={}, cols={}, len={}", x_e.nrows(), x_e.ncols(), x_e.as_slice().len());
             let mut matrix = DMatrix::from_dense(x_e.as_slice(), x_e.nrows()).unwrap();
             matrix
                 .set_labels(&y_e.iter().map(|&l| l as f32).collect::<Vec<f32>>())
                 .unwrap();
             eval_matrix = Some(matrix);
-            Some(vec![
-                (&dmat, "train"),
-                (eval_matrix.as_ref().unwrap(), "eval"),
-            ])
-        } else {
-            None
-        };
+        }
 
         if let ModelType::XGBoost {
             max_depth,
             num_boost_round,
-            early_stopping_rounds,
+            early_stopping_rounds: _early_stopping_rounds,
             verbose_eval,
         } = &self.params.model_type
         {
             // Configure learning objective
             let learning_params = LearningTaskParametersBuilder::default()
-                .objective(Objective::BinaryLogisticRaw)
+                // Use BinaryLogistic (probabilities) instead of BinaryLogisticRaw
+                // Some environments / versions of the upstream crate may behave
+                // differently for raw logits; switching to the standard
+                // binary:logistic objective can avoid returning the base_score
+                // for all predictions in some runtime configurations.
+                .objective(Objective::BinaryLogistic)
                 // .eval_metrics(Metrics::Custom(vec![EvaluationMetric::LogLoss, EvaluationMetric::MAE]))
                 // .num_feature(x.ncols())
                 .build()
@@ -151,33 +151,156 @@ impl SemiSupervisedModel for XGBoostClassifier {
                 .build()
                 .unwrap();
 
-            // Create Training Parameters with evaluation sets if needed
+            // Create Training Parameters with evaluation sets if needed.
+            // NOTE: early stopping and custom evaluation hooks were part of
+            // the forked xgboost crate used previously. The upstream `xgb`
+            // crate may offer different APIs for early stopping. To keep
+            // compatibility with the crates.io `xgb` crate we comment out
+            // those evaluation-specific calls here. We intentionally avoid
+            // calling the crate's convenience `train` API because some
+            // published versions omit the per-iteration `update` call. We
+            // will instead construct the Booster directly and perform the
+            // update loop below.
+
+            // The code below shows the original approach using the
+            // TrainingParametersBuilder and `Booster::train`. It's kept
+            // commented so it is easy to re-enable once the upstream
+            // `xgb` crate includes the fix for per-iteration updates.
+            /*
             let training_params = TrainingParametersBuilder::default()
                 .dtrain(&dmat)
                 .boost_rounds(*num_boost_round)
-                .early_stopping_rounds(Some(*early_stopping_rounds))
+                // .early_stopping_rounds(Some(*early_stopping_rounds))
                 .booster_params(booster_params)
-                .evaluation_sets(dmat_eval.as_deref())
-                .evaluation_score_direction(Some("high"))
-                .custom_evaluation_fn(Some(eval_auc))
+                // .evaluation_sets(dmat_eval.as_deref())
+                // .evaluation_score_direction(Some("high"))
+                // .custom_evaluation_fn(Some(eval_auc))
                 .build()
                 .unwrap();
 
-            // Train the model and store the booster
-            self.booster = Some(Booster::train(&training_params).unwrap());
+            // self.booster = Some(Booster::train(&training_params).unwrap());
+            */
+
+            // The upstream `xgb` crate's `Booster::train` has been observed to
+            // omit the per-iteration `update` call in some published
+            // releases. That results in a Booster that only contains the
+            // `base_score` and no trained trees (predictions = base_score).
+            // To work around this, construct the Booster and perform the
+            // update loop manually so training definitely occurs.
+            let mut cached_dmats: Vec<&DMatrix> = vec![&dmat];
+            if let Some(ref m) = eval_matrix {
+                cached_dmats.push(m);
+            }
+
+            // Create booster with cached dmats
+            let mut bst = Booster::new_with_cached_dmats(&booster_params, &cached_dmats)
+                .expect("failed to create Booster");
+
+            // Perform explicit training updates for num_boost_round iterations
+            for i in 0..*num_boost_round as i32 {
+                bst.update(&dmat, i).expect("Booster.update failed");
+
+                // Optionally evaluate on eval sets and print progress when verbose
+                if *verbose_eval {
+                    if let Some(ref evals) = eval_matrix {
+                        // perform a simple evaluation by predicting on the eval dmatrix
+                        if let Ok(preds_eval) = bst.predict(evals) {
+                            // compute AUC using the helper defined above
+                            let auc = eval_auc(&preds_eval, evals);
+                            debug!("[{}]\t eval_auc:{}", i, auc);
+                        }
+                    }
+                }
+            }
+
+            // store booster and print a small model dump to verify trees exist
+            // (if the model only contains base_score, the dump will be tiny)
+            let bst_storage = bst;
+            if let Ok(buf) = bst_storage.save_buffer(false) {
+                debug!("model dump size after training = {} bytes", buf.len());
+                // print first 200 bytes as UTF-8 lossily for quick inspection
+                if buf.len() > 0 {
+                    let snippet = String::from_utf8_lossy(&buf[..buf.len().min(200)]);
+                    debug!("model dump snippet: {}", snippet);
+                }
+            } else {
+                debug!("failed to save model buffer after training");
+            }
+            self.booster = Some(bst_storage);
         } else {
             eprintln!("Error: Expected ModelType::XGBoost but got another type.");
         }
     }
 
     fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
-        let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+    debug!("Creating final DMatrix for prediction: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+    let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         // println!("PREDICT: dmat: {:?}", dmat);
         self.booster.as_ref().unwrap().predict(&dmat).unwrap()
     }
 
     fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
-        self.predict(x)
+        // Ensure booster has a record of the number of features. Some
+        // XGBoost builds require `num_feature` to be set on the booster
+        // before predicting. Setting it here avoids a runtime failure with
+        // the upstream `xgb` crate when the internal learner hasn't been
+        // fully configured.
+        if let Some(bst) = self.booster.as_mut() {
+            let _ = bst.set_param("num_feature", &x.ncols().to_string());
+        }
+
+        // Create DMatrix and predict
+        debug!("Creating final DMatrix for prediction: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+        let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+    // Use predict_matrix with an explicit config to ensure the full
+    // boosted ensemble is used for prediction. Some builds interpret
+    // the older `XGBoosterPredict` ntree_limit=0 as "use zero trees"
+    // which returns the base_score; using predict_matrix with a large
+    // iteration_end avoids that ambiguity.
+        // Determine the number of trees present in the trained model by
+        // saving the model to a JSON buffer and parsing the `num_trees`
+        // field. Then use that value as iteration_end so the full
+        // ensemble is used for prediction.
+        let bst_ref = self.booster.as_ref().unwrap();
+        let buf = bst_ref.save_buffer(false).unwrap_or_else(|_| vec![]);
+        let mut iteration_end = 0i64;
+        if !buf.is_empty() {
+            let s = String::from_utf8_lossy(&buf);
+            if let Some(idx) = s.find("\"num_trees\":\"") {
+                let start = idx + "\"num_trees\":\"".len();
+                if let Some(rest) = s.get(start..) {
+                    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if let Ok(n) = digits.parse::<i64>() {
+                        iteration_end = n;
+                    }
+                }
+            }
+        }
+
+        // fallback: if parsing failed, use 0 (old behavior) — but prefer
+        // the parsed tree count when available.
+        let config = format!(
+            "{{\"type\":0,\"training\":false,\"iteration_begin\":0,\"iteration_end\":{},\"strict_shape\":false}}\0",
+            iteration_end
+        );
+        // Also inspect raw margin predictions to see if the model is
+        // producing non-zero logits (base_score -> 0 margin -> prob 0.5)
+        if let Ok(margins) = bst_ref.predict_margin(&dmat) {
+            debug!("margin sample (first up to 10): {:?}", &margins[..margins.len().min(10)]);
+        } else {
+            debug!("failed to get margin predictions");
+        }
+    debug!("predict config iteration_end = {}", iteration_end);
+    let (preds, _shape) = bst_ref.predict_matrix(&dmat, &config).unwrap();
+        // Log a small sample of predictions at debug level
+        if !preds.is_empty() {
+            let sample_end = preds.len().min(10);
+            debug!("[xgb.predict_proba] preds.len() = {}, first {} preds = {:?}", preds.len(), sample_end, &preds[..sample_end]);
+        } else {
+            debug!("[xgb.predict_proba] empty prediction vector returned");
+        }
+
+        preds
     }
 }
 
@@ -244,7 +367,8 @@ mod tests {
         // println!("Attribute names: {:?}", attr_names);
 
         // Predict Contributions
-        let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+    debug!("Creating DMatrix for contributions: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+    let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>())
             .unwrap();
 

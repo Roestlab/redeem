@@ -29,15 +29,15 @@ light-svm = { version = "0.1.0", optional = true }
 # Optional dependencies
 [features]
 default = []  # No default features
-xgboost = ["dep:xgboost"]
+# feature name kept as `xgboost` for cfg(...) compatibility; it enables the
+# crates.io `xgb` dependency.
+xgboost = ["dep:xgb"]
 svm = ["dep:light-svm"]
 simd = []
 
-[dependencies.xgboost]
-#version = "0.1.4"
-git = "https://github.com/singjc/rust-xgboost.git"
-# path = "/home/singjc/Documents/github/rust-xgboost"
-optional = true  
+[dependencies.xgb]
+version = "3.0.5"
+optional = true
 
 [lib]
 name = "redeem_classifiers"

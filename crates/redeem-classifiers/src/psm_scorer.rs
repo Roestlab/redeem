@@ -447,9 +447,57 @@ impl SemiSupervisedLearner {
         //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
         let mut final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
 
+        // Log basic statistics of final predictions before normalization so
+        // we can see whether they are already constant (which would lead to
+        // zeroed normalized scores).
+        {
+            let s = final_predictions.as_slice();
+            if !s.is_empty() {
+                let len = s.len() as f32;
+                let mean = s.iter().copied().sum::<f32>() / len;
+                let mut var = 0f32;
+                for &v in s.iter() {
+                    let d = v - mean;
+                    var += d * d;
+                }
+                let std = (var / len).sqrt();
+                log::debug!(
+                    "Final predictions before normalization: len={}, mean={:.6}, std={:.6}, min={}, max={}",
+                    s.len(),
+                    mean,
+                    std,
+                    s.iter().cloned().fold(f32::INFINITY, f32::min),
+                    s.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+                );
+            } else {
+                log::debug!("Final predictions before normalization: empty");
+            }
+        }
+
         if self.normalize_scores {
             log::info!("Normalizing final prediction scores (zero-mean, unit-variance)");
             preprocessing::normalize_scores(final_predictions.as_mut_slice());
+
+            // Log stats after normalization
+            let s = final_predictions.as_slice();
+            if !s.is_empty() {
+                let len = s.len() as f32;
+                let mean = s.iter().copied().sum::<f32>() / len;
+                let mut var = 0f32;
+                for &v in s.iter() {
+                    let d = v - mean;
+                    var += d * d;
+                }
+                let std = (var / len).sqrt();
+                log::debug!(
+                    "Final predictions after normalization: len={}, mean={:.6}, std={:.6}, min={}, max={}",
+                    s.len(),
+                    mean,
+                    std,
+                    s.iter().cloned().fold(f32::INFINITY, f32::min),
+                    s.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+                );
+            }
         }
 
         experiment.update_rank_feature(&final_predictions, &experiment.psm_metadata.clone());

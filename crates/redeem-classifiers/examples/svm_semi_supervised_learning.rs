@@ -163,10 +163,17 @@ fn main() -> Result<()> {
     let mut predictions = run_psm_scorer(&x, &y, &metadata, scale, normalize_scores)
         .context("Failed to run PSM scorer")?;
 
-    println!("Labels: {:?}", y);
+    // Print a concise sample of labels and predictions (avoid huge dumps)
+    // Convert labels to Vec and print a short sample
+    let y_vec_full = y.to_vec();
+    let y_sample = y_vec_full.len().min(10);
+    println!("Labels: len={} first {} = {:?}", y_vec_full.len(), y_sample, &y_vec_full[..y_sample]);
 
-    // Evaluate the predictions
-    println!("Predictions: {:?}", predictions);
+    // Evaluate the predictions (print concise sample)
+    // Convert predictions to Vec and print a short sample
+    let preds_vec_full = predictions.to_vec();
+    let p_sample = preds_vec_full.len().min(10);
+    println!("Predictions: len={} first {} = {:?}", preds_vec_full.len(), p_sample, &preds_vec_full[..p_sample]);
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
 
     // Create a report similar to the GBDT example
