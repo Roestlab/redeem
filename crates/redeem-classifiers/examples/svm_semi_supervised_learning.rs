@@ -1,8 +1,7 @@
-use anyhow::{Context, Ok, Result};
+use anyhow::{Context, Result};
 use csv::ReaderBuilder;
-use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 
 use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::math::{Array1, Array2};
@@ -102,7 +101,7 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
         polynomial_kernel_degree: 3.0,
     };
     let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 500, Some((0.15, 1.0)));
-    let predictions = learner.fit(x, y.clone(), metadata);
+    let (predictions, _ranks) = learner.fit(x.clone(), y.clone(), metadata.clone())?;
     Ok(predictions)
 }
 
@@ -113,11 +112,22 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
 
 fn main() -> Result<()> {
     env_logger::init();
-    // Load the test data from the TSV files
-    let (x, y, metadata) = load_test_psm_csv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_with_metadata_for_testing_redeem.csv")?;
+    // Accept CSV path (and optional number of columns) from CLI args so example is easier to run.
+    // Usage: cargo run --example svm_semi_supervised_learning --features svm -- <csv-path> [num_columns]
+    let default_path = "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_with_metadata_for_testing_redeem.csv".to_string();
+    let csv_path = std::env::args().nth(1).unwrap_or(default_path);
+    let num_cols: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(10);
 
-    // Select first 10 columns of data
-    let x = x.select_columns(0..10);
+    println!("Using CSV path: {}", csv_path);
+
+    // Load the test data from the CSV file
+    let (x, y, metadata) = load_test_psm_csv(&csv_path)?;
+
+    // Select first `num_cols` columns of data
+    let x = x.select_columns(0..num_cols);
 
     println!("Loaded features shape: {:?}", x.shape());
     println!("Loaded labels shape: {:?}", y.shape());
