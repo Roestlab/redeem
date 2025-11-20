@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use rayon::prelude::*;
-use sage_core::ml::matrix::Matrix;
 use xgboost::{
     parameters::{
         learning::{EvaluationMetric, LearningTaskParametersBuilder, Metrics, Objective},
@@ -11,7 +10,6 @@ use xgboost::{
     Booster, DMatrix,
 };
 
-use sage_core::scoring::Feature;
 
 use crate::math::Array2;
 use crate::models::utils::{ModelParams, ModelType};
@@ -42,14 +40,14 @@ fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
     let mut prev_neg = 0.0;
 
     for (pred, label) in combined.iter() {
-        if pred != prev_pred {
+        if *pred != prev_pred {
             auc += (cum_pos - prev_pos) * (cum_neg + prev_neg) / 2.0;
-            prev_pred = pred;
+            prev_pred = *pred;
             prev_pos = cum_pos;
             prev_neg = cum_neg;
         }
 
-        if label == 1.0 {
+        if *label == 1.0 {
             cum_pos += 1.0;
         } else {
             cum_neg += 1.0;

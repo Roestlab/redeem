@@ -1,5 +1,12 @@
 use anyhow::{Context, Result};
 use csv::ReaderBuilder;
+use maud::html;
+use anyhow::anyhow;
+
+use redeem_classifiers::report::{
+    plots::{plot_pp, plot_score_histogram},
+    report::{Report, ReportSection},
+};
 use std::fs::File;
 use std::io::BufReader;
 
@@ -140,5 +147,38 @@ fn main() -> Result<()> {
     // Evaluate the predictions
     println!("Predictions: {:?}", predictions);
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
+
+    // Create a report similar to the GBDT example
+    let mut report = Report::new(
+        "Sage Report",
+        "14",
+        Some("/home/singjc/Documents/github/redeem/img/redeem_logo.png"),
+        "SVM Data Analysis Report",
+    );
+
+    let mut intro_section = ReportSection::new("Introduction");
+    intro_section.add_content(html! {
+        "This report contains SVM score distributions and diagnostics."
+    });
+    report.add_section(intro_section);
+
+    // convert the predictions to Vec<f64>
+    let preds_vec = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
+    let y_vec = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+
+    let plot = plot_score_histogram(&preds_vec, &y_vec, "SVM Score", "Score")
+        .map_err(|e| anyhow!(e))?;
+    let pp_plot = plot_pp(&preds_vec, &y_vec, "SVM Score").map_err(|e| anyhow!(e))?;
+
+    let mut plot_section = ReportSection::new("Score Distribution");
+    plot_section.add_content(html! { "This plot shows the distribution of the SVM scores." });
+    plot_section.add_plot(plot);
+    plot_section.add_content(html! { "P-P plot comparing ECDF distributions." });
+    plot_section.add_plot(pp_plot);
+    report.add_section(plot_section);
+
+    // Save report
+    report.save_to_file("report_svm.html")?;
+    println!("Report saved to report_svm.html");
     Ok(())
 }

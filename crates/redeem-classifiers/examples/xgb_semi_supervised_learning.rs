@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use csv::ReaderBuilder;
+use maud::html;
+use anyhow::anyhow;
 
 use std::error::Error;
 use std::fs::File;
@@ -10,6 +12,10 @@ use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::report::{
+    plots::{plot_pp, plot_score_histogram},
+    report::{Report, ReportSection},
+};
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -96,8 +102,6 @@ fn save_predictions_to_csv(
 #[cfg(feature = "xgboost")]
 fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
     // Create and train your SemiSupervisedLearner
-
-    use std::fs::metadata;
     let xgb_params = ModelType::XGBoost {
         max_depth: 6,
         num_boost_round: 100,
@@ -105,7 +109,10 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
         verbose_eval: false,
     };
     let mut learner = SemiSupervisedLearner::new(xgb_params, 0.01, 1.0, 5, Some((1.0, 1.0)));
-    let predictions = learner.fit(x, y.clone(), metadata);
+    // `fit` expects owned values and returns Result<(predictions, ranks)>
+    let (predictions, _ranks) = learner
+        .fit(x.clone(), y.clone(), metadata.clone())?;
+
     Ok(predictions)
 }
 
@@ -129,7 +136,39 @@ fn main() -> Result<()> {
 
     // Evaluate the predictions
     println!("Predictions: {:?}", predictions);
-
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
+
+    // Create a report similar to the GBDT example
+    let mut report = Report::new(
+        "Sage Report",
+        "14",
+        Some("/home/singjc/Documents/github/redeem/img/redeem_logo.png"),
+        "XGBoost Data Analysis Report",
+    );
+
+    let mut intro_section = ReportSection::new("Introduction");
+    intro_section.add_content(html! {
+        "This report contains XGBoost score distributions and diagnostics."
+    });
+    report.add_section(intro_section);
+
+    // convert predictions and labels
+    let preds_vec = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
+    let y_vec = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+
+    let plot = plot_score_histogram(&preds_vec, &y_vec, "XGBoost Score", "Score")
+        .map_err(|e| anyhow!(e))?;
+    let pp_plot = plot_pp(&preds_vec, &y_vec, "XGBoost Score").map_err(|e| anyhow!(e))?;
+
+    let mut plot_section = ReportSection::new("Score Distribution");
+    plot_section.add_content(html! { "This plot shows the distribution of the XGBoost scores." });
+    plot_section.add_plot(plot);
+    plot_section.add_content(html! { "P-P plot comparing ECDF distributions." });
+    plot_section.add_plot(pp_plot);
+    report.add_section(plot_section);
+
+    report.save_to_file("report_xgb.html")?;
+    println!("Report saved to report_xgb.html");
+
     Ok(())
 }
