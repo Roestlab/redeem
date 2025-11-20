@@ -10,7 +10,7 @@ use xgb::{
 
 use crate::math::Array2;
 use crate::models::utils::{ModelConfig, ModelType};
-use crate::psm_scorer::SemiSupervisedModel;
+use crate::models::classifier_trait::ClassifierModel;
 
 fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
     let labels = dtrain.get_labels().unwrap();
@@ -72,8 +72,8 @@ impl XGBoostClassifier {
     }
 }
 
-impl SemiSupervisedModel for XGBoostClassifier {
-    fn fit(
+impl XGBoostClassifier {
+    pub fn fit(
         &mut self,
         x: &Array2<f32>,
         y: &[i32],
@@ -232,14 +232,14 @@ impl SemiSupervisedModel for XGBoostClassifier {
         }
     }
 
-    fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
-    debug!("Creating final DMatrix for prediction: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
-    let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+    pub fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
+        debug!("Creating final DMatrix for prediction: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+        let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         // println!("PREDICT: dmat: {:?}", dmat);
         self.booster.as_ref().unwrap().predict(&dmat).unwrap()
     }
 
-    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
+    pub fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
         // Ensure booster has a record of the number of features. Some
         // XGBoost builds require `num_feature` to be set on the booster
         // before predicting. Setting it here avoids a runtime failure with
@@ -302,6 +302,25 @@ impl SemiSupervisedModel for XGBoostClassifier {
 
         preds
     }
+}
+
+// Implement the newer classifier trait so XGBoost can be used via the
+// `models::factory::build_model` factory and as a boxed `ClassifierModel`.
+impl ClassifierModel for XGBoostClassifier {
+    fn fit(&mut self, x: &crate::math::Array2<f32>, y: &[i32], x_eval: Option<&crate::math::Array2<f32>>, y_eval: Option<&[i32]>) {
+        // delegate to the inherent impl
+        XGBoostClassifier::fit(self, x, y, x_eval, y_eval)
+    }
+
+    fn predict(&self, x: &crate::math::Array2<f32>) -> Vec<f32> {
+        XGBoostClassifier::predict(self, x)
+    }
+
+    fn predict_proba(&mut self, x: &crate::math::Array2<f32>) -> Vec<f32> {
+        XGBoostClassifier::predict_proba(self, x)
+    }
+
+    fn name(&self) -> &str { "xgboost" }
 }
 
 #[cfg(test)]

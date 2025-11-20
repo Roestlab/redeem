@@ -4,7 +4,7 @@ use gbdt::gradient_boost::GBDT;
 
 use crate::math::Array2;
 use crate::models::utils::{ModelConfig, ModelType};
-use crate::psm_scorer::SemiSupervisedModel;
+use crate::models::classifier_trait::ClassifierModel;
 
 /// Gradient Boosting Decision Tree (GBDT) classifier
 pub struct GBDTClassifier {
@@ -21,8 +21,8 @@ impl GBDTClassifier {
     }
 }
 
-impl SemiSupervisedModel for GBDTClassifier {
-    fn fit(
+impl GBDTClassifier {
+    pub fn fit(
         &mut self,
         x: &Array2<f32>,
         y: &[i32],
@@ -72,7 +72,7 @@ impl SemiSupervisedModel for GBDTClassifier {
         }
     }
 
-    fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
+    pub fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
         let mut test_x = DataVec::new();
         for row in 0..x.nrows() {
             let test_row = x.row_slice(row).to_vec();
@@ -82,8 +82,22 @@ impl SemiSupervisedModel for GBDTClassifier {
         predictions
     }
 
-    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
+    pub fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
         self.predict(x)
+    }
+}
+
+impl ClassifierModel for GBDTClassifier {
+    fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>) {
+        GBDTClassifier::fit(self, x, y, x_eval, y_eval)
+    }
+
+    fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
+        GBDTClassifier::predict(self, x)
+    }
+
+    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
+        GBDTClassifier::predict_proba(self, x)
     }
 }
 

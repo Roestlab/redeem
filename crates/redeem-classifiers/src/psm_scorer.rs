@@ -13,21 +13,15 @@ use crate::models::svm::SVMClassifier;
 use crate::models::utils::{ModelConfig, ModelType};
 #[cfg(feature = "xgboost")]
 use crate::models::xgboost::XGBoostClassifier;
+use crate::models::classifier_trait::ClassifierModel;
+use crate::models::factory;
 
-pub trait SemiSupervisedModel {
-    fn fit(
-        &mut self,
-        x: &Array2<f32>,
-        y: &[i32],
-        x_eval: Option<&Array2<f32>>,
-        y_eval: Option<&[i32]>,
-    );
-    fn predict(&self, x: &Array2<f32>) -> Vec<f32>;
-    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32>;
-}
+// Legacy `SemiSupervisedModel` behavior is provided by implementations of
+// `models::classifier_trait::ClassifierModel`. The learner stores a boxed
+// `ClassifierModel` trait object.
 
 pub struct SemiSupervisedLearner {
-    model: Box<dyn SemiSupervisedModel>,
+    model: Box<dyn ClassifierModel>,
     train_fdr: f32,
     xeval_num_iter: usize,
     class_pct: Option<(f64, f64)>,
@@ -61,67 +55,10 @@ impl SemiSupervisedLearner {
         scale_features: bool,
         normalize_scores: bool,
     ) -> Self {
-        let model: Box<dyn SemiSupervisedModel> = match model_type {
-            ModelType::GBDT {
-                max_depth,
-                num_boost_round,
-                debug,
-                training_optimization_level,
-                loss_type,
-            } => {
-                let params = ModelConfig {
-                    learning_rate,
-                    model_type: ModelType::GBDT {
-                        max_depth,
-                        num_boost_round,
-                        debug,
-                        training_optimization_level,
-                        loss_type,
-                    },
-                };
-                Box::new(GBDTClassifier::new(params))
-            }
-            #[cfg(feature = "xgboost")]
-            ModelType::XGBoost {
-                max_depth,
-                num_boost_round,
-                early_stopping_rounds,
-                verbose_eval,
-            } => {
-                let params = ModelConfig {
-                    learning_rate,
-                    model_type: ModelType::XGBoost {
-                        max_depth,
-                        num_boost_round,
-                        early_stopping_rounds,
-                        verbose_eval,
-                    },
-                };
-                Box::new(XGBoostClassifier::new(params))
-            }
-            #[cfg(feature = "svm")]
-            ModelType::SVM {
-                eps,
-                c,
-                kernel,
-                gaussian_kernel_eps,
-                polynomial_kernel_constant,
-                polynomial_kernel_degree,
-            } => {
-                let params = ModelConfig {
-                    learning_rate,
-                    model_type: ModelType::SVM {
-                        eps,
-                        c,
-                        kernel,
-                        gaussian_kernel_eps,
-                        polynomial_kernel_constant,
-                        polynomial_kernel_degree,
-                    },
-                };
-                Box::new(SVMClassifier::new(params))
-            }
-        };
+        // Centralize construction to the models factory which returns a
+        // `Box<dyn ClassifierModel>`.
+        let cfg = ModelConfig { learning_rate, model_type };
+        let model: Box<dyn ClassifierModel> = factory::build_model(cfg);
 
         SemiSupervisedLearner {
             model,

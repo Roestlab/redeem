@@ -1,7 +1,6 @@
 use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
 use redeem_classifiers::models::xgboost::XGBoostClassifier;
-use redeem_classifiers::psm_scorer::SemiSupervisedModel;
 
 fn main() {
     env_logger::init();

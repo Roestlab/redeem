@@ -6,7 +6,7 @@ use light_svm::{
 
 use crate::math::Array2;
 use crate::models::utils::{ModelConfig, ModelType};
-use crate::psm_scorer::SemiSupervisedModel;
+use crate::models::classifier_trait::ClassifierModel;
 
 pub struct SVMClassifier {
     params: ModelConfig,
@@ -63,8 +63,8 @@ impl SVMClassifier {
     }
 }
 
-impl SemiSupervisedModel for SVMClassifier {
-    fn fit(
+impl SVMClassifier {
+    pub fn fit(
         &mut self,
         x: &Array2<f32>,
         y: &[i32],
@@ -90,14 +90,14 @@ impl SemiSupervisedModel for SVMClassifier {
         self.calibrator = Some(calibrator);
     }
 
-    fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
+    pub fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
         self.decision_scores(x)
             .into_iter()
             .map(|score| if score >= 0.0 { 1.0 } else { 0.0 })
             .collect()
     }
 
-    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
+    pub fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
         let scores = self.decision_scores(x);
         if let Some(calibrator) = &self.calibrator {
             calibrator
@@ -111,6 +111,20 @@ impl SemiSupervisedModel for SVMClassifier {
                 .map(|s| 1.0 / (1.0 + (-s).exp()))
                 .collect()
         }
+    }
+}
+
+impl ClassifierModel for SVMClassifier {
+    fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>) {
+        SVMClassifier::fit(self, x, y, x_eval, y_eval)
+    }
+
+    fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
+        SVMClassifier::predict(self, x)
+    }
+
+    fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
+        SVMClassifier::predict_proba(self, x)
     }
 }
 
