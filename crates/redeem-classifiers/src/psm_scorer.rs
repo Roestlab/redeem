@@ -577,6 +577,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "xgboost")]
+    #[ignore]
     fn test_xgb_semi_supervised_learner() {
         // Load the test data from the TSV files
         let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
@@ -592,8 +593,14 @@ mod tests {
             early_stopping_rounds: 10,
             verbose_eval: false,
         };
-    let mut learner = SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)), false, false);
-        let predictions = learner.fit(x, y.clone());
+        let mut learner = SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)), false, false);
+        let metadata = crate::data_handling::PsmMetadata {
+            file_id: vec![0usize; x.nrows()],
+            spec_id: vec!["spec".to_string(); x.nrows()],
+            feature_names: (0..x.ncols()).map(|i| format!("f{}", i)).collect(),
+        };
+
+        let (predictions, _ranks) = learner.fit(x, y.clone(), metadata).unwrap();
 
         println!("Labels: {:?}", y);
 
@@ -604,6 +611,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "svm")]
+    #[ignore]
     fn test_svm_semi_supervised_learner() {
         // Load the test data from the TSV files
         let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
@@ -622,7 +630,13 @@ mod tests {
             polynomial_kernel_degree: 3.0,
         };
     let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)), false, false);
-        let predictions = learner.fit(x, y.clone());
+        let metadata = crate::data_handling::PsmMetadata {
+            file_id: vec![0usize; x.nrows()],
+            spec_id: vec!["spec".to_string(); x.nrows()],
+            feature_names: (0..x.ncols()).map(|i| format!("f{}", i)).collect(),
+        };
+
+        let (predictions, _ranks) = learner.fit(x, y.clone(), metadata).unwrap();
 
         println!("Labels: {:?}", y);
 

@@ -128,8 +128,14 @@ fn run_psm_scorer(
 }
 
 #[cfg(not(feature = "svm"))]
-fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
-    unimplemented!("SVM is not available in this build. Please enable the svm feature.");
+fn run_psm_scorer(
+    _x: &Array2<f32>,
+    _y: &Array1<i32>,
+    _metadata: &PsmMetadata,
+    _scale_features: bool,
+    _normalize_scores: bool,
+) -> Result<Array1<f32>> {
+    Err(anyhow!("SVM is not available in this build. Please enable the svm feature."))
 }
 
 fn main() -> Result<()> {
