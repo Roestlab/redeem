@@ -1,13 +1,13 @@
 use anyhow::{Context, Ok, Result};
 use csv::ReaderBuilder;
-use ndarray::{Array1, Array2};
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Write};
 
 use redeem_classifiers::data_handling::PsmMetadata;
-use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
+use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -91,30 +91,24 @@ pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMet
 //     Ok(())
 // }
 
-#[cfg(feature = "linfa")]
+#[cfg(feature = "svm")]
 fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
-    let params = ModelType::SVM  {
+    let params = ModelType::SVM {
         eps: 0.1,
         c: (1.0, 1.0),
         kernel: "linear".to_string(),
         gaussian_kernel_eps: 0.1,
         polynomial_kernel_constant: 1.0,
-        polynomial_kernel_degree: 3.0
+        polynomial_kernel_degree: 3.0,
     };
-    let mut learner = SemiSupervisedLearner::new(
-        params,
-        0.001,
-        1.0,
-        500,
-        Some((0.15, 1.0))
-    );
+    let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 500, Some((0.15, 1.0)));
     let predictions = learner.fit(x, y.clone(), metadata);
     Ok(predictions)
 }
 
-#[cfg(not(feature = "linfa"))]
+#[cfg(not(feature = "svm"))]
 fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
-    unimplemented!("SVM is not available in this build. Please enable the linfa feature.");
+    unimplemented!("SVM is not available in this build. Please enable the svm feature.");
 }
 
 fn main() -> Result<()> {
@@ -123,7 +117,7 @@ fn main() -> Result<()> {
     let (x, y, metadata) = load_test_psm_csv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_with_metadata_for_testing_redeem.csv")?;
 
     // Select first 10 columns of data
-    let x = x.slice(ndarray::s![.., ..10]).to_owned();
+    let x = x.select_columns(0..10);
 
     println!("Loaded features shape: {:?}", x.shape());
     println!("Loaded labels shape: {:?}", y.shape());

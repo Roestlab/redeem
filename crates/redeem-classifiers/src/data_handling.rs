@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use ndarray::{Array1, Array2, ArrayView2, Axis};
-use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, SeedableRng};
+use rand::thread_rng;
 
+use crate::math::{Array1, Array2};
 use crate::stats::tdc;
 
 #[derive(Debug, Clone)]
@@ -45,7 +43,11 @@ impl Experiment {
 
     pub fn log_input_data_summary(&self) {
         println!("----- Input Data Summary -----");
-        println!("Info: {} Target PSMs and {} Decoy PSMs", self.y.iter().filter(|&&v| v == 1).count(), self.y.iter().filter(|&&v| v == -1).count());
+        println!(
+            "Info: {} Target PSMs and {} Decoy PSMs",
+            self.y.iter().filter(|&&v| v == 1).count(),
+            self.y.iter().filter(|&&v| v == -1).count()
+        );
         println!("Info: {} feature scores (columns)", self.x.ncols());
         println!("-------------------------------");
     }
@@ -69,11 +71,12 @@ impl Experiment {
     /// and 0 removes the PSM from training. Typically, 0 is reserved for targets below
     /// the specified FDR threshold.
     pub fn update_labels(&self, scores: &Array1<f32>, eval_fdr: f32, desc: bool) -> Array1<i32> {
-        let targets = &self.y.mapv(|v| v == 1);
-        let qvals = tdc(scores, targets, desc);
-        
-        let unlabeled = (&qvals.mapv(|v| v > eval_fdr)) & targets;
-        
+        let targets = self.y.mapv(|&v| v == 1);
+        let qvals = tdc(scores, &targets, desc);
+
+        let greater_than_fdr = qvals.mapv(|&v| v > eval_fdr);
+        let unlabeled = (&greater_than_fdr) & (&targets);
+
         let mut new_labels = Array1::ones(qvals.len());
         for (i, &target) in targets.iter().enumerate() {
             if !target {
@@ -82,7 +85,7 @@ impl Experiment {
                 new_labels[i] = 0;
             }
         }
-        
+
         new_labels
     }
 
@@ -122,12 +125,12 @@ impl Experiment {
         for group in spectrum_groups.values_mut() {
             group.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             for (rank, (row_idx, _)) in group.iter().enumerate() {
-                let old_rank = self.x[[*row_idx, rank_feature_idx]] as usize;
+                let old_rank = self.x[(*row_idx, rank_feature_idx)] as usize;
                 let new_rank = rank + 1;
                 if old_rank != new_rank {
                     changed_ranks += 1;
                 }
-                self.x[[*row_idx, rank_feature_idx]] = new_rank as f32;
+                self.x[(*row_idx, rank_feature_idx)] = new_rank as f32;
             }
         }
 
@@ -159,7 +162,6 @@ impl Experiment {
         };
 
         let rank_f32 = self.x.column(rank_idx);
-
         let rank_u32 = rank_f32
             .iter()
             .map(|&val| {
@@ -174,32 +176,33 @@ impl Experiment {
         Ok(rank_u32)
     }
 
-
     pub fn get_top_test_peaks(&self) -> Experiment {
-        let mask = &self.is_train.mapv(|x| !x) & &self.is_top_peak;
+        let not_train = self.is_train.mapv(|x| !x);
+        let mask = (&not_train) & (&self.is_top_peak);
         self.filter(&mask)
     }
-    
 
     pub fn get_decoy_peaks(&self) -> Experiment {
         // Sage represents decoy peaks as -1
-        let mask = &self.y.mapv(|v| v == -1);  
-        self.filter(mask)
+        let mask = self.y.mapv(|&v| v == -1);
+        self.filter(&mask)
     }
 
     pub fn get_target_peaks(&self) -> Experiment {
         // Sage represents target peaks as 1
-        let mask = &self.y.mapv(|v| v != 1);  
-        self.filter(mask)
+        let mask = self.y.mapv(|&v| v != 1);
+        self.filter(&mask)
     }
 
     pub fn get_top_decoy_peaks(&self) -> Experiment {
-        let mask = &self.y.mapv(|v| v == 0) & &self.is_top_peak;
+        let is_zero = self.y.mapv(|&v| v == 0);
+        let mask = (&is_zero) & (&self.is_top_peak);
         self.filter(&mask)
     }
-    
+
     pub fn get_top_target_peaks(&self) -> Experiment {
-        let mask = &self.y.mapv(|v| v != 0) & &self.is_top_peak;
+        let not_zero = self.y.mapv(|&v| v != 0);
+        let mask = (&not_zero) & (&self.is_top_peak);
         self.filter(&mask)
     }
 
@@ -237,12 +240,12 @@ impl Experiment {
         }
 
         Experiment {
-            x: self.x.select(Axis(0), &selected_indices),
-            y: self.y.select(Axis(0), &selected_indices),
-            is_train: self.is_train.select(Axis(0), &selected_indices),
-            is_top_peak: self.is_top_peak.select(Axis(0), &selected_indices),
-            tg_num_id: self.tg_num_id.select(Axis(0), &selected_indices),
-            classifier_score: self.classifier_score.select(Axis(0), &selected_indices),
+            x: self.x.select_rows(&selected_indices),
+            y: self.y.select(&selected_indices),
+            is_train: self.is_train.select(&selected_indices),
+            is_top_peak: self.is_top_peak.select(&selected_indices),
+            tg_num_id: self.tg_num_id.select(&selected_indices),
+            classifier_score: self.classifier_score.select(&selected_indices),
             psm_metadata: PsmMetadata {
                 spec_id: filter_vec(&self.psm_metadata.spec_id, &selected_indices),
                 file_id: filter_vec(&self.psm_metadata.file_id, &selected_indices),
@@ -250,13 +253,12 @@ impl Experiment {
             },
         }
     }
-    
 
     pub fn split_for_xval(&mut self, fraction: f32, is_test: bool) {
         let mut rng = thread_rng();
         let n_samples = self.x.nrows();
         let mut indices: Vec<usize> = (0..n_samples).collect();
-        
+
         if !is_test {
             indices.shuffle(&mut rng);
         } else {
@@ -270,26 +272,25 @@ impl Experiment {
     }
 
     pub fn get_train_psms(&self) -> Experiment {
-        let mask = &self.is_train;  
+        let mask = &self.is_train;
         self.filter(mask)
     }
 
     pub fn get_test_psms(&self) -> Experiment {
-        let mask = &self.is_train.mapv(|x| !x);  
+        let mask = &self.is_train.mapv(|x| !x);
         self.filter(mask)
     }
-    
+
     pub fn remove_psms(&mut self, indices_to_remove: &[usize]) {
         let keep = (0..self.x.nrows())
             .filter(|&i| !indices_to_remove.contains(&i))
             .collect::<Vec<_>>();
 
-        self.x = self.x.select(Axis(0), &keep);
-        self.y = self.y.select(Axis(0), &keep);
-        self.is_train = self.is_train.select(Axis(0), &keep);
-        self.is_top_peak = self.is_top_peak.select(Axis(0), &keep);
-        self.tg_num_id = self.tg_num_id.select(Axis(0), &keep);
-        self.classifier_score = self.classifier_score.select(Axis(0), &keep);
+        self.x = self.x.select_rows(&keep);
+        self.y = self.y.select(&keep);
+        self.is_train = self.is_train.select(&keep);
+        self.is_top_peak = self.is_top_peak.select(&keep);
+        self.tg_num_id = self.tg_num_id.select(&keep);
+        self.classifier_score = self.classifier_score.select(&keep);
     }
 }
-

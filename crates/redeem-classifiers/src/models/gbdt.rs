@@ -1,10 +1,9 @@
-use ndarray::Array2;
 use gbdt::config::Config;
-use gbdt::decision_tree::{Data, DataVec, PredVec};
+use gbdt::decision_tree::{Data, DataVec};
 use gbdt::gradient_boost::GBDT;
 
-
-use crate::models::utils::{ModelType, ModelParams};
+use crate::math::Array2;
+use crate::models::utils::{ModelParams, ModelType};
 use crate::psm_scorer::SemiSupervisedModel;
 
 /// Gradient Boosting Decision Tree (GBDT) classifier
@@ -31,53 +30,52 @@ impl SemiSupervisedModel for GBDTClassifier {
         _y_eval: Option<&[i32]>,
     ) {
         let feature_size = x.ncols();
-        
-        if let ModelType::GBDT {
-            max_depth,
-            num_boost_round,
-            debug,
-            training_optimization_level,
-            loss_type,
-        } = &self.params.model_type {
-            let mut config = Config::new();
-            
-            config.set_feature_size(feature_size);
-            config.set_shrinkage(self.params.learning_rate);
-            config.set_max_depth(*max_depth);
-            config.set_iterations(*num_boost_round as usize);
-            config.set_debug(*debug);
-            config.set_training_optimization_level(*training_optimization_level);
-            config.set_loss(loss_type); 
 
+        match &self.params.model_type {
+            ModelType::GBDT {
+                max_depth,
+                num_boost_round,
+                debug,
+                training_optimization_level,
+                loss_type,
+            } => {
+                let mut config = Config::new();
 
-            let mut gbdt = GBDT::new(&config);
+                config.set_feature_size(feature_size);
+                config.set_shrinkage(self.params.learning_rate);
+                config.set_max_depth(*max_depth);
+                config.set_iterations(*num_boost_round as usize);
+                config.set_debug(*debug);
+                config.set_training_optimization_level(*training_optimization_level);
+                config.set_loss(loss_type);
 
-            let mut train_x = DataVec::new();
+                let mut gbdt = GBDT::new(&config);
 
-            for (i, row) in x.outer_iter().enumerate() {
-                let mut train_row = Vec::new();
-                for (j, &val) in row.iter().enumerate() {
-                    train_row.push(val);
+                let mut train_x = DataVec::new();
+
+                for (i, row) in (0..x.nrows()).enumerate() {
+                    let train_row = x.row_slice(row).to_vec();
+                    train_x.push(Data::new_training_data(train_row, 1.0, y[i] as f32, None));
                 }
-                train_x.push(Data::new_training_data(train_row, 1.0, y[i] as f32, None));
+
+                gbdt.fit(&mut train_x);
+
+                self.model = Some(gbdt);
             }
-
-            gbdt.fit(&mut train_x);
-
-            self.model = Some(gbdt);
-        } else {
-            panic!("Error: Expected ModelType::GBDT params, got {:?}", self.params.model_type);
+            #[cfg(any(feature = "xgboost", feature = "svm"))]
+            _ => {
+                panic!(
+                    "Error: Expected ModelType::GBDT params, got {:?}",
+                    self.params.model_type
+                );
+            }
         }
-        
     }
 
     fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
         let mut test_x = DataVec::new();
-        for row in x.outer_iter() {
-            let mut test_row = Vec::new();
-            for &val in row.iter() {
-                test_row.push(val);
-            }
+        for row in 0..x.nrows() {
+            let test_row = x.row_slice(row).to_vec();
             test_x.push(Data::new_training_data(test_row, 1.0, 0.0, None));
         }
         let predictions = self.model.as_ref().unwrap().decision_function(&test_x);
@@ -89,11 +87,10 @@ impl SemiSupervisedModel for GBDTClassifier {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{Array1, Array2};
+    use crate::math::{Array1, Array2};
 
     #[test]
     fn test_gbdt_classifier() {
@@ -144,6 +141,5 @@ mod tests {
 
         // Check that predictions are reasonable
         // assert_eq!(predictions.len(), y.len());
-
     }
 }

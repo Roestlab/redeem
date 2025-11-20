@@ -1,19 +1,17 @@
 use std::f64;
 
-use ndarray::{Array1, Array2};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use serde::{Deserialize, Serialize};
 
 use crate::data_handling::{Experiment, PsmMetadata};
+use crate::math::{Array1, Array2};
 
+use crate::models::gbdt::GBDTClassifier;
+#[cfg(feature = "svm")]
+use crate::models::svm::SVMClassifier;
 use crate::models::utils::{ModelParams, ModelType};
 #[cfg(feature = "xgboost")]
 use crate::models::xgboost::XGBoostClassifier;
-#[cfg(feature = "linfa")]
-use crate::models::svm::SVMClassifier;
-use crate::models::gbdt::GBDTClassifier;
-
 
 pub trait SemiSupervisedModel {
     fn fit(
@@ -49,13 +47,19 @@ impl SemiSupervisedLearner {
     /// A new SemiSupervisedLearner
     pub fn new(
         model_type: ModelType,
-        learning_rate: f32, 
+        learning_rate: f32,
         train_fdr: f32,
         xeval_num_iter: usize,
         class_pct: Option<(f64, f64)>,
     ) -> Self {
         let model: Box<dyn SemiSupervisedModel> = match model_type {
-            ModelType::GBDT { max_depth, num_boost_round, debug, training_optimization_level, loss_type } => {
+            ModelType::GBDT {
+                max_depth,
+                num_boost_round,
+                debug,
+                training_optimization_level,
+                loss_type,
+            } => {
                 let params = ModelParams {
                     learning_rate,
                     model_type: ModelType::GBDT {
@@ -63,21 +67,38 @@ impl SemiSupervisedLearner {
                         num_boost_round,
                         debug,
                         training_optimization_level,
-                        loss_type
+                        loss_type,
                     },
                 };
                 Box::new(GBDTClassifier::new(params))
             }
             #[cfg(feature = "xgboost")]
-            ModelType::XGBoost { max_depth, num_boost_round, early_stopping_rounds, verbose_eval } => {
+            ModelType::XGBoost {
+                max_depth,
+                num_boost_round,
+                early_stopping_rounds,
+                verbose_eval,
+            } => {
                 let params = ModelParams {
                     learning_rate,
-                    model_type: ModelType::XGBoost { max_depth, num_boost_round, early_stopping_rounds, verbose_eval },
+                    model_type: ModelType::XGBoost {
+                        max_depth,
+                        num_boost_round,
+                        early_stopping_rounds,
+                        verbose_eval,
+                    },
                 };
                 Box::new(XGBoostClassifier::new(params))
             }
-            #[cfg(feature = "linfa")]
-            ModelType::SVM { eps, c, kernel, gaussian_kernel_eps, polynomial_kernel_constant, polynomial_kernel_degree } => {
+            #[cfg(feature = "svm")]
+            ModelType::SVM {
+                eps,
+                c,
+                kernel,
+                gaussian_kernel_eps,
+                polynomial_kernel_constant,
+                polynomial_kernel_degree,
+            } => {
                 let params = ModelParams {
                     learning_rate,
                     model_type: ModelType::SVM {
@@ -91,8 +112,6 @@ impl SemiSupervisedLearner {
                 };
                 Box::new(SVMClassifier::new(params))
             }
-            #[cfg(not(any(feature = "xgboost", feature = "linfa")))]
-            _ => panic!("No model selected. Please enable the 'xgboost' or 'linfa' feature."),
         };
 
         SemiSupervisedLearner {
@@ -116,7 +135,7 @@ impl SemiSupervisedLearner {
         experiment: &Experiment,
         eval_fdr: f32,
     ) -> (usize, usize, Array1<i32>, bool, Array1<f32>) {
-        /// Helper function to count targets by feature
+        // Helper function to count targets by feature
         let targets_count_by_feature = |desc: bool| -> Vec<usize> {
             (0..experiment.x.ncols())
                 .map(|col| {
@@ -216,18 +235,22 @@ impl SemiSupervisedLearner {
     ) -> Vec<(Experiment, Experiment)> {
         let mut rng = thread_rng();
         let n_samples = experiment.x.nrows();
-    
+
         // Separate targets and decoys
         let targets: Vec<_> = (0..n_samples).filter(|&i| experiment.y[i] == 1).collect();
         let decoys: Vec<_> = (0..n_samples).filter(|&i| experiment.y[i] == -1).collect();
-    
+
         // If neither target_pct nor decoy_pct is set, use the full data
         let use_full_data = target_pct.is_none() && decoy_pct.is_none();
 
         if !use_full_data {
-            log::info!("Using {} % of targets and {} % of decoys for training", target_pct.unwrap_or(1.0) * 100.0, decoy_pct.unwrap_or(1.0) * 100.0);
+            log::info!(
+                "Using {} % of targets and {} % of decoys for training",
+                target_pct.unwrap_or(1.0) * 100.0,
+                decoy_pct.unwrap_or(1.0) * 100.0
+            );
         }
-    
+
         // Calculate the number of targets and decoys to include in each fold
         let targets_per_fold = if use_full_data {
             (targets.len() as f64 / n_folds as f64).ceil() as usize
@@ -239,17 +262,17 @@ impl SemiSupervisedLearner {
         } else {
             (decoys.len() as f64 * decoy_pct.unwrap_or(1.0) / n_folds as f64).ceil() as usize
         };
-    
+
         (0..n_folds)
             .map(|i| {
                 // Randomly select targets and decoys for the test set
                 let test_targets: Vec<_> = targets.choose_multiple(&mut rng, targets_per_fold).cloned().collect();
                 let test_decoys: Vec<_> = decoys.choose_multiple(&mut rng, decoys_per_fold).cloned().collect();
-    
+
                 // Remaining targets and decoys after selecting test samples
                 let remaining_targets: Vec<_> = targets.iter().filter(|t| !test_targets.contains(t)).cloned().collect();
                 let remaining_decoys: Vec<_> = decoys.iter().filter(|d| !test_decoys.contains(d)).cloned().collect();
-    
+
                 // Randomly select targets and decoys for the training set
                 let train_targets: Vec<_> = if use_full_data {
                     remaining_targets.clone()
@@ -273,26 +296,26 @@ impl SemiSupervisedLearner {
                         .cloned()
                         .collect()
                 };
-    
+
                 // Combine training and testing indices
                 let train_indices: Vec<_> = train_targets.into_iter().chain(train_decoys.into_iter()).collect();
                 let test_indices: Vec<_> = test_targets.into_iter().chain(test_decoys.into_iter()).collect();
-    
+
                 // Create masks for training and testing sets
                 let mut train_mask = Array1::from_elem(n_samples, false);
                 for &idx in &train_indices {
                     train_mask[idx] = true;
                 }
-    
+
                 let mut test_mask = Array1::from_elem(n_samples, false);
                 for &idx in &test_indices {
                     test_mask[idx] = true;
                 }
-    
+
                 // Filter the experiment to create training and testing sets
                 let train_exp = experiment.filter(&train_mask);
                 let test_exp = experiment.filter(&test_mask);
-    
+
                 log::trace!(
                     "Preparing fold {} with {} training samples ({} targets and {} decoys) and {} testing samples ({} targets and {} decoys)",
                     i,
@@ -303,13 +326,11 @@ impl SemiSupervisedLearner {
                     test_exp.y.iter().filter(|&&x| x == 1).count(),
                     test_exp.y.iter().filter(|&&x| x == -1).count()
                 );
-    
+
                 (train_exp, test_exp)
             })
             .collect()
     }
-    
-    
 
     /// Fit the SemiSupervisedLearner
     ///
@@ -321,8 +342,12 @@ impl SemiSupervisedLearner {
     /// # Returns
     ///
     /// The predictions for the input features
-    pub fn fit(&mut self, x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> anyhow::Result<(Array1<f32>, Array1<u32>)> {
-
+    pub fn fit(
+        &mut self,
+        x: Array2<f32>,
+        y: Array1<i32>,
+        psm_metadata: PsmMetadata,
+    ) -> anyhow::Result<(Array1<f32>, Array1<u32>)> {
         let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
 
         experiment.log_input_data_summary();
@@ -333,12 +358,20 @@ impl SemiSupervisedLearner {
 
         experiment.y = new_labels.clone();
 
-        let folds = self.create_folds(&experiment, self.xeval_num_iter, self.class_pct.map(|(t, _d)| t), self.class_pct.map(|(_t, d)| d));
+        let folds = self.create_folds(
+            &experiment,
+            self.xeval_num_iter,
+            self.class_pct.map(|(t, _d)| t),
+            self.class_pct.map(|(_t, d)| d),
+        );
 
         for (fold, (mut train_exp, test_exp)) in folds.into_iter().enumerate() {
-            
             let n_samples = experiment.x.nrows();
-            log::info!("Learning on Cross-Validation Fold: {} with {} training samples", fold, train_exp.x.nrows());
+            log::info!(
+                "Learning on Cross-Validation Fold: {} with {} training samples",
+                fold,
+                train_exp.x.nrows()
+            );
 
             let mut all_predictions = Array1::zeros(n_samples);
 
@@ -346,22 +379,32 @@ impl SemiSupervisedLearner {
 
             train_exp.split_for_xval(0.80, false);
 
-            let train_indices: Vec<usize> = train_exp.is_train
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &val)| if val { Some(i) } else { None })
-            .collect();
+            let train_indices: Vec<usize> = train_exp
+                .is_train
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &val)| if val { Some(i) } else { None })
+                .collect();
 
-            let test_indices: Vec<usize> = train_exp.is_train
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &val)| if !val { Some(i) } else { None })  
-            .collect();
-            
+            let test_indices: Vec<usize> = train_exp
+                .is_train
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &val)| if !val { Some(i) } else { None })
+                .collect();
 
-            self.model
-                .fit(&train_exp.x.select(ndarray::Axis(0), &train_indices), &train_exp.y.select(ndarray::Axis(0), &train_indices).to_vec(), Some(&train_exp.x.select(ndarray::Axis(0), &test_indices)), Some(&train_exp.y.select(ndarray::Axis(0), &test_indices).to_vec()));
-            
+            let train_x_subset = train_exp.x.select_rows(&train_indices);
+            let train_y_subset = train_exp.y.select(&train_indices);
+            let eval_x_subset = train_exp.x.select_rows(&test_indices);
+            let eval_y_subset = train_exp.y.select(&test_indices);
+
+            self.model.fit(
+                &train_x_subset,
+                train_y_subset.as_slice(),
+                Some(&eval_x_subset),
+                Some(eval_y_subset.as_slice()),
+            );
+
             let fold_predictions = Array1::from(self.model.predict_proba(&test_exp.x));
 
             // Update predictions
@@ -373,7 +416,6 @@ impl SemiSupervisedLearner {
             experiment.y = new_labels;
 
             experiment.update_rank_feature(&all_predictions, &experiment.psm_metadata.clone());
-
         }
 
         // Final prediction on the entire dataset
@@ -384,7 +426,7 @@ impl SemiSupervisedLearner {
         //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
         let final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
         experiment.update_rank_feature(&final_predictions, &experiment.psm_metadata.clone());
-        let updated_ranks = experiment.get_rank_column()?; 
+        let updated_ranks = experiment.get_rank_column()?;
 
         Ok((final_predictions, updated_ranks))
     }
@@ -394,10 +436,11 @@ impl SemiSupervisedLearner {
 mod tests {
     use super::*;
     use csv::ReaderBuilder;
-    use ndarray::{Array1, Array2};
     use std::error::Error;
     use std::fs::File;
     use std::io::Write;
+
+    use crate::math::{Array1, Array2};
 
     fn read_features_tsv(path: &str) -> Result<Array2<f32>, Box<dyn Error>> {
         let mut reader = ReaderBuilder::new()
@@ -469,18 +512,12 @@ mod tests {
 
         // Create and train your SemiSupervisedLearner
         let xgb_params = ModelType::XGBoost {
-                max_depth: 8,
-                num_boost_round: 100,
-                early_stopping_rounds: 10,
-                verbose_eval: false,
-            };
-        let mut learner = SemiSupervisedLearner::new(
-            xgb_params,
-            0.001,
-            1.0,
-            2,
-            Some((0.2, 0.5))
-        );
+            max_depth: 8,
+            num_boost_round: 100,
+            early_stopping_rounds: 10,
+            verbose_eval: false,
+        };
+        let mut learner = SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)));
         let predictions = learner.fit(x, y.clone());
 
         println!("Labels: {:?}", y);
@@ -491,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "linfa")]
+    #[cfg(feature = "svm")]
     fn test_svm_semi_supervised_learner() {
         // Load the test data from the TSV files
         let x = read_features_tsv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_for_testing.csv").unwrap();
@@ -501,21 +538,15 @@ mod tests {
         println!("Loaded labels shape: {:?}", y.shape());
 
         // Create and train your SemiSupervisedLearner
-        let params = ModelType::SVM  {
-                eps: 0.1,
-                c: (1.0, 1.0),
-                kernel: "linear".to_string(),
-                gaussian_kernel_eps: 0.1,
-                polynomial_kernel_constant: 1.0,
-                polynomial_kernel_degree: 3.0
-            };
-        let mut learner = SemiSupervisedLearner::new(
-            params,
-            0.001,
-            1.0,
-            1000,
-            Some((0.2, 0.5))
-        );
+        let params = ModelType::SVM {
+            eps: 0.1,
+            c: (1.0, 1.0),
+            kernel: "linear".to_string(),
+            gaussian_kernel_eps: 0.1,
+            polynomial_kernel_constant: 1.0,
+            polynomial_kernel_degree: 3.0,
+        };
+        let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)));
         let predictions = learner.fit(x, y.clone());
 
         println!("Labels: {:?}", y);

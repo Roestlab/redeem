@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use csv::ReaderBuilder;
-use ndarray::{Array1, Array2};
 
 use std::error::Error;
 use std::fs::File;
@@ -8,8 +7,9 @@ use std::io::{BufReader, Write};
 use std::process;
 
 use redeem_classifiers::data_handling::PsmMetadata;
-use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
+use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -104,14 +104,8 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
         early_stopping_rounds: 10,
         verbose_eval: false,
     };
-let mut learner = SemiSupervisedLearner::new(
-    xgb_params,
-    0.01,
-    1.0,
-    5,
-    Some((1.0, 1.0))
-);
-let predictions = learner.fit(x, y.clone(), metadata);
+    let mut learner = SemiSupervisedLearner::new(xgb_params, 0.01, 1.0, 5, Some((1.0, 1.0)));
+    let predictions = learner.fit(x, y.clone(), metadata);
     Ok(predictions)
 }
 
@@ -122,7 +116,7 @@ fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> R
 
 fn main() -> Result<()> {
     env_logger::init();
-    
+
     // Load the test data from the TSV files
     let (x, y, metadata) = load_test_psm_csv("/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/sage_scores_with_metadata_for_testing_redeem.csv")?;
 

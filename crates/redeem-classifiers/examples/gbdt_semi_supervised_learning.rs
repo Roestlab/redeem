@@ -1,17 +1,19 @@
 use anyhow::{Context, Result};
 use csv::ReaderBuilder;
 use maud::html;
-use ndarray::{Array1, Array2};
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
 use std::io::BufReader;
+use std::io::Write;
 
 use redeem_classifiers::data_handling::PsmMetadata;
-use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::utils::ModelType;
-use redeem_classifiers::report::{report::{Report, ReportSection}, plots::{plot_score_histogram, plot_pp}};
-
+use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
+use redeem_classifiers::report::{
+    plots::{plot_pp, plot_score_histogram},
+    report::{Report, ReportSection},
+};
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -82,7 +84,6 @@ pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMet
     Ok((x, y, metadata))
 }
 
-
 fn save_predictions_to_csv(
     predictions: &Array1<f32>,
     file_path: &str,
@@ -115,13 +116,7 @@ fn main() -> Result<()> {
         loss_type: "LogLikelyhood".to_string(),
     };
 
-    let mut learner = SemiSupervisedLearner::new(
-        params,
-        0.001,
-        0.01,
-        3,
-        Some((0.15, 1.0))
-    );
+    let mut learner = SemiSupervisedLearner::new(params, 0.001, 0.01, 3, Some((0.15, 1.0)));
     let (predictions, _ranks) = learner.fit(x, y.clone(), metadata)?;
 
     println!("Labels: {:?}", y);
@@ -130,13 +125,12 @@ fn main() -> Result<()> {
     println!("Predictions: {:?}", predictions);
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
 
-
     // Create a new report
     let mut report = Report::new(
-        "Sage Report", 
-        "14", 
+        "Sage Report",
+        "14",
         Some("/home/singjc/Documents/github/redeem/img/redeem_logo.png"),
-        "My Data Analysis Report"
+        "My Data Analysis Report",
     );
 
     // Section 1: Introduction
@@ -148,7 +142,7 @@ fn main() -> Result<()> {
 
     // Score Distribution Section
 
-    // convert the predictions to Array1<f32> to Vec<f64> 
+    // convert the predictions to Array1<f32> to Vec<f64>
     let predictions = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
     // convert the y to Array1<i32> to Vec<i32>
     let y = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
@@ -161,7 +155,7 @@ fn main() -> Result<()> {
         "This plot shows the distribution of the GBDT scores."
     });
     plot_section.add_plot(plot);
-    
+
     plot_section.add_content(html! {
         "Now we show the P-P plot, which compares ECDF distributions."
     });
@@ -170,7 +164,6 @@ fn main() -> Result<()> {
 
     // Save the report to an HTML file
     report.save_to_file("report.html")?;
-
 
     println!("Report saved to report.html");
 
