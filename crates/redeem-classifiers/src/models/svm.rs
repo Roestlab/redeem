@@ -5,17 +5,17 @@ use light_svm::{
 };
 
 use crate::math::Array2;
-use crate::models::utils::{ModelParams, ModelType};
+use crate::models::utils::{ModelConfig, ModelType};
 use crate::psm_scorer::SemiSupervisedModel;
 
 pub struct SVMClassifier {
-    params: ModelParams,
+    params: ModelConfig,
     model: Option<LinearSVC>,
     calibrator: Option<PlattCalibrator>,
 }
 
 impl SVMClassifier {
-    pub fn new(params: ModelParams) -> Self {
+    pub fn new(params: ModelConfig) -> Self {
         Self {
             params,
             model: None,
@@ -130,7 +130,7 @@ mod tests {
         .unwrap();
         let y = Array1::from_vec(vec![1, 1, 1, 1, -1, -1]);
 
-        let params = ModelParams {
+        let params = ModelConfig {
             learning_rate: 0.01,
             model_type: ModelType::SVM {
                 eps: 1e-4,

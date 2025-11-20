@@ -27,7 +27,7 @@ fn main() {
     println!("Synthetic y shape: {:?}", y.shape());
 
     // Model params: small number of boosting rounds for speed
-    let params = redeem_classifiers::models::utils::ModelParams {
+    let params = redeem_classifiers::models::utils::ModelConfig {
         learning_rate: 0.3,
         model_type: ModelType::XGBoost {
             max_depth: 3,

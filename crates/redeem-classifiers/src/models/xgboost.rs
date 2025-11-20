@@ -9,7 +9,7 @@ use xgb::{
 };
 
 use crate::math::Array2;
-use crate::models::utils::{ModelParams, ModelType};
+use crate::models::utils::{ModelConfig, ModelType};
 use crate::psm_scorer::SemiSupervisedModel;
 
 fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
@@ -60,11 +60,11 @@ fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
 
 pub struct XGBoostClassifier {
     booster: Option<Booster>,
-    params: ModelParams,
+    params: ModelConfig,
 }
 
 impl XGBoostClassifier {
-    pub fn new(params: ModelParams) -> Self {
+    pub fn new(params: ModelConfig) -> Self {
         XGBoostClassifier {
             booster: None,
             params,
@@ -334,7 +334,7 @@ mod tests {
         println!("y.to_vec(): {:?}", y.to_vec());
 
         // Initialize the XGBoost classifier
-        let params = ModelParams {
+        let params = ModelConfig {
             learning_rate: 0.3,
             model_type: ModelType::XGBoost {
                 max_depth: 6,

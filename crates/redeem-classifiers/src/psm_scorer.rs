@@ -10,7 +10,7 @@ use crate::preprocessing;
 use crate::models::gbdt::GBDTClassifier;
 #[cfg(feature = "svm")]
 use crate::models::svm::SVMClassifier;
-use crate::models::utils::{ModelParams, ModelType};
+use crate::models::utils::{ModelConfig, ModelType};
 #[cfg(feature = "xgboost")]
 use crate::models::xgboost::XGBoostClassifier;
 
@@ -69,7 +69,7 @@ impl SemiSupervisedLearner {
                 training_optimization_level,
                 loss_type,
             } => {
-                let params = ModelParams {
+                let params = ModelConfig {
                     learning_rate,
                     model_type: ModelType::GBDT {
                         max_depth,
@@ -88,7 +88,7 @@ impl SemiSupervisedLearner {
                 early_stopping_rounds,
                 verbose_eval,
             } => {
-                let params = ModelParams {
+                let params = ModelConfig {
                     learning_rate,
                     model_type: ModelType::XGBoost {
                         max_depth,
@@ -108,7 +108,7 @@ impl SemiSupervisedLearner {
                 polynomial_kernel_constant,
                 polynomial_kernel_degree,
             } => {
-                let params = ModelParams {
+                let params = ModelConfig {
                     learning_rate,
                     model_type: ModelType::SVM {
                         eps,

@@ -3,17 +3,17 @@ use gbdt::decision_tree::{Data, DataVec};
 use gbdt::gradient_boost::GBDT;
 
 use crate::math::Array2;
-use crate::models::utils::{ModelParams, ModelType};
+use crate::models::utils::{ModelConfig, ModelType};
 use crate::psm_scorer::SemiSupervisedModel;
 
 /// Gradient Boosting Decision Tree (GBDT) classifier
 pub struct GBDTClassifier {
     model: Option<GBDT>,
-    params: ModelParams,
+    params: ModelConfig,
 }
 
 impl GBDTClassifier {
-    pub fn new(params: ModelParams) -> Self {
+    pub fn new(params: ModelConfig) -> Self {
         GBDTClassifier {
             model: None,
             params,
@@ -117,7 +117,7 @@ mod tests {
         println!("y.to_vec(): {:?}", y.to_vec());
 
         // Initialize the XGBoost classifier
-        let params = ModelParams {
+        let params = ModelConfig {
             learning_rate: 0.1,
             model_type: ModelType::GBDT {
                 max_depth: 6,
