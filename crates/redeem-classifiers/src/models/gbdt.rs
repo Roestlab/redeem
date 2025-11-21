@@ -1,3 +1,7 @@
+//! GBDT-based classifier wrapper.
+//!
+//! A thin adapter around the external `gbdt` crate exposing the
+//! `ClassifierModel` trait used by the semi-supervised learner.
 use gbdt::config::Config;
 use gbdt::decision_tree::{Data, DataVec};
 use gbdt::gradient_boost::GBDT;

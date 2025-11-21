@@ -1,3 +1,7 @@
+//! Statistical helpers used across the crate.
+//!
+//! These utilities include target-decoy competition (TDC) based q-value estimation and
+//! other small helpers used by `data_handling` and feature-selection routines.
 use std::cmp::Ordering;
 
 use crate::math::Array1;

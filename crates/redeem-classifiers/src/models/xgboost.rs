@@ -1,3 +1,8 @@
+//! XGBoost classifier adapter (feature-gated).
+//!
+//! Provides a thin wrapper around the `xgb` crate. The implementation
+//! performs an explicit training loop to ensure per-iteration updates are
+//! executed (workaround for some upstream crate versions that omit updates).
 use log::debug;
 use xgb::{
     parameters::{

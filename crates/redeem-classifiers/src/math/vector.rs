@@ -1,3 +1,8 @@
+//! 1D array utilities (Array1) and small vector helpers.
+//!
+//! Provides `Array1<T>` with convenience constructors, element-wise
+//! operations and a few numeric helpers (mean, dot). The implementation
+//! is deliberately small and suitable for unit tests and examples.
 use std::fmt;
 use std::iter::FromIterator;
 use std::ops::{BitAnd, BitOr, Index, IndexMut};

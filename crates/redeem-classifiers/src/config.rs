@@ -1,3 +1,9 @@
+//! Configuration types for models exposed by this crate.
+//!
+//! `ModelConfig` and `ModelType` are the canonical configuration
+//! representations used by the model factory and examples. Variants for
+//! XGBoost and SVM are feature-gated so they are only available when the
+//! corresponding Cargo feature is enabled.
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 

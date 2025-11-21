@@ -1,5 +1,9 @@
+//! Classifier trait shared by model implementations.
+//!
+//! This trait defines the minimal contract expected by `SemiSupervisedLearner`.
+//! Implementations adapt their internal APIs to satisfy `fit`, `predict` and
+//! `predict_proba`.
 use crate::math::Array2;
-
 /// A small trait abstraction for classifier models used by the semi-supervised
 /// learner. This mirrors the existing internal `SemiSupervisedModel` API but
 /// centralizes the contract in the `models` module so implementations can live

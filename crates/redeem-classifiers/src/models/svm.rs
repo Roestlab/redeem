@@ -1,3 +1,7 @@
+//! SVM classifier adapter (feature-gated).
+//!
+//! Wraps the `light-svm` crate to provide a `ClassifierModel` implementation
+//! with optional Platt calibration for probability estimates.
 use light_svm::{
     calibration::PlattCalibrator,
     data::{CsrMatrix, DenseMatrix as LightDenseMatrix},

@@ -1,3 +1,7 @@
+//! Plotting helpers: histograms, P–P plots, boxplots and scatter plots.
+//!
+//! These functions produce `plotly::Plot` objects from score and label
+//! arrays. They are minimal helpers used by the example report generation.
 use itertools_num::linspace;
 use plotly::box_plot::BoxMean;
 use plotly::common::{DashType, Line, Marker, Mode, Orientation};

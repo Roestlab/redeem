@@ -1,3 +1,8 @@
+//! Data structures and helpers for loading and manipulating PSM datasets.
+//!
+//! This module defines `PsmMetadata` and `Experiment` and contains helpers
+//! for updating labels, computing ranks, and creating train/test folds used
+//! by the semi-supervised learner.
 use std::collections::HashMap;
 
 use rand::seq::SliceRandom;

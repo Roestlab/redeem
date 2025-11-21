@@ -1,3 +1,10 @@
+//! Semi-supervised learner and orchestration utilities.
+//!
+//! This module implements `SemiSupervisedLearner`, the core training loop
+//! used by the examples to iteratively refine labels and fit models. It
+//! delegates to implementations of the `models::ClassifierModel` trait and
+//! centralizes preprocessing flags (scaling / score normalization) so the
+//! examples can pass flags through the CLI.
 use std::f64;
 
 use rand::seq::SliceRandom;

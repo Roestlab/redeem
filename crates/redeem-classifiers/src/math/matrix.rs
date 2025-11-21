@@ -1,3 +1,8 @@
+//! 2D array utilities (Array2) and shape error handling.
+//!
+//! This module implements a compact `Array2<T>` with basic indexing,
+//! slicing and selection helpers used by the rest of the crate. It's
+//! intentionally minimal compared to full ndarray-like crates.
 use std::error::Error;
 use std::fmt;
 use std::ops::{Index, IndexMut, RangeBounds};
