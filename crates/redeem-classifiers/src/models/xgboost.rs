@@ -5,17 +5,17 @@
 //! executed (workaround for some upstream crate versions that omit updates).
 use log::debug;
 use xgb::{
+    Booster, DMatrix,
     parameters::{
+        BoosterParametersBuilder, BoosterType,
         learning::{LearningTaskParametersBuilder, Objective},
         tree::{TreeBoosterParametersBuilder, TreeMethod},
-        BoosterParametersBuilder, BoosterType,
     },
-    Booster, DMatrix,
 };
 
+use crate::config::{ModelConfig, ModelType};
 use crate::math::Array2;
 use crate::models::classifier_trait::ClassifierModel;
-use crate::config::{ModelConfig, ModelType};
 
 fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
     let labels = dtrain.get_labels().unwrap();
@@ -68,6 +68,10 @@ pub struct XGBoostClassifier {
     params: ModelConfig,
 }
 
+// Booster handles are local to a single thread in our usage (each fold trains
+// its own model), so we can safely mark the wrapper as Send.
+unsafe impl Send for XGBoostClassifier {}
+
 impl XGBoostClassifier {
     pub fn new(params: ModelConfig) -> Self {
         XGBoostClassifier {
@@ -92,13 +96,11 @@ impl XGBoostClassifier {
             .iter()
             .map(|&l| if l == 1 { 1 } else { 0 })
             .collect::<Vec<i32>>();
-        let y_eval = Some(
-            y_eval
-                .unwrap()
-                .iter()
+        let y_eval = y_eval.map(|vals| {
+            vals.iter()
                 .map(|&l| if l == 1 { 1 } else { 0 })
-                .collect::<Vec<i32>>(),
-        );
+                .collect::<Vec<i32>>()
+        });
 
         // Convert feature matrix into DMatrix
         // Log matrix shape info to help diagnose potential shape mismatches
@@ -116,7 +118,7 @@ impl XGBoostClassifier {
         // println!("TRAIN dmat: {:?}", dmat);
 
         let mut eval_matrix = None;
-        if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
+        if let (Some(x_e), Some(y_e)) = (x_eval, y_eval.as_ref()) {
             debug!(
                 "Creating eval DMatrix: rows={}, cols={}, len={}",
                 x_e.nrows(),
@@ -361,6 +363,10 @@ impl ClassifierModel for XGBoostClassifier {
 
     fn name(&self) -> &str {
         "xgboost"
+    }
+
+    fn clone_box(&self) -> Box<dyn ClassifierModel> {
+        Box::new(XGBoostClassifier::new(self.params.clone()))
     }
 }
 

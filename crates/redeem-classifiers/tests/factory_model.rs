@@ -1,6 +1,6 @@
+use redeem_classifiers::config::{ModelConfig, ModelType};
 use redeem_classifiers::math::{Array1, Array2};
 use redeem_classifiers::models::factory;
-use redeem_classifiers::config::{ModelConfig, ModelType};
 
 #[test]
 fn test_factory_builds_and_predicts() {

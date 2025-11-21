@@ -6,9 +6,9 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::Write;
 
+use redeem_classifiers::config::ModelType;
 use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::math::{Array1, Array2};
-use redeem_classifiers::config::ModelType;
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
 use redeem_classifiers::report::plots::{plot_pp, plot_score_histogram};
 use report_builder::{Report, ReportSection};
@@ -123,6 +123,7 @@ fn main() -> Result<()> {
         0.001,
         0.01,
         3,
+        10,
         Some((0.15, 1.0)),
         scale,
         normalize_scores,

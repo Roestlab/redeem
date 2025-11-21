@@ -6,9 +6,9 @@ use gbdt::config::Config;
 use gbdt::decision_tree::{Data, DataVec};
 use gbdt::gradient_boost::GBDT;
 
+use crate::config::{ModelConfig, ModelType};
 use crate::math::Array2;
 use crate::models::classifier_trait::ClassifierModel;
-use crate::config::{ModelConfig, ModelType};
 
 /// Gradient Boosting Decision Tree (GBDT) classifier
 pub struct GBDTClassifier {
@@ -108,6 +108,10 @@ impl ClassifierModel for GBDTClassifier {
 
     fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
         GBDTClassifier::predict_proba(self, x)
+    }
+
+    fn clone_box(&self) -> Box<dyn ClassifierModel> {
+        Box::new(GBDTClassifier::new(self.params.clone()))
     }
 }
 

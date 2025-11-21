@@ -56,8 +56,7 @@ impl Default for ModelType {
     }
 }
 
-impl ModelType {
-}
+impl ModelType {}
 
 impl FromStr for ModelType {
     type Err = String;

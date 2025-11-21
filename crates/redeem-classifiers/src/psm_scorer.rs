@@ -5,20 +5,21 @@
 //! delegates to implementations of the `models::ClassifierModel` trait and
 //! centralizes preprocessing flags (scaling / score normalization) so the
 //! examples can pass flags through the CLI.
-use std::f64;
+use std::collections::HashMap;
 
+use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use rayon::prelude::*;
 
 use crate::data_handling::{Experiment, PsmMetadata};
 use crate::math::{Array1, Array2};
 use crate::preprocessing;
+use crate::stats::tdc;
 
+use crate::config::{ModelConfig, ModelType};
 use crate::models::classifier_trait::ClassifierModel;
 use crate::models::factory;
-#[cfg(feature = "svm")]
-use crate::models::svm::SVMClassifier;
-use crate::config::{ModelConfig, ModelType};
 
 // Legacy `SemiSupervisedModel` behavior is provided by implementations of
 // `models::classifier_trait::ClassifierModel`. The learner stores a boxed
@@ -28,6 +29,7 @@ pub struct SemiSupervisedLearner {
     model: Box<dyn ClassifierModel>,
     train_fdr: f32,
     xeval_num_iter: usize,
+    max_iterations: usize,
     class_pct: Option<(f64, f64)>,
     /// If true, fit a standard scaler on the input features and use the
     /// scaled features for training and evaluation.
@@ -44,7 +46,8 @@ impl SemiSupervisedLearner {
     ///
     /// * `model_type` - The type of model to use
     /// * `train_fdr` - The FDR threshold to use for training
-    /// * `xeval_num_iter` - The number of iterations to use for cross-validation
+    /// * `xeval_num_iter` - The number of cross-validation folds
+    /// * `max_iterations` - Maximum semi-supervised iterations (label refinements)
     /// * `class_pct` - (f64, f64) The percentage of targets and decoys to use for training
     ///
     /// # Returns
@@ -55,6 +58,7 @@ impl SemiSupervisedLearner {
         learning_rate: f32,
         train_fdr: f32,
         xeval_num_iter: usize,
+        max_iterations: usize,
         class_pct: Option<(f64, f64)>,
         scale_features: bool,
         normalize_scores: bool,
@@ -71,6 +75,7 @@ impl SemiSupervisedLearner {
             model,
             train_fdr,
             xeval_num_iter,
+            max_iterations,
             class_pct,
             scale_features,
             normalize_scores,
@@ -158,7 +163,7 @@ impl SemiSupervisedLearner {
     /// # Returns
     ///
     /// The experiment with the unlabeled PSMs removed
-    fn remove_unlabeled_psms(&self, experiment: &mut Experiment) {
+    fn remove_unlabeled_psms(experiment: &mut Experiment) {
         let indices_to_remove: Vec<usize> = experiment
             .y
             .iter()
@@ -169,122 +174,194 @@ impl SemiSupervisedLearner {
         experiment.remove_psms(&indices_to_remove);
     }
 
-    /// Create folds for cross-validation
-    ///
-    /// # Arguments
-    ///
-    /// * `experiment` - The experiment to use
-    /// * `n_folds` - The number of folds to create
-    /// * `target_pct` - The percentage of targets to use for training
-    /// * `decoy_pct` - The percentage of decoys to use for training
-    ///
-    /// # Returns
-    ///
-    /// A vector of tuples containing the training and testing experiments for each fold
-    fn create_folds(
+    fn mask_from_indices(len: usize, indices: &[usize]) -> Array1<bool> {
+        let mut mask = Array1::from_elem(len, false);
+        for &idx in indices {
+            if idx < len {
+                mask[idx] = true;
+            }
+        }
+        mask
+    }
+
+    fn build_spectrum_folds(
         &self,
         experiment: &Experiment,
-        n_folds: usize,
-        target_pct: Option<f64>,
-        decoy_pct: Option<f64>,
-    ) -> Vec<(Experiment, Experiment)> {
-        let mut rng = thread_rng();
+        requested_folds: usize,
+    ) -> Vec<Vec<usize>> {
         let n_samples = experiment.x.nrows();
-
-        // Separate targets and decoys
-        let targets: Vec<_> = (0..n_samples).filter(|&i| experiment.y[i] == 1).collect();
-        let decoys: Vec<_> = (0..n_samples).filter(|&i| experiment.y[i] == -1).collect();
-
-        // If neither target_pct nor decoy_pct is set, use the full data
-        let use_full_data = target_pct.is_none() && decoy_pct.is_none();
-
-        if !use_full_data {
-            log::info!(
-                "Using {} % of targets and {} % of decoys for training",
-                target_pct.unwrap_or(1.0) * 100.0,
-                decoy_pct.unwrap_or(1.0) * 100.0
-            );
+        if n_samples == 0 {
+            return vec![Vec::new()];
+        }
+        let n_folds = requested_folds.max(2).min(n_samples);
+        let mut spectra: HashMap<(usize, String), Vec<usize>> = HashMap::new();
+        for (idx, (file_id, spec_id)) in experiment
+            .psm_metadata
+            .file_id
+            .iter()
+            .zip(experiment.psm_metadata.spec_id.iter())
+            .enumerate()
+        {
+            spectra
+                .entry((*file_id, spec_id.clone()))
+                .or_default()
+                .push(idx);
         }
 
-        // Calculate the number of targets and decoys to include in each fold
-        let targets_per_fold = if use_full_data {
-            (targets.len() as f64 / n_folds as f64).ceil() as usize
-        } else {
-            (targets.len() as f64 * target_pct.unwrap_or(1.0) / n_folds as f64).ceil() as usize
+        let mut grouped: Vec<Vec<usize>> = spectra.into_values().collect();
+        grouped.shuffle(&mut thread_rng());
+
+        let mut folds = vec![Vec::new(); n_folds];
+        for (idx, group) in grouped.into_iter().enumerate() {
+            folds[idx % n_folds].extend(group);
+        }
+        folds
+    }
+
+    fn sample_training_indices(
+        labels: &Array1<i32>,
+        candidates: &[usize],
+        class_pct: Option<(f64, f64)>,
+    ) -> Vec<usize> {
+        let Some((target_pct, decoy_pct)) = class_pct else {
+            return candidates.to_vec();
         };
-        let decoys_per_fold = if use_full_data {
-            (decoys.len() as f64 / n_folds as f64).ceil() as usize
-        } else {
-            (decoys.len() as f64 * decoy_pct.unwrap_or(1.0) / n_folds as f64).ceil() as usize
-        };
 
-        (0..n_folds)
-            .map(|i| {
-                // Randomly select targets and decoys for the test set
-                let test_targets: Vec<_> = targets.choose_multiple(&mut rng, targets_per_fold).cloned().collect();
-                let test_decoys: Vec<_> = decoys.choose_multiple(&mut rng, decoys_per_fold).cloned().collect();
+        let mut target_indices = Vec::new();
+        let mut decoy_indices = Vec::new();
+        for &idx in candidates {
+            match labels[idx] {
+                1 => target_indices.push(idx),
+                -1 => decoy_indices.push(idx),
+                _ => {}
+            }
+        }
 
-                // Remaining targets and decoys after selecting test samples
-                let remaining_targets: Vec<_> = targets.iter().filter(|t| !test_targets.contains(t)).cloned().collect();
-                let remaining_decoys: Vec<_> = decoys.iter().filter(|d| !test_decoys.contains(d)).cloned().collect();
+        let mut rng = thread_rng();
+        let mut sampled_targets = Self::sample_class_subset(&target_indices, target_pct, &mut rng);
+        let mut sampled_decoys = Self::sample_class_subset(&decoy_indices, decoy_pct, &mut rng);
 
-                // Randomly select targets and decoys for the training set
-                let train_targets: Vec<_> = if use_full_data {
-                    remaining_targets.clone()
-                } else {
-                    remaining_targets
-                        .choose_multiple(
-                            &mut rng,
-                            (remaining_targets.len() as f64 * target_pct.unwrap_or(1.0)).round() as usize,
-                        )
-                        .cloned()
-                        .collect()
-                };
-                let train_decoys: Vec<_> = if use_full_data {
-                    remaining_decoys.clone()
-                } else {
-                    remaining_decoys
-                        .choose_multiple(
-                            &mut rng,
-                            (remaining_decoys.len() as f64 * decoy_pct.unwrap_or(1.0)).round() as usize,
-                        )
-                        .cloned()
-                        .collect()
-                };
+        if sampled_targets.is_empty() || sampled_decoys.is_empty() {
+            log::warn!(
+                "Class sampling removed all targets or decoys; using all available training examples."
+            );
+            return candidates.to_vec();
+        }
 
-                // Combine training and testing indices
-                let train_indices: Vec<_> = train_targets.into_iter().chain(train_decoys).collect();
-                let test_indices: Vec<_> = test_targets.into_iter().chain(test_decoys).collect();
+        sampled_targets.append(&mut sampled_decoys);
+        sampled_targets
+    }
 
-                // Create masks for training and testing sets
-                let mut train_mask = Array1::from_elem(n_samples, false);
-                for &idx in &train_indices {
-                    train_mask[idx] = true;
+    fn sample_class_subset(indices: &[usize], pct: f64, rng: &mut ThreadRng) -> Vec<usize> {
+        if indices.is_empty() || pct >= 0.999 {
+            return indices.to_vec();
+        }
+
+        let mut take = ((indices.len() as f64) * pct).round() as usize;
+        take = take.max(1).min(indices.len());
+
+        let mut shuffled = indices.to_vec();
+        shuffled.shuffle(rng);
+        shuffled.truncate(take);
+        shuffled
+    }
+
+    fn score_with_cross_validation(
+        &mut self,
+        experiment: &Experiment,
+        folds: &[Vec<usize>],
+        labels: &Array1<i32>,
+        fallback_scores: &Array1<f32>,
+    ) -> Array1<f32> {
+        let n_samples = experiment.x.nrows();
+        let mut assigned: Vec<Option<f32>> = vec![None; n_samples];
+        let class_pct = self.class_pct;
+
+        let model_clones: Vec<Box<dyn ClassifierModel>> =
+            (0..folds.len()).map(|_| self.model.clone_box()).collect();
+
+        let fold_results: Vec<Vec<(usize, f32)>> = folds
+            .par_iter()
+            .enumerate()
+            .zip(model_clones.into_par_iter())
+            .map(|((fold_idx, test_indices_unsorted), mut fold_model)| {
+                let mut local_assignments = Vec::new();
+                if test_indices_unsorted.is_empty() {
+                    return local_assignments;
                 }
 
-                let mut test_mask = Array1::from_elem(n_samples, false);
-                for &idx in &test_indices {
-                    test_mask[idx] = true;
+                let mut test_indices = test_indices_unsorted.clone();
+                test_indices.sort_unstable();
+
+                let test_mask = Self::mask_from_indices(n_samples, &test_indices);
+                let train_indices: Vec<usize> =
+                    (0..n_samples).filter(|idx| !test_mask[*idx]).collect();
+                if train_indices.is_empty() {
+                    log::warn!("Fold {} has no training samples; skipping.", fold_idx);
+                    return local_assignments;
                 }
 
-                // Filter the experiment to create training and testing sets
-                let train_exp = experiment.filter(&train_mask);
-                let test_exp = experiment.filter(&test_mask);
+                let mut selected_train_indices =
+                    Self::sample_training_indices(labels, &train_indices, class_pct);
+                if selected_train_indices.is_empty() {
+                    log::warn!(
+                        "Fold {} has no training samples after sampling; skipping.",
+                        fold_idx
+                    );
+                    return local_assignments;
+                }
 
-                log::trace!(
-                    "Preparing fold {} with {} training samples ({} targets and {} decoys) and {} testing samples ({} targets and {} decoys)",
-                    i,
-                    train_exp.x.nrows(),
-                    train_exp.y.iter().filter(|&&x| x == 1).count(),
-                    train_exp.y.iter().filter(|&&x| x == -1).count(),
-                    test_exp.x.nrows(),
-                    test_exp.y.iter().filter(|&&x| x == 1).count(),
-                    test_exp.y.iter().filter(|&&x| x == -1).count()
+                selected_train_indices.sort_unstable();
+
+                let train_mask = Self::mask_from_indices(n_samples, &selected_train_indices);
+                let mut train_exp = experiment.filter(&train_mask);
+                train_exp.y = Array1::from_vec(
+                    selected_train_indices
+                        .iter()
+                        .map(|&idx| labels[idx])
+                        .collect(),
                 );
+                Self::remove_unlabeled_psms(&mut train_exp);
 
-                (train_exp, test_exp)
+                let has_pos = train_exp.y.iter().any(|&v| v == 1);
+                let has_neg = train_exp.y.iter().any(|&v| v == -1);
+                if !(has_pos && has_neg) {
+                    log::warn!(
+                        "Fold {} lacks positive or negative examples after filtering; skipping.",
+                        fold_idx
+                    );
+                    return local_assignments;
+                }
+
+                fold_model.fit(&train_exp.x, train_exp.y.as_slice(), None, None);
+
+                let test_exp = experiment.filter(&test_mask);
+                let fold_scores = fold_model.predict_proba(&test_exp.x);
+                for (local_idx, &global_idx) in test_indices.iter().enumerate() {
+                    local_assignments.push((global_idx, fold_scores[local_idx]));
+                }
+
+                local_assignments
             })
-            .collect()
+            .collect();
+
+        for fold_assignment in fold_results {
+            for (idx, score) in fold_assignment {
+                assigned[idx] = Some(score);
+            }
+        }
+
+        let mut filled = Vec::with_capacity(n_samples);
+        for (idx, maybe_score) in assigned.into_iter().enumerate() {
+            filled.push(maybe_score.unwrap_or_else(|| {
+                log::debug!(
+                    "Falling back to previous score for PSM {} due to missing fold score",
+                    idx
+                );
+                fallback_scores[idx]
+            }));
+        }
+        Array1::from_vec(filled)
     }
 
     /// Fit the SemiSupervisedLearner
@@ -313,83 +390,68 @@ impl SemiSupervisedLearner {
             x
         };
 
-        let mut experiment = Experiment::new(x.clone(), y.clone(), psm_metadata.clone());
+        let mut experiment = Experiment::new(x, y, psm_metadata);
 
         experiment.log_input_data_summary();
 
-        // Get initial best feature
-        let (_best_feat, _best_positives, mut new_labels, best_desc, _best_feature_scores) =
+        // Get initial best feature to seed labels/scores.
+        let (_, _, mut labels, _best_desc, mut current_scores) =
             self.init_best_feature(&experiment, self.train_fdr);
 
-        experiment.y = new_labels.clone();
+        let target_mask = experiment.y.mapv(|&v| v == 1);
+        let folds = self.build_spectrum_folds(&experiment, self.xeval_num_iter.max(2));
 
-        let folds = self.create_folds(
-            &experiment,
-            self.xeval_num_iter,
-            self.class_pct.map(|(t, _d)| t),
-            self.class_pct.map(|(_t, d)| d),
-        );
-
-        for (fold, (mut train_exp, test_exp)) in folds.into_iter().enumerate() {
-            let n_samples = experiment.x.nrows();
-            log::info!(
-                "Learning on Cross-Validation Fold: {} with {} training samples",
-                fold,
-                train_exp.x.nrows()
+        if folds.len() < 2 {
+            log::warn!(
+                "Only {} fold(s) were created; cross-validation may be unstable.",
+                folds.len()
             );
-
-            let mut all_predictions = Array1::zeros(n_samples);
-
-            self.remove_unlabeled_psms(&mut train_exp);
-
-            train_exp.split_for_xval(0.80, false);
-
-            let train_indices: Vec<usize> = train_exp
-                .is_train
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &val)| if val { Some(i) } else { None })
-                .collect();
-
-            let test_indices: Vec<usize> = train_exp
-                .is_train
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &val)| if !val { Some(i) } else { None })
-                .collect();
-
-            let train_x_subset = train_exp.x.select_rows(&train_indices);
-            let train_y_subset = train_exp.y.select(&train_indices);
-            let eval_x_subset = train_exp.x.select_rows(&test_indices);
-            let eval_y_subset = train_exp.y.select(&test_indices);
-
-            self.model.fit(
-                &train_x_subset,
-                train_y_subset.as_slice(),
-                Some(&eval_x_subset),
-                Some(eval_y_subset.as_slice()),
-            );
-
-            let fold_predictions = Array1::from(self.model.predict_proba(&test_exp.x));
-
-            // Update predictions
-            for (i, pred) in fold_predictions.iter().enumerate() {
-                all_predictions[test_exp.tg_num_id[i] as usize] = *pred;
-            }
-
-            new_labels = experiment.update_labels(&all_predictions, self.train_fdr, best_desc);
-            experiment.y = new_labels;
-
-            experiment.update_rank_feature(&all_predictions, &experiment.psm_metadata.clone());
         }
 
-        // Final prediction on the entire dataset
-        log::info!("Final prediction on the entire dataset");
-        let mut experiment = Experiment::new(x, y, psm_metadata);
+        if self.max_iterations == 0 {
+            log::info!(
+                "max_iterations set to 0; returning initial feature scores without refinement."
+            );
+        }
 
-        // self.model
-        //     .fit(&experiment.x, &experiment.y.to_vec(), None, None);
-        let mut final_predictions = Array1::from(self.model.predict_proba(&experiment.x));
+        let mut iter = 0usize;
+        while iter < self.max_iterations {
+            log::info!(
+                "Semi-supervised iteration {}/{}",
+                iter + 1,
+                self.max_iterations
+            );
+
+            let fold_scores =
+                self.score_with_cross_validation(&experiment, &folds, &labels, &current_scores);
+
+            let updated_labels =
+                update_labels_from_scores(&fold_scores, &target_mask, self.train_fdr, true);
+
+            let changed = updated_labels
+                .iter()
+                .zip(labels.iter())
+                .any(|(a, b)| a != b);
+
+            current_scores = fold_scores;
+            labels = updated_labels;
+
+            if !changed {
+                log::info!("Converged after {} iteration(s).", iter + 1);
+                break;
+            }
+
+            iter += 1;
+        }
+
+        if iter == self.max_iterations && self.max_iterations > 0 {
+            log::info!(
+                "Reached maximum iterations ({}); using the latest scores.",
+                self.max_iterations
+            );
+        }
+
+        let mut final_predictions = current_scores.clone();
 
         // Log basic statistics of final predictions before normalization so
         // we can see whether they are already constant (which would lead to
@@ -449,6 +511,26 @@ impl SemiSupervisedLearner {
 
         Ok((final_predictions, updated_ranks))
     }
+}
+
+fn update_labels_from_scores(
+    scores: &Array1<f32>,
+    targets: &Array1<bool>,
+    eval_fdr: f32,
+    desc: bool,
+) -> Array1<i32> {
+    let qvals = tdc(scores, targets, desc);
+    let unlabeled = (&qvals.mapv(|&v| v > eval_fdr)) & targets;
+
+    let mut new_labels = Array1::ones(qvals.len());
+    for (i, &is_target) in targets.iter().enumerate() {
+        if !is_target {
+            new_labels[i] = -1;
+        } else if unlabeled[i] {
+            new_labels[i] = 0;
+        }
+    }
+    new_labels
 }
 
 #[cfg(test)]
@@ -539,8 +621,16 @@ mod tests {
             early_stopping_rounds: 10,
             verbose_eval: false,
         };
-        let mut learner =
-            SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)), false, false);
+        let mut learner = SemiSupervisedLearner::new(
+            xgb_params,
+            0.001,
+            1.0,
+            2,
+            10,
+            Some((0.2, 0.5)),
+            false,
+            false,
+        );
         let metadata = crate::data_handling::PsmMetadata {
             file_id: vec![0usize; x.nrows()],
             spec_id: vec!["spec".to_string(); x.nrows()],
@@ -576,8 +666,16 @@ mod tests {
             polynomial_kernel_constant: 1.0,
             polynomial_kernel_degree: 3.0,
         };
-        let mut learner =
-            SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)), false, false);
+        let mut learner = SemiSupervisedLearner::new(
+            params,
+            0.001,
+            1.0,
+            1000,
+            10,
+            Some((0.2, 0.5)),
+            false,
+            false,
+        );
         let metadata = crate::data_handling::PsmMetadata {
             file_id: vec![0usize; x.nrows()],
             spec_id: vec!["spec".to_string(); x.nrows()],

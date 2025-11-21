@@ -8,9 +8,9 @@ use light_svm::{
     svc::{ClassStrategy, DecisionScores, LinearSVC},
 };
 
+use crate::config::{ModelConfig, ModelType};
 use crate::math::Array2;
 use crate::models::classifier_trait::ClassifierModel;
-use crate::config::{ModelConfig, ModelType};
 
 pub struct SVMClassifier {
     params: ModelConfig,
@@ -135,6 +135,10 @@ impl ClassifierModel for SVMClassifier {
 
     fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
         SVMClassifier::predict_proba(self, x)
+    }
+
+    fn clone_box(&self) -> Box<dyn ClassifierModel> {
+        Box::new(SVMClassifier::new(self.params.clone()))
     }
 }
 

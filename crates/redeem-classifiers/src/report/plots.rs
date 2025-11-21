@@ -257,7 +257,7 @@ mod tests {
         let x_title = "Filenames";
         let y_title = "Scores";
 
-    let plot = plot_boxplot(&scores, &filenames, title, x_title, y_title).unwrap();
+        let plot = plot_boxplot(&scores, &filenames, title, x_title, y_title).unwrap();
 
         plot.write_html("test_plot_boxplot.html");
 
@@ -283,7 +283,7 @@ mod tests {
         let x_title = "Filenames";
         let y_title = "Scores";
 
-    plot_boxplot(&scores, &filenames, title, x_title, y_title).unwrap();
+        plot_boxplot(&scores, &filenames, title, x_title, y_title).unwrap();
     }
 
     #[test]
@@ -307,7 +307,7 @@ mod tests {
         let x_title = "X";
         let y_title = "Y";
 
-    let plot = plot_scatter(&x, &y, &labels, title, x_title, y_title).unwrap();
+        let plot = plot_scatter(&x, &y, &labels, title, x_title, y_title).unwrap();
 
         plot.write_html("test_plot_scatter.html");
     }

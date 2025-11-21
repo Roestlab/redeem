@@ -10,8 +10,8 @@ fn main() {
 
 #[cfg(feature = "xgboost")]
 fn run_xgb_synthetic() {
-    use redeem_classifiers::math::{Array1, Array2};
     use redeem_classifiers::config::ModelType;
+    use redeem_classifiers::math::{Array1, Array2};
     use redeem_classifiers::models::xgboost::XGBoostClassifier;
 
     env_logger::init();

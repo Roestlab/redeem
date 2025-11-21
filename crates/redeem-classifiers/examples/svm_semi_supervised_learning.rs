@@ -6,15 +6,15 @@ use {
     anyhow::Context,
     csv::ReaderBuilder,
     maud::html,
+    redeem_classifiers::config::ModelType,
+    redeem_classifiers::data_handling::PsmMetadata,
+    redeem_classifiers::math::{Array1, Array2},
+    redeem_classifiers::psm_scorer::SemiSupervisedLearner,
+    redeem_classifiers::report::plots::{plot_pp, plot_score_histogram},
     report_builder::{Report, ReportSection},
     std::error::Error,
     std::fs::File,
     std::io::{BufReader, Write},
-    redeem_classifiers::math::{Array1, Array2},
-    redeem_classifiers::data_handling::PsmMetadata,
-    redeem_classifiers::config::ModelType,
-    redeem_classifiers::psm_scorer::SemiSupervisedLearner,
-    redeem_classifiers::report::plots::{plot_pp, plot_score_histogram},
 };
 
 fn main() -> Result<()> {
@@ -138,6 +138,7 @@ fn run_psm_scorer(
         0.001,
         1.0,
         500,
+        10,
         Some((0.15, 1.0)),
         scale_features,
         normalize_scores,
@@ -154,7 +155,7 @@ fn run_psm_scorer(
     _metadata: &redeem_classifiers::data_handling::PsmMetadata,
     _scale_features: bool,
     _normalize_scores: bool,
-)-> Result<redeem_classifiers::math::Array1<f32>> {
+) -> Result<redeem_classifiers::math::Array1<f32>> {
     Err(anyhow::Error::msg(
         "SVM is not available in this build. Please enable the svm feature.",
     ))

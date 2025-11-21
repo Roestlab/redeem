@@ -8,7 +8,7 @@ use crate::math::Array2;
 /// learner. This mirrors the existing internal `SemiSupervisedModel` API but
 /// centralizes the contract in the `models` module so implementations can live
 /// next to model code.
-pub trait ClassifierModel {
+pub trait ClassifierModel: Send {
     /// Fit the model. `y` uses the crate convention (1 for target, -1 for decoy)
     fn fit(
         &mut self,
@@ -24,6 +24,11 @@ pub trait ClassifierModel {
     /// Predict probabilities (0..1) when available. Implementations that only
     /// produce margins should convert appropriately.
     fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32>;
+
+    /// Create a boxed clone configured identically to `self` but with no
+    /// trained state. This is used to spawn per-fold models so each fold can
+    /// train independently.
+    fn clone_box(&self) -> Box<dyn ClassifierModel>;
 
     /// Optional human readable name for the model
     fn name(&self) -> &str {
