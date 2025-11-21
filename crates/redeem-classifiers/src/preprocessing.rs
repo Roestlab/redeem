@@ -23,7 +23,10 @@ impl Scaler {
 /// columns are features.
 pub fn fit_scaler(x: &Array2<f32>) -> Scaler {
     let (nrows, ncols) = x.shape();
-    assert!(nrows > 0 && ncols > 0, "fit_scaler requires non-empty matrix");
+    assert!(
+        nrows > 0 && ncols > 0,
+        "fit_scaler requires non-empty matrix"
+    );
 
     let mut mean = vec![0.0f32; ncols];
     for r in 0..nrows {

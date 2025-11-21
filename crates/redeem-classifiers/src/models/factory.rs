@@ -1,24 +1,22 @@
-use crate::models::utils::ModelConfig;
 use crate::models::classifier_trait::ClassifierModel;
+use crate::config::ModelConfig;
 
 /// Build a boxed classifier model from a `ModelConfig`.
 /// Currently this is a thin factory implemented as a single function.
 pub fn build_model(params: ModelConfig) -> Box<dyn ClassifierModel> {
     match params.model_type {
+        #[cfg(feature = "xgboost")]
         crate::config::ModelType::XGBoost { .. } => {
-            #[cfg(feature = "xgboost")]
-            {
-                return Box::new(crate::models::xgboost::XGBoostClassifier::new(params));
-            }
-
-            #[cfg(not(feature = "xgboost"))]
-            {
-                panic!("xgboost feature is not enabled");
-            }
+            Box::new(crate::models::xgboost::XGBoostClassifier::new(params))
         }
-    crate::config::ModelType::GBDT { .. } => Box::new(crate::models::gbdt::GBDTClassifier::new(params)),
-    #[cfg(feature = "svm")]
-    crate::config::ModelType::SVM { .. } => Box::new(crate::models::svm::SVMClassifier::new(params)),
-    _ => panic!("unsupported or disabled model feature requested in ModelConfig"),
+
+        crate::config::ModelType::GBDT { .. } => Box::new(crate::models::gbdt::GBDTClassifier::new(params)),
+
+        #[cfg(feature = "svm")]
+        crate::config::ModelType::SVM { .. } => Box::new(crate::models::svm::SVMClassifier::new(params)),
+
+        // When compiled, `ModelType` only contains the variants enabled by
+        // features. The above arms are exhaustive for the compiled enum, so
+        // no catch-all arm is necessary.
     }
 }

@@ -1,22 +1,40 @@
-use anyhow::{Context, Result};
-use csv::ReaderBuilder;
-use maud::html;
-use anyhow::anyhow;
+use anyhow::Result;
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufReader, Write};
-use std::process;
-
-use redeem_classifiers::data_handling::PsmMetadata;
-use redeem_classifiers::math::{Array1, Array2};
-use redeem_classifiers::models::utils::ModelType;
-use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
-use redeem_classifiers::preprocessing;
-use redeem_classifiers::report::{
-    plots::{plot_pp, plot_score_histogram},
-    report::{Report, ReportSection},
+// Feature-gated heavy imports: keep these inside the xgboost cfg so the
+// example compiles even when the `xgboost` feature isn't enabled.
+#[cfg(feature = "xgboost")]
+use {
+    anyhow::anyhow,
+    anyhow::Context,
+    csv::ReaderBuilder,
+    maud::html,
+    report_builder::{Report, ReportSection},
+    std::error::Error,
+    std::fs::File,
+    std::io::{BufReader, Write},
+    redeem_classifiers::math::{Array1, Array2},
+    redeem_classifiers::data_handling::PsmMetadata,
+    redeem_classifiers::config::ModelType,
+    redeem_classifiers::psm_scorer::SemiSupervisedLearner,
+    redeem_classifiers::report::plots::{plot_pp, plot_score_histogram},
 };
+
+fn main() -> Result<()> {
+    #[cfg(feature = "xgboost")]
+    {
+        return run_xgb_example();
+    }
+
+    eprintln!(
+        "xgboost feature not enabled for this build; enable with --features xgboost to run this example"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "xgboost")]
+// The full example body is implemented below as `run_xgb_example` (re-purposed
+// from the original `main`). Keep the heavy imports gated to avoid leaking
+// feature-only types into non-xgboost builds.
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -25,6 +43,7 @@ use redeem_classifiers::report::{
 ///
 /// # Returns
 /// A tuple of (`x`, `y`, `PsmMetadata`)
+#[cfg(feature = "xgboost")]
 pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMetadata)> {
     let file = File::open(path)?;
     let mut reader = ReaderBuilder::new()
@@ -87,6 +106,7 @@ pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMet
     Ok((x, y, metadata))
 }
 
+#[cfg(feature = "xgboost")]
 fn save_predictions_to_csv(
     predictions: &Array1<f32>,
     file_path: &str,
@@ -125,18 +145,23 @@ fn run_psm_scorer(
         normalize_scores,
     );
     // `fit` expects owned values and returns Result<(predictions, ranks)>
-    let (predictions, _ranks) = learner
-        .fit(x.clone(), y.clone(), metadata.clone())?;
+    let (predictions, _ranks) = learner.fit(x.clone(), y.clone(), metadata.clone())?;
 
     Ok(predictions)
 }
 
 #[cfg(not(feature = "xgboost"))]
-fn run_psm_scorer(x: &Array2<f32>, y: &Array1<i32>, metadata: &PsmMetadata) -> Result<Array1<f32>> {
+#[allow(dead_code)]
+fn run_psm_scorer(
+    _x: &redeem_classifiers::math::Array2<f32>,
+    _y: &redeem_classifiers::math::Array1<i32>,
+    _metadata: &redeem_classifiers::data_handling::PsmMetadata,
+) -> Result<redeem_classifiers::math::Array1<f32>> {
     unimplemented!("xgboost is not available in this build. Please enable the xgboost feature.");
 }
 
-fn main() -> Result<()> {
+#[cfg(feature = "xgboost")]
+fn run_xgb_example() -> Result<()> {
     env_logger::init();
 
     // Load the test data from the TSV files
@@ -157,13 +182,23 @@ fn main() -> Result<()> {
     // Convert labels to Vec and print a short sample
     let y_vec_full = y.to_vec();
     let y_sample = y_vec_full.len().min(10);
-    println!("Labels: len={} first {} = {:?}", y_vec_full.len(), y_sample, &y_vec_full[..y_sample]);
+    println!(
+        "Labels: len={} first {} = {:?}",
+        y_vec_full.len(),
+        y_sample,
+        &y_vec_full[..y_sample]
+    );
 
     // Evaluate the predictions (print concise sample)
     // Convert predictions to Vec and print a short sample
     let preds_vec_full = predictions.to_vec();
     let p_sample = preds_vec_full.len().min(10);
-    println!("Predictions: len={} first {} = {:?}", preds_vec_full.len(), p_sample, &preds_vec_full[..p_sample]);
+    println!(
+        "Predictions: len={} first {} = {:?}",
+        preds_vec_full.len(),
+        p_sample,
+        &preds_vec_full[..p_sample]
+    );
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
 
     // Create a report similar to the GBDT example
@@ -182,7 +217,7 @@ fn main() -> Result<()> {
 
     // convert predictions and labels
     let preds_vec = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
-    let y_vec = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+    let y_vec = y.iter().copied().collect::<Vec<i32>>();
 
     let plot = plot_score_histogram(&preds_vec, &y_vec, "XGBoost Score", "Score")
         .map_err(|e| anyhow!(e))?;

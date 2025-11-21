@@ -47,11 +47,11 @@ impl<T> Array1<T> {
         (self.len(),)
     }
 
-    pub fn mapv<U, F>(&self, mut f: F) -> Array1<U>
+    pub fn mapv<U, F>(&self, f: F) -> Array1<U>
     where
         F: FnMut(&T) -> U,
     {
-        Array1::from_vec(self.data.iter().map(|v| f(v)).collect())
+        Array1::from_vec(self.data.iter().map(f).collect())
     }
 
     pub fn select(&self, indices: &[usize]) -> Array1<T>
@@ -132,7 +132,7 @@ impl<T> IndexMut<usize> for Array1<T> {
     }
 }
 
-impl<'a, 'b> BitAnd<&'b Array1<bool>> for &'a Array1<bool> {
+impl<'b> BitAnd<&'b Array1<bool>> for &Array1<bool> {
     type Output = Array1<bool>;
 
     fn bitand(self, rhs: &'b Array1<bool>) -> Self::Output {
@@ -145,7 +145,7 @@ impl<'a, 'b> BitAnd<&'b Array1<bool>> for &'a Array1<bool> {
     }
 }
 
-impl<'a, 'b> BitOr<&'b Array1<bool>> for &'a Array1<bool> {
+impl<'b> BitOr<&'b Array1<bool>> for &Array1<bool> {
     type Output = Array1<bool>;
 
     fn bitor(self, rhs: &'b Array1<bool>) -> Self::Output {

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Central configuration for models in the crate.
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -50,7 +51,12 @@ impl Default for ModelType {
 }
 
 impl ModelType {
-    pub fn from_str(s: &str) -> Result<Self, String> {
+}
+
+impl FromStr for ModelType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "gbdt" => Ok(ModelType::GBDT {
                 max_depth: 6,

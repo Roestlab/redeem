@@ -8,8 +8,9 @@
 use xgb::{
     parameters::{
         learning::LearningTaskParametersBuilder,
+        learning::Objective,
         tree::{TreeBoosterParametersBuilder, TreeMethod},
-        BoosterParametersBuilder, BoosterType, learning::Objective,
+        BoosterParametersBuilder, BoosterType,
     },
     Booster, DMatrix,
 };
@@ -47,8 +48,8 @@ fn xgb_train_produces_trees() {
         .build()
         .unwrap();
 
-    let mut bst = Booster::new_with_cached_dmats(&booster_params, &[&dmat])
-        .expect("create booster");
+    let mut bst =
+        Booster::new_with_cached_dmats(&booster_params, &[&dmat]).expect("create booster");
 
     // Train for a few rounds using the explicit update loop (workaround).
     for i in 0..5i32 {

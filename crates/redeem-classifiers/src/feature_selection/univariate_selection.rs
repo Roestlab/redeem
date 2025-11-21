@@ -23,6 +23,9 @@ use crate::math::{Array1, Array2};
 /// # Examples
 ///
 /// ```rust
+/// use redeem_classifiers::math::{Array1, Array2};
+/// use redeem_classifiers::feature_selection::univariate_selection::row_norms;
+///
 /// let x = Array2::from_shape_vec((3, 3), vec![
 ///     1.0, 2.0, 3.0,
 ///     4.0, 5.0, 6.0,
@@ -57,10 +60,10 @@ pub fn row_norms(x: &Array2<f64>, squared: bool) -> Array1<f64> {
 ///   the data matrix (features).
 /// * `y` - A 1D array of shape (n_samples,) representing the target vector.
 /// * `center` - A boolean indicating whether to center the data.
-///     If true, both `X` and `y` will be centered by subtracting their means.
+///   If true, both `X` and `y` will be centered by subtracting their means.
 /// * `force_finite` - A boolean indicating whether to force the correlation
-///     coefficients to be finite. If true, non-finite values will be replaced
-///     with 0.0.
+///   coefficients to be finite. If true, non-finite values will be replaced
+///   with 0.0.
 ///
 /// # Returns
 ///
@@ -70,8 +73,11 @@ pub fn row_norms(x: &Array2<f64>, squared: bool) -> Array1<f64> {
 /// # Examples
 ///
 /// ```rust
-/// let x = Array2::from_shape_vec((10, 5), vec![/* your data */]).unwrap();
-/// let y = Array1::from_vec(vec![/* your target */]);
+/// use redeem_classifiers::math::{Array1, Array2};
+/// use redeem_classifiers::feature_selection::univariate_selection::r_regression;
+///
+/// let x = Array2::from_shape_vec((10, 5), (0..50).map(|i| i as f64).collect()).unwrap();
+/// let y = Array1::from_vec((0..10).map(|i| i as f64).collect());
 /// let correlation_coefficients = r_regression(&x, &y, true, true);
 /// println!("Correlation coefficients: {:?}", correlation_coefficients);
 /// ```
@@ -174,8 +180,11 @@ pub fn r_regression(
 /// # Examples
 ///
 /// ```rust
-/// let x = Array2::from_shape_vec((10, 5), vec![/* your data */]).unwrap();
-/// let y = Array1::from_vec(vec![/* your target */]);
+/// use redeem_classifiers::math::{Array1, Array2};
+/// use redeem_classifiers::feature_selection::univariate_selection::f_regression;
+///
+/// let x = Array2::from_shape_vec((10, 5), (0..50).map(|i| i as f64).collect()).unwrap();
+/// let y = Array1::from_vec((0..10).map(|i| i as f64).collect());
 /// let (f_statistic, p_values) = f_regression(&x, &y, true, true);
 /// println!("F-statistic: {:?}", f_statistic);
 /// println!("p-values: {:?}", p_values);

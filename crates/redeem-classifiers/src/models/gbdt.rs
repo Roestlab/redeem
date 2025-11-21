@@ -3,8 +3,8 @@ use gbdt::decision_tree::{Data, DataVec};
 use gbdt::gradient_boost::GBDT;
 
 use crate::math::Array2;
-use crate::models::utils::{ModelConfig, ModelType};
 use crate::models::classifier_trait::ClassifierModel;
+use crate::config::{ModelConfig, ModelType};
 
 /// Gradient Boosting Decision Tree (GBDT) classifier
 pub struct GBDTClassifier {
@@ -88,7 +88,13 @@ impl GBDTClassifier {
 }
 
 impl ClassifierModel for GBDTClassifier {
-    fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>) {
+    fn fit(
+        &mut self,
+        x: &Array2<f32>,
+        y: &[i32],
+        x_eval: Option<&Array2<f32>>,
+        y_eval: Option<&[i32]>,
+    ) {
         GBDTClassifier::fit(self, x, y, x_eval, y_eval)
     }
 
@@ -126,7 +132,7 @@ mod tests {
         ]);
 
         // Convert y to [0, 1]
-    let y = y.mapv(|x| if *x == 1 { 0 } else { 1 });
+        let y = y.mapv(|x| if *x == 1 { 0 } else { 1 });
 
         println!("y.to_vec(): {:?}", y.to_vec());
 

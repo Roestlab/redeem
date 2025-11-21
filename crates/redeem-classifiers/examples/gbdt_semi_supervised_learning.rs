@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use csv::ReaderBuilder;
 use maud::html;
 use std::error::Error;
@@ -8,12 +8,10 @@ use std::io::Write;
 
 use redeem_classifiers::data_handling::PsmMetadata;
 use redeem_classifiers::math::{Array1, Array2};
-use redeem_classifiers::models::utils::ModelType;
+use redeem_classifiers::config::ModelType;
 use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
-use redeem_classifiers::report::{
-    plots::{plot_pp, plot_score_histogram},
-    report::{Report, ReportSection},
-};
+use redeem_classifiers::report::plots::{plot_pp, plot_score_histogram};
+use report_builder::{Report, ReportSection};
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -84,6 +82,7 @@ pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMet
     Ok((x, y, metadata))
 }
 
+#[allow(dead_code)]
 fn save_predictions_to_csv(
     predictions: &Array1<f32>,
     file_path: &str,
@@ -134,12 +133,22 @@ fn main() -> Result<()> {
     // Convert labels to Vec and print a short sample
     let y_vec_full = y.to_vec();
     let y_sample = y_vec_full.len().min(10);
-    println!("Labels: len={} first {} = {:?}", y_vec_full.len(), y_sample, &y_vec_full[..y_sample]);
+    println!(
+        "Labels: len={} first {} = {:?}",
+        y_vec_full.len(),
+        y_sample,
+        &y_vec_full[..y_sample]
+    );
 
     // Evaluate the predictions (print concise sample)
     let preds_vec: Vec<f64> = predictions.iter().map(|&x| x as f64).collect();
     let p_sample = preds_vec.len().min(10);
-    println!("Predictions: len={} first {} = {:?}", preds_vec.len(), p_sample, &preds_vec[..p_sample]);
+    println!(
+        "Predictions: len={} first {} = {:?}",
+        preds_vec.len(),
+        p_sample,
+        &preds_vec[..p_sample]
+    );
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
 
     // Create a new report
@@ -162,7 +171,7 @@ fn main() -> Result<()> {
     // convert the predictions to Array1<f32> to Vec<f64>
     let predictions = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
     // convert the y to Array1<i32> to Vec<i32>
-    let y = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+    let y = y.iter().copied().collect::<Vec<i32>>();
 
     let plot = plot_score_histogram(&predictions, &y, "GBDT Score", "Score").unwrap();
     let pp_plot = plot_pp(&predictions, &y, "GBDT Score").unwrap();

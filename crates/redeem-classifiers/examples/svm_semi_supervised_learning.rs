@@ -1,20 +1,38 @@
-use anyhow::{Context, Result};
-use csv::ReaderBuilder;
-use maud::html;
-use anyhow::anyhow;
+use anyhow::Result;
 
-use redeem_classifiers::report::{
-    plots::{plot_pp, plot_score_histogram},
-    report::{Report, ReportSection},
+#[cfg(feature = "svm")]
+use {
+    anyhow::anyhow,
+    anyhow::Context,
+    csv::ReaderBuilder,
+    maud::html,
+    report_builder::{Report, ReportSection},
+    std::error::Error,
+    std::fs::File,
+    std::io::{BufReader, Write},
+    redeem_classifiers::math::{Array1, Array2},
+    redeem_classifiers::data_handling::PsmMetadata,
+    redeem_classifiers::config::ModelType,
+    redeem_classifiers::psm_scorer::SemiSupervisedLearner,
+    redeem_classifiers::report::plots::{plot_pp, plot_score_histogram},
 };
-use std::fs::File;
-use std::io::BufReader;
 
-use redeem_classifiers::data_handling::PsmMetadata;
-use redeem_classifiers::math::{Array1, Array2};
-use redeem_classifiers::models::utils::ModelType;
-use redeem_classifiers::psm_scorer::SemiSupervisedLearner;
-use redeem_classifiers::preprocessing;
+fn main() -> Result<()> {
+    #[cfg(feature = "svm")]
+    {
+        return run_svm_example();
+    }
+
+    eprintln!(
+        "svm feature not enabled for this build; enable with --features svm to run svm examples"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "svm")]
+// The heavier example implementation (originally `main`) is defined below as
+// `run_svm_example`; we keep these types and imports gated so the outer
+// `main` compiles in non-svm builds without referencing feature-only types.
 
 /// Load a test PSM CSV file into feature matrix, labels, and metadata.
 ///
@@ -23,6 +41,7 @@ use redeem_classifiers::preprocessing;
 ///
 /// # Returns
 /// A tuple of (`x`, `y`, `PsmMetadata`)
+#[cfg(feature = "svm")]
 pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMetadata)> {
     let file = File::open(path)?;
     let mut reader = ReaderBuilder::new()
@@ -128,17 +147,21 @@ fn run_psm_scorer(
 }
 
 #[cfg(not(feature = "svm"))]
+#[allow(dead_code)]
 fn run_psm_scorer(
-    _x: &Array2<f32>,
-    _y: &Array1<i32>,
-    _metadata: &PsmMetadata,
+    _x: &redeem_classifiers::math::Array2<f32>,
+    _y: &redeem_classifiers::math::Array1<i32>,
+    _metadata: &redeem_classifiers::data_handling::PsmMetadata,
     _scale_features: bool,
     _normalize_scores: bool,
-) -> Result<Array1<f32>> {
-    Err(anyhow!("SVM is not available in this build. Please enable the svm feature."))
+)-> Result<redeem_classifiers::math::Array1<f32>> {
+    Err(anyhow::Error::msg(
+        "SVM is not available in this build. Please enable the svm feature.",
+    ))
 }
 
-fn main() -> Result<()> {
+#[cfg(feature = "svm")]
+fn run_svm_example() -> Result<()> {
     env_logger::init();
     // Accept CSV path (and optional number of columns) from CLI args so example is easier to run.
     // Usage: cargo run --example svm_semi_supervised_learning --features svm -- <csv-path> [num_columns]
@@ -173,13 +196,23 @@ fn main() -> Result<()> {
     // Convert labels to Vec and print a short sample
     let y_vec_full = y.to_vec();
     let y_sample = y_vec_full.len().min(10);
-    println!("Labels: len={} first {} = {:?}", y_vec_full.len(), y_sample, &y_vec_full[..y_sample]);
+    println!(
+        "Labels: len={} first {} = {:?}",
+        y_vec_full.len(),
+        y_sample,
+        &y_vec_full[..y_sample]
+    );
 
     // Evaluate the predictions (print concise sample)
     // Convert predictions to Vec and print a short sample
     let preds_vec_full = predictions.to_vec();
     let p_sample = preds_vec_full.len().min(10);
-    println!("Predictions: len={} first {} = {:?}", preds_vec_full.len(), p_sample, &preds_vec_full[..p_sample]);
+    println!(
+        "Predictions: len={} first {} = {:?}",
+        preds_vec_full.len(),
+        p_sample,
+        &preds_vec_full[..p_sample]
+    );
     // save_predictions_to_csv(&predictions, "/home/singjc/Documents/github/sage_bruker/20241115_single_file_redeem/predictions.csv").unwrap();
 
     // Create a report similar to the GBDT example
@@ -200,8 +233,8 @@ fn main() -> Result<()> {
     let preds_vec = predictions.iter().map(|&x| x as f64).collect::<Vec<f64>>();
     let y_vec = y.iter().map(|&x| x as i32).collect::<Vec<i32>>();
 
-    let plot = plot_score_histogram(&preds_vec, &y_vec, "SVM Score", "Score")
-        .map_err(|e| anyhow!(e))?;
+    let plot =
+        plot_score_histogram(&preds_vec, &y_vec, "SVM Score", "Score").map_err(|e| anyhow!(e))?;
     let pp_plot = plot_pp(&preds_vec, &y_vec, "SVM Score").map_err(|e| anyhow!(e))?;
 
     let mut plot_section = ReportSection::new("Score Distribution");

@@ -235,7 +235,7 @@ impl Experiment {
             .filter_map(|(i, &m)| if m { Some(i) } else { None })
             .collect();
 
-        fn filter_vec<T: Clone>(v: &Vec<T>, indices: &[usize]) -> Vec<T> {
+        fn filter_vec<T: Clone>(v: &[T], indices: &[usize]) -> Vec<T> {
             indices.iter().map(|&i| v[i].clone()).collect()
         }
 

@@ -6,8 +6,8 @@ use plotly::{BoxPlot, Histogram, Plot, Scatter};
 
 /// Plot a histogram of the scores for the targets and decoys
 pub fn plot_score_histogram(
-    scores: &Vec<f64>,
-    labels: &Vec<i32>,
+    scores: &[f64],
+    labels: &[i32],
     title: &str,
     x_title: &str,
 ) -> Result<Plot, String> {
@@ -48,14 +48,14 @@ pub fn plot_score_histogram(
     Ok(plot)
 }
 
-fn ecdf(data: &mut Vec<f64>) -> (Vec<f64>, Vec<f64>) {
+fn ecdf(data: &mut [f64]) -> (Vec<f64>, Vec<f64>) {
     data.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = data.len() as f64;
     let y: Vec<f64> = (1..=data.len()).map(|i| i as f64 / n).collect();
-    (data.clone(), y)
+    (data.to_vec(), y)
 }
 
-fn interpolate_ecdf(x: &Vec<f64>, y: &Vec<f64>, x_seq: &Vec<f64>) -> Vec<f64> {
+fn interpolate_ecdf(x: &[f64], y: &[f64], x_seq: &[f64]) -> Vec<f64> {
     x_seq
         .iter()
         .map(|&xi| {
@@ -72,7 +72,7 @@ fn interpolate_ecdf(x: &Vec<f64>, y: &Vec<f64>, x_seq: &Vec<f64>) -> Vec<f64> {
 // }
 
 /// Estimate the proportion of null hypotheses (π₀).
-fn estimate_pi0(labels: &Vec<i32>) -> f64 {
+fn estimate_pi0(labels: &[i32]) -> f64 {
     let count_decoys = labels.iter().filter(|&&l| l == -1).count() as f64;
     let count_targets = labels.iter().filter(|&&l| l == 1).count() as f64;
     count_decoys / count_targets
@@ -89,7 +89,7 @@ fn estimate_pi0(labels: &Vec<i32>) -> f64 {
 /// # Returns
 ///
 /// A Plot object containing the P-P plot
-pub fn plot_pp(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot, String> {
+pub fn plot_pp(scores: &[f64], labels: &[i32], title: &str) -> Result<Plot, String> {
     assert_eq!(
         scores.len(),
         labels.len(),
@@ -168,8 +168,8 @@ pub fn plot_pp(scores: &Vec<f64>, labels: &Vec<i32>, title: &str) -> Result<Plot
 ///
 /// A Plot object containing the box plot
 pub fn plot_boxplot(
-    scores: &Vec<Vec<f64>>,
-    filenames: Vec<String>,
+    scores: &[Vec<f64>],
+    filenames: &[String],
     title: &str,
     x_title: &str,
     y_title: &str,
@@ -200,9 +200,9 @@ pub fn plot_boxplot(
 }
 
 pub fn plot_scatter(
-    x: &Vec<Vec<f64>>,
-    y: &Vec<Vec<f64>>,
-    labels: Vec<String>,
+    x: &[Vec<f64>],
+    y: &[Vec<f64>],
+    labels: &[String],
     title: &str,
     x_title: &str,
     y_title: &str,
@@ -253,7 +253,7 @@ mod tests {
         let x_title = "Filenames";
         let y_title = "Scores";
 
-        let plot = plot_boxplot(&scores, filenames, title, x_title, y_title).unwrap();
+    let plot = plot_boxplot(&scores, &filenames, title, x_title, y_title).unwrap();
 
         plot.write_html("test_plot_boxplot.html");
 
@@ -279,7 +279,7 @@ mod tests {
         let x_title = "Filenames";
         let y_title = "Scores";
 
-        plot_boxplot(&scores, filenames, title, x_title, y_title).unwrap();
+    plot_boxplot(&scores, &filenames, title, x_title, y_title).unwrap();
     }
 
     #[test]
@@ -303,7 +303,7 @@ mod tests {
         let x_title = "X";
         let y_title = "Y";
 
-        let plot = plot_scatter(&x, &y, labels, title, x_title, y_title).unwrap();
+    let plot = plot_scatter(&x, &y, &labels, title, x_title, y_title).unwrap();
 
         plot.write_html("test_plot_scatter.html");
     }

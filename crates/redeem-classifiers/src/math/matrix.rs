@@ -124,12 +124,12 @@ impl<T> Array2<T> {
         }
     }
 
-    pub fn mapv<U, F>(&self, mut f: F) -> Array2<U>
+    pub fn mapv<U, F>(&self, f: F) -> Array2<U>
     where
         F: FnMut(&T) -> U,
     {
         Array2 {
-            data: self.data.iter().map(|v| f(v)).collect(),
+            data: self.data.iter().map(f).collect(),
             rows: self.rows,
             cols: self.cols,
         }

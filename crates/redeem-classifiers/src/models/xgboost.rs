@@ -9,8 +9,8 @@ use xgb::{
 };
 
 use crate::math::Array2;
-use crate::models::utils::{ModelConfig, ModelType};
 use crate::models::classifier_trait::ClassifierModel;
+use crate::config::{ModelConfig, ModelType};
 
 fn eval_auc(preds: &[f32], dtrain: &DMatrix) -> f32 {
     let labels = dtrain.get_labels().unwrap();
@@ -96,10 +96,15 @@ impl XGBoostClassifier {
         );
 
         // Convert feature matrix into DMatrix
-    // Log matrix shape info to help diagnose potential shape mismatches
-    debug!("Creating DMatrix from dense data: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
-    // `from_dense` expects the number of rows as the second argument.
-    let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+        // Log matrix shape info to help diagnose potential shape mismatches
+        debug!(
+            "Creating DMatrix from dense data: rows={}, cols={}, len={}",
+            x.nrows(),
+            x.ncols(),
+            x.as_slice().len()
+        );
+        // `from_dense` expects the number of rows as the second argument.
+        let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>())
             .unwrap();
 
@@ -107,7 +112,12 @@ impl XGBoostClassifier {
 
         let mut eval_matrix = None;
         if let (Some(x_e), Some(y_e)) = (x_eval, y_eval) {
-            debug!("Creating eval DMatrix: rows={}, cols={}, len={}", x_e.nrows(), x_e.ncols(), x_e.as_slice().len());
+            debug!(
+                "Creating eval DMatrix: rows={}, cols={}, len={}",
+                x_e.nrows(),
+                x_e.ncols(),
+                x_e.as_slice().len()
+            );
             let mut matrix = DMatrix::from_dense(x_e.as_slice(), x_e.nrows()).unwrap();
             matrix
                 .set_labels(&y_e.iter().map(|&l| l as f32).collect::<Vec<f32>>())
@@ -233,7 +243,12 @@ impl XGBoostClassifier {
     }
 
     pub fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
-        debug!("Creating final DMatrix for prediction: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+        debug!(
+            "Creating final DMatrix for prediction: rows={}, cols={}, len={}",
+            x.nrows(),
+            x.ncols(),
+            x.as_slice().len()
+        );
         let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         // println!("PREDICT: dmat: {:?}", dmat);
         self.booster.as_ref().unwrap().predict(&dmat).unwrap()
@@ -250,13 +265,18 @@ impl XGBoostClassifier {
         }
 
         // Create DMatrix and predict
-        debug!("Creating final DMatrix for prediction: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
+        debug!(
+            "Creating final DMatrix for prediction: rows={}, cols={}, len={}",
+            x.nrows(),
+            x.ncols(),
+            x.as_slice().len()
+        );
         let dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
-    // Use predict_matrix with an explicit config to ensure the full
-    // boosted ensemble is used for prediction. Some builds interpret
-    // the older `XGBoosterPredict` ntree_limit=0 as "use zero trees"
-    // which returns the base_score; using predict_matrix with a large
-    // iteration_end avoids that ambiguity.
+        // Use predict_matrix with an explicit config to ensure the full
+        // boosted ensemble is used for prediction. Some builds interpret
+        // the older `XGBoosterPredict` ntree_limit=0 as "use zero trees"
+        // which returns the base_score; using predict_matrix with a large
+        // iteration_end avoids that ambiguity.
         // Determine the number of trees present in the trained model by
         // saving the model to a JSON buffer and parsing the `num_trees`
         // field. Then use that value as iteration_end so the full
@@ -286,16 +306,24 @@ impl XGBoostClassifier {
         // Also inspect raw margin predictions to see if the model is
         // producing non-zero logits (base_score -> 0 margin -> prob 0.5)
         if let Ok(margins) = bst_ref.predict_margin(&dmat) {
-            debug!("margin sample (first up to 10): {:?}", &margins[..margins.len().min(10)]);
+            debug!(
+                "margin sample (first up to 10): {:?}",
+                &margins[..margins.len().min(10)]
+            );
         } else {
             debug!("failed to get margin predictions");
         }
-    debug!("predict config iteration_end = {}", iteration_end);
-    let (preds, _shape) = bst_ref.predict_matrix(&dmat, &config).unwrap();
+        debug!("predict config iteration_end = {}", iteration_end);
+        let (preds, _shape) = bst_ref.predict_matrix(&dmat, &config).unwrap();
         // Log a small sample of predictions at debug level
         if !preds.is_empty() {
             let sample_end = preds.len().min(10);
-            debug!("[xgb.predict_proba] preds.len() = {}, first {} preds = {:?}", preds.len(), sample_end, &preds[..sample_end]);
+            debug!(
+                "[xgb.predict_proba] preds.len() = {}, first {} preds = {:?}",
+                preds.len(),
+                sample_end,
+                &preds[..sample_end]
+            );
         } else {
             debug!("[xgb.predict_proba] empty prediction vector returned");
         }
@@ -307,7 +335,13 @@ impl XGBoostClassifier {
 // Implement the newer classifier trait so XGBoost can be used via the
 // `models::factory::build_model` factory and as a boxed `ClassifierModel`.
 impl ClassifierModel for XGBoostClassifier {
-    fn fit(&mut self, x: &crate::math::Array2<f32>, y: &[i32], x_eval: Option<&crate::math::Array2<f32>>, y_eval: Option<&[i32]>) {
+    fn fit(
+        &mut self,
+        x: &crate::math::Array2<f32>,
+        y: &[i32],
+        x_eval: Option<&crate::math::Array2<f32>>,
+        y_eval: Option<&[i32]>,
+    ) {
         // delegate to the inherent impl
         XGBoostClassifier::fit(self, x, y, x_eval, y_eval)
     }
@@ -320,7 +354,9 @@ impl ClassifierModel for XGBoostClassifier {
         XGBoostClassifier::predict_proba(self, x)
     }
 
-    fn name(&self) -> &str { "xgboost" }
+    fn name(&self) -> &str {
+        "xgboost"
+    }
 }
 
 #[cfg(test)]
@@ -348,7 +384,7 @@ mod tests {
         ]);
 
         // Convert y to [0, 1]
-    let y = y.mapv(|x| if *x == 1 { 0 } else { 1 });
+        let y = y.mapv(|x| if *x == 1 { 0 } else { 1 });
 
         println!("y.to_vec(): {:?}", y.to_vec());
 
@@ -386,25 +422,28 @@ mod tests {
         // println!("Attribute names: {:?}", attr_names);
 
         // Predict Contributions
-    debug!("Creating DMatrix for contributions: rows={}, cols={}, len={}", x.nrows(), x.ncols(), x.as_slice().len());
-    let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
+        debug!(
+            "Creating DMatrix for contributions: rows={}, cols={}, len={}",
+            x.nrows(),
+            x.ncols(),
+            x.as_slice().len()
+        );
+        let mut dmat = DMatrix::from_dense(x.as_slice(), x.nrows()).unwrap();
         dmat.set_labels(&y.iter().map(|&l| l as f32).collect::<Vec<f32>>())
             .unwrap();
 
-        let contributions = classifier
+        let _contributions = classifier
             .booster
             .as_ref()
             .unwrap()
             .predict_contributions(&dmat)
             .unwrap();
-        // println!("Contributions: {:?}", contributions);
 
-        let interactions = classifier
+        let _interactions = classifier
             .booster
             .as_ref()
             .unwrap()
             .predict_interactions(&dmat)
             .unwrap();
-        // println!("Interactions: {:?}", interactions);
     }
 }

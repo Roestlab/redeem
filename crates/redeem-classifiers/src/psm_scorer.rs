@@ -7,14 +7,11 @@ use crate::data_handling::{Experiment, PsmMetadata};
 use crate::math::{Array1, Array2};
 use crate::preprocessing;
 
-use crate::models::gbdt::GBDTClassifier;
-#[cfg(feature = "svm")]
-use crate::models::svm::SVMClassifier;
-use crate::models::utils::{ModelConfig, ModelType};
-#[cfg(feature = "xgboost")]
-use crate::models::xgboost::XGBoostClassifier;
 use crate::models::classifier_trait::ClassifierModel;
 use crate::models::factory;
+#[cfg(feature = "svm")]
+use crate::models::svm::SVMClassifier;
+use crate::config::{ModelConfig, ModelType};
 
 // Legacy `SemiSupervisedModel` behavior is provided by implementations of
 // `models::classifier_trait::ClassifierModel`. The learner stores a boxed
@@ -57,7 +54,10 @@ impl SemiSupervisedLearner {
     ) -> Self {
         // Centralize construction to the models factory which returns a
         // `Box<dyn ClassifierModel>`.
-        let cfg = ModelConfig { learning_rate, model_type };
+        let cfg = ModelConfig {
+            learning_rate,
+            model_type,
+        };
         let model: Box<dyn ClassifierModel> = factory::build_model(cfg);
 
         SemiSupervisedLearner {
@@ -246,8 +246,8 @@ impl SemiSupervisedLearner {
                 };
 
                 // Combine training and testing indices
-                let train_indices: Vec<_> = train_targets.into_iter().chain(train_decoys.into_iter()).collect();
-                let test_indices: Vec<_> = test_targets.into_iter().chain(test_decoys.into_iter()).collect();
+                let train_indices: Vec<_> = train_targets.into_iter().chain(train_decoys).collect();
+                let test_indices: Vec<_> = test_targets.into_iter().chain(test_decoys).collect();
 
                 // Create masks for training and testing sets
                 let mut train_mask = Array1::from_elem(n_samples, false);
@@ -446,7 +446,6 @@ impl SemiSupervisedLearner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use csv::ReaderBuilder;
     use std::error::Error;
     use std::fs::File;
@@ -454,6 +453,7 @@ mod tests {
 
     use crate::math::{Array1, Array2};
 
+    #[allow(dead_code)]
     fn read_features_tsv(path: &str) -> Result<Array2<f32>, Box<dyn Error>> {
         let mut reader = ReaderBuilder::new()
             .has_headers(false)
@@ -481,6 +481,7 @@ mod tests {
         .map_err(|e| e.into())
     }
 
+    #[allow(dead_code)]
     fn read_labels_tsv(path: &str) -> Result<Array1<i32>, Box<dyn Error>> {
         let mut reader = ReaderBuilder::new()
             .has_headers(false)
@@ -499,6 +500,7 @@ mod tests {
         Ok(Array1::from_vec(labels))
     }
 
+    #[allow(dead_code)]
     fn save_predictions_to_csv(
         predictions: &Array1<f32>,
         file_path: &str,
@@ -530,7 +532,8 @@ mod tests {
             early_stopping_rounds: 10,
             verbose_eval: false,
         };
-        let mut learner = SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)), false, false);
+        let mut learner =
+            SemiSupervisedLearner::new(xgb_params, 0.001, 1.0, 2, Some((0.2, 0.5)), false, false);
         let metadata = crate::data_handling::PsmMetadata {
             file_id: vec![0usize; x.nrows()],
             spec_id: vec!["spec".to_string(); x.nrows()],
@@ -566,7 +569,8 @@ mod tests {
             polynomial_kernel_constant: 1.0,
             polynomial_kernel_degree: 3.0,
         };
-    let mut learner = SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)), false, false);
+        let mut learner =
+            SemiSupervisedLearner::new(params, 0.001, 1.0, 1000, Some((0.2, 0.5)), false, false);
         let metadata = crate::data_handling::PsmMetadata {
             file_id: vec![0usize; x.nrows()],
             spec_id: vec!["spec".to_string(); x.nrows()],

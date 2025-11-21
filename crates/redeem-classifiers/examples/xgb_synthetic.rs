@@ -1,8 +1,19 @@
-use redeem_classifiers::math::{Array1, Array2};
-use redeem_classifiers::models::utils::ModelType;
-use redeem_classifiers::models::xgboost::XGBoostClassifier;
-
 fn main() {
+    #[cfg(feature = "xgboost")]
+    {
+        run_xgb_synthetic();
+        return;
+    }
+
+    eprintln!("xgboost feature not enabled for this build; enable with --features xgboost to run this example");
+}
+
+#[cfg(feature = "xgboost")]
+fn run_xgb_synthetic() {
+    use redeem_classifiers::math::{Array1, Array2};
+    use redeem_classifiers::config::ModelType;
+    use redeem_classifiers::models::xgboost::XGBoostClassifier;
+
     env_logger::init();
 
     // Tiny synthetic dataset: 6 samples, 2 features
@@ -26,7 +37,7 @@ fn main() {
     println!("Synthetic y shape: {:?}", y.shape());
 
     // Model params: small number of boosting rounds for speed
-    let params = redeem_classifiers::models::utils::ModelConfig {
+    let params = redeem_classifiers::config::ModelConfig {
         learning_rate: 0.3,
         model_type: ModelType::XGBoost {
             max_depth: 3,
@@ -44,5 +55,9 @@ fn main() {
     // Predict probabilities / raw outputs
     let preds = clf.predict_proba(&x);
 
-    println!("Predictions len={} first 10 (or less) = {:?}", preds.len(), &preds[..preds.len().min(10)]);
+    println!(
+        "Predictions len={} first 10 (or less) = {:?}",
+        preds.len(),
+        &preds[..preds.len().min(10)]
+    );
 }

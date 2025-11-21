@@ -6,7 +6,13 @@ use crate::math::Array2;
 /// next to model code.
 pub trait ClassifierModel {
     /// Fit the model. `y` uses the crate convention (1 for target, -1 for decoy)
-    fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>);
+    fn fit(
+        &mut self,
+        x: &Array2<f32>,
+        y: &[i32],
+        x_eval: Option<&Array2<f32>>,
+        y_eval: Option<&[i32]>,
+    );
 
     /// Predict raw scores (may be margins or probabilistic depending on impl)
     fn predict(&self, x: &Array2<f32>) -> Vec<f32>;
@@ -16,5 +22,7 @@ pub trait ClassifierModel {
     fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32>;
 
     /// Optional human readable name for the model
-    fn name(&self) -> &str { "classifier" }
+    fn name(&self) -> &str {
+        "classifier"
+    }
 }

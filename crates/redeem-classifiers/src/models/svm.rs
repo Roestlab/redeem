@@ -5,8 +5,8 @@ use light_svm::{
 };
 
 use crate::math::Array2;
-use crate::models::utils::{ModelConfig, ModelType};
 use crate::models::classifier_trait::ClassifierModel;
+use crate::config::{ModelConfig, ModelType};
 
 pub struct SVMClassifier {
     params: ModelConfig,
@@ -115,7 +115,13 @@ impl SVMClassifier {
 }
 
 impl ClassifierModel for SVMClassifier {
-    fn fit(&mut self, x: &Array2<f32>, y: &[i32], x_eval: Option<&Array2<f32>>, y_eval: Option<&[i32]>) {
+    fn fit(
+        &mut self,
+        x: &Array2<f32>,
+        y: &[i32],
+        x_eval: Option<&Array2<f32>>,
+        y_eval: Option<&[i32]>,
+    ) {
         SVMClassifier::fit(self, x, y, x_eval, y_eval)
     }
 
