@@ -102,6 +102,15 @@ impl XGBoostClassifier {
                 .collect::<Vec<i32>>()
         });
 
+        // Track class balance to set scale_pos_weight (helps when classes are imbalanced).
+        let pos_count = y.iter().filter(|&&v| v == 1).count() as f32;
+        let neg_count = y.len() as f32 - pos_count;
+        let scale_pos_weight = if pos_count > 0.0 {
+            (neg_count / pos_count).max(0.0001)
+        } else {
+            1.0
+        };
+
         // Convert feature matrix into DMatrix
         // Log matrix shape info to help diagnose potential shape mismatches
         debug!(
@@ -141,12 +150,9 @@ impl XGBoostClassifier {
         {
             // Configure learning objective
             let learning_params = LearningTaskParametersBuilder::default()
-                // Use BinaryLogistic (probabilities) instead of BinaryLogisticRaw
-                // Some environments / versions of the upstream crate may behave
-                // differently for raw logits; switching to the standard
-                // binary:logistic objective can avoid returning the base_score
-                // for all predictions in some runtime configurations.
-                .objective(Objective::BinaryLogistic)
+                // Train for raw margins so downstream scoring can use
+                // decision values instead of squashed probabilities.
+                .objective(Objective::BinaryLogisticRaw)
                 // .eval_metrics(Metrics::Custom(vec![EvaluationMetric::LogLoss, EvaluationMetric::MAE]))
                 // .num_feature(x.ncols())
                 .build()
@@ -212,6 +218,9 @@ impl XGBoostClassifier {
             // Create booster with cached dmats
             let mut bst = Booster::new_with_cached_dmats(&booster_params, &cached_dmats)
                 .expect("failed to create Booster");
+
+            // Class weighting to counter imbalance (similar to scale_pos_weight in xgboost CLI).
+            let _ = bst.set_param("scale_pos_weight", &format!("{}", scale_pos_weight));
 
             // Perform explicit training updates for num_boost_round iterations
             for i in 0..*num_boost_round as i32 {
@@ -310,31 +319,21 @@ impl XGBoostClassifier {
             "{{\"type\":0,\"training\":false,\"iteration_begin\":0,\"iteration_end\":{},\"strict_shape\":false}}\0",
             iteration_end
         );
-        // Also inspect raw margin predictions to see if the model is
-        // producing non-zero logits (base_score -> 0 margin -> prob 0.5)
         if let Ok(margins) = bst_ref.predict_margin(&dmat) {
-            debug!(
-                "margin sample (first up to 10): {:?}",
-                &margins[..margins.len().min(10)]
-            );
-        } else {
-            debug!("failed to get margin predictions");
-        }
-        debug!("predict config iteration_end = {}", iteration_end);
-        let (preds, _shape) = bst_ref.predict_matrix(&dmat, &config).unwrap();
-        // Log a small sample of predictions at debug level
-        if !preds.is_empty() {
-            let sample_end = preds.len().min(10);
-            debug!(
-                "[xgb.predict_proba] preds.len() = {}, first {} preds = {:?}",
-                preds.len(),
-                sample_end,
-                &preds[..sample_end]
-            );
-        } else {
-            debug!("[xgb.predict_proba] empty prediction vector returned");
+            if !margins.is_empty() {
+                let sample_end = margins.len().min(10);
+                debug!(
+                    "[xgb.predict_margin] len = {}, first {} = {:?}",
+                    margins.len(),
+                    sample_end,
+                    &margins[..sample_end]
+                );
+            }
+            return margins;
         }
 
+        debug!("predict_margin failed; falling back to predict_matrix");
+        let (preds, _shape) = bst_ref.predict_matrix(&dmat, &config).unwrap();
         preds
     }
 }

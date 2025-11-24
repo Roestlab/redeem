@@ -35,11 +35,20 @@ impl SVMClassifier {
                     kernel
                 );
             }
+            let mut params = light_svm::SvmParams::builder()
+                .solver(light_svm::solver::Solver::Dcd)
+                .tol(*eps as f32)
+                .max_epochs(200)
+                .fit_intercept(true)
+                .penalize_intercept(false)
+                .projection(false)
+                .build();
+            params.c_neg = Some(c.0 as f32);
+            params.c_pos = Some(c.1 as f32);
+
             LinearSVC::builder()
                 .class_strategy(ClassStrategy::Binary)
-                .tol(*eps as f32)
-                .c_by_class(c.0 as f32, c.1 as f32)
-                .penalize_intercept(false)
+                .params(params)
                 .build()
         } else {
             panic!("SVMClassifier expected ModelType::SVM configuration");
@@ -82,16 +91,8 @@ impl SVMClassifier {
         let mut model = self.build_model();
         model.fit_dense(&dense_matrix, &labels);
 
-        let csr = CsrMatrix::from_dense(&dense_rows, 0.0);
-        let scores = Self::collect_scores(&model, &csr);
-        let y01: Vec<u8> = labels
-            .iter()
-            .map(|&val| if val > 0 { 1 } else { 0 })
-            .collect();
-        let calibrator = PlattCalibrator::fit(&scores, &y01);
-
         self.model = Some(model);
-        self.calibrator = Some(calibrator);
+        self.calibrator = None;
     }
 
     pub fn predict(&self, x: &Array2<f32>) -> Vec<f32> {
@@ -102,19 +103,9 @@ impl SVMClassifier {
     }
 
     pub fn predict_proba(&mut self, x: &Array2<f32>) -> Vec<f32> {
-        let scores = self.decision_scores(x);
-        if let Some(calibrator) = &self.calibrator {
-            calibrator
-                .predict_proba(&scores)
-                .into_iter()
-                .map(|pair| pair[1])
-                .collect()
-        } else {
-            scores
-                .into_iter()
-                .map(|s| 1.0 / (1.0 + (-s).exp()))
-                .collect()
-        }
+        // Return raw decision scores; semi-supervised ranking should be based
+        // on margins rather than calibrated probabilities.
+        self.decision_scores(x)
     }
 }
 

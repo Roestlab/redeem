@@ -352,14 +352,22 @@ impl SemiSupervisedLearner {
         }
 
         let mut filled = Vec::with_capacity(n_samples);
+        let mut fallback_count = 0usize;
         for (idx, maybe_score) in assigned.into_iter().enumerate() {
-            filled.push(maybe_score.unwrap_or_else(|| {
-                log::debug!(
-                    "Falling back to previous score for PSM {} due to missing fold score",
-                    idx
-                );
-                fallback_scores[idx]
-            }));
+            if let Some(score) = maybe_score {
+                filled.push(score);
+            } else {
+                fallback_count += 1;
+                filled.push(fallback_scores[idx]);
+            }
+        }
+        if fallback_count > 0 {
+            log::warn!(
+                "Cross-validation scoring fell back to previous scores for {} of {} PSMs ({:.2}%). Consider adjusting class sampling or folds to cover all PSMs.",
+                fallback_count,
+                n_samples,
+                (fallback_count as f64 / n_samples as f64) * 100.0
+            );
         }
         Array1::from_vec(filled)
     }
