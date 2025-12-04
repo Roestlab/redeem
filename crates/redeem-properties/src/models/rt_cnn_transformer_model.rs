@@ -110,8 +110,6 @@ impl ModelInterface for RTCNNTFModel {
         Self::new_untrained_with_options(device, "mlp", false)
     }
 
-    // helper constructor implemented as an inherent method below
-
     /// Create a new RTCNNTFModel from the given pretrained model and constants files.
     fn new<P: AsRef<Path>>(
         model_path: P,
@@ -126,13 +124,9 @@ impl ModelInterface for RTCNNTFModel {
 
         let mut varmap = candle_nn::VarMap::new();
         create_var_map(&mut varmap, tensor_data, &device)?;
-        // varmap keys are available in `varmap` if needed; avoid writing them
-        // to disk in normal runs to prevent unnecessary I/O.
+        // varmap keys are available in `varmap` if needed;
         log::debug!("VarMap populated with {} entries", varmap.data().lock().map(|m| m.len()).unwrap_or(0));
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
-
-    // Skip varstore probe to avoid writing analysis/ files during normal runs.
-    log::debug!("VarStore probe skipped: not writing to analysis/ by default");
 
         let constants = match constants_path {
             Some(path) => parse_model_constants(path.as_ref().to_str().unwrap())?,
