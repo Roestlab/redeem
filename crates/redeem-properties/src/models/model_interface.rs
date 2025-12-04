@@ -21,6 +21,7 @@ use candle_nn::{Optimizer, VarMap};
 use log::info;
 use rayon::prelude::*;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf};
 use std::{
     ops::{Deref, Index},
@@ -176,9 +177,9 @@ pub fn create_var_map(
 ) -> Result<()> {
     let mut ws = var_map.data().lock().unwrap();
 
-    for (name, tensor) in tensor_data {
-        ws.insert(name, Var::from_tensor(&tensor.to_device(device)?)?);
-    }
+        for (name, tensor) in tensor_data {
+            ws.insert(name, Var::from_tensor(&tensor.to_device(device)?)?);
+        }
 
     Ok(())
 }
@@ -465,7 +466,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// This method initializes model weights from scratch and trains over the given peptide feature data for a specified
     /// number of epochs. Optionally performs validation and tracks both training and validation loss statistics.
     /// Early stopping is applied if the validation loss does not improve for a consecutive number of epochs.
-    /// 
+    ///
     /// A Cosine Annealing with Warmup learning rate scheduler is used to adjust the learning rate during training. The initial warmup period is set to 10% of the total training steps.
     ///
     /// # Arguments
@@ -480,6 +481,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// * `context` - A string representing the context for logging, e.g., "training" or "fine-tuning".
     /// * `save_checkpoints` - Flag to save model checkpoints during training.
     /// * `track_metrics` - Flag to track training and validation metrics.
+    /// * `target_norm` - Normalization parameters to de-normalize metrics for reporting.
     ///
     /// # Returns
     /// [`TrainingStepMetrics`] - A struct containing training and validation loss statistics, learning rates, and other metrics.
@@ -496,13 +498,17 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         learning_rate: f64,
         epochs: usize,
         early_stopping_patience: usize,
-        context: &str, 
+        context: &str,
         save_checkpoints: bool,
         track_metrics: bool,
+        target_norm: TargetNormalization,
+        // Optional list of variable name prefixes to train. When `None`, all vars are trained.
+        train_var_prefixes: Option<Vec<String>>,
     ) -> Result<TrainingStepMetrics> {
         let num_batches = (training_data.len() + batch_size - 1) / batch_size;
         let total_steps = num_batches * epochs;
-        let warmup_steps = total_steps / 10; 
+        // Use a longer warmup (~12% of total steps) for better stability with z-score or raw targets.
+        let warmup_steps = ((total_steps as f64) * 0.12).ceil() as usize;
 
         info!(
             "{} {} model on {} peptide features ({} batches) for {} epochs",
@@ -522,6 +528,9 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             precisions: vec![],
             recalls: vec![],
             accuracies: vec![],
+            maes: vec![],
+            rmses: vec![],
+            r2s: vec![],
         };
 
         let mut step_idx = 0;
@@ -531,7 +540,30 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             lr: learning_rate,
             ..Default::default()
         };
-        let mut opt = candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?;
+        // If the caller specified prefixes to train, select only those vars from the VarMap.
+        // If the list is empty or omitted, train all variables.
+        let mut opt = {
+            if let Some(prefixes) = &train_var_prefixes {
+                if prefixes.is_empty() {
+                    candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?
+                } else {
+                    let selected: Vec<Var> = {
+                        let ws = self.get_mut_varmap().data().lock().unwrap();
+                        ws.iter()
+                            .filter(|(name, _)| prefixes.iter().any(|p| name.starts_with(p)))
+                            .map(|(_, v)| v.clone())
+                            .collect()
+                    };
+                    if selected.is_empty() {
+                        candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?
+                    } else {
+                        candle_nn::AdamW::new(selected, params)?
+                    }
+                }
+            } else {
+                candle_nn::AdamW::new(self.get_mut_varmap().all_vars(), params)?
+            }
+        };
         let mut lr_scheduler = CosineWithWarmup::new(
             learning_rate,
             warmup_steps,
@@ -543,6 +575,88 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         let mut epochs_without_improvement = 0;
         let mut epoch_losses = vec![];
 
+        let compute_loss = |predicted: &Tensor, target: &Tensor| -> Result<Tensor> {
+            // Ensure target matches the predicted shape before any math.
+            let adjusted_target = {
+                let mut t = target.clone();
+                let t_elems = t.elem_count();
+                let p_elems = predicted.elem_count();
+
+                // Fast path: already same count and shape.
+                if t_elems == p_elems && t.shape() == predicted.shape() {
+                    t
+                } else if t_elems == 0 {
+                    Tensor::zeros_like(predicted)?
+                } else if t_elems == p_elems {
+                    // Same number of elements, just reshape.
+                    t.reshape(predicted.shape())?
+                } else if t_elems == 1 && p_elems > 1 {
+                    t.reshape(predicted.shape())?
+                } else {
+                    // Best effort: broadcast, then fall back to zeros_like if impossible.
+                    match t.broadcast_as(predicted.shape()) {
+                        Ok(b) => b,
+                        Err(_) => Tensor::zeros_like(predicted)?,
+                    }
+                }
+            };
+
+            let p_shape = predicted.shape();
+            let t_shape = adjusted_target.shape();
+            let p_dims = predicted.dims();
+            let t_dims = adjusted_target.dims();
+            if p_shape != t_shape || p_dims != t_dims {
+                log::error!(
+                    "compute_loss shape mismatch before op: pred shape {:?} dims {:?}, tgt shape {:?} dims {:?}, pred elems {}, tgt elems {}",
+                    p_shape,
+                    p_dims,
+                    t_shape,
+                    t_dims,
+                    predicted.elem_count(),
+                    adjusted_target.elem_count()
+                );
+                return Err(anyhow::anyhow!(
+                    "compute_loss shape mismatch: pred {:?} dims {:?}, tgt {:?} dims {:?}",
+                    p_shape,
+                    p_dims,
+                    t_shape,
+                    t_dims
+                ));
+            }
+
+            match target_norm {
+                TargetNormalization::ZScore(_, _) => {
+                    // Huber with delta=1.0
+                    let delta = 1.0f32;
+                    let delta_t = Tensor::new(delta, predicted.device())?;
+                    let half = Tensor::new(0.5f32, predicted.device())?;
+                    let delta_sq_half = Tensor::new(0.5f32 * delta * delta, predicted.device())?;
+                    let delta_full = delta_t.broadcast_as(predicted.shape())?;
+                    let half_full = half.broadcast_as(predicted.shape())?;
+                    let delta_sq_half_full = delta_sq_half.broadcast_as(predicted.shape())?;
+                    let diff = predicted.sub(&adjusted_target)?;
+                    let abs_diff = diff.abs()?;
+                    let quadratic = abs_diff.le(delta)?.to_dtype(DType::F32)?;
+                    let linear = abs_diff.gt(delta)?.to_dtype(DType::F32)?;
+                    let quad_loss = diff
+                        .sqr()?
+                        .broadcast_mul(&quadratic)?
+                        .broadcast_mul(&half_full)?;
+                    let lin_loss = abs_diff
+                        .sub(&delta_full)?
+                        .broadcast_mul(&delta_full)?
+                        .add(&delta_sq_half_full)?
+                        .mul(&linear)?;
+                    let total = quad_loss.add(&lin_loss)?;
+                    Ok(total.mean_all()?)
+                }
+                _ => {
+                    let diff = predicted.sub(&adjusted_target)?;
+                    Ok(diff.abs()?.mean_all()?)
+                }
+            }
+        };
+
         for epoch in 0..epochs {
             let progress = Progress::new(num_batches, &format!("[{}] Epoch {}: ", context, epoch));
             let mut batch_losses = vec![];
@@ -553,7 +667,33 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         self.prepare_batch_inputs(batch_data, &modifications)?;
 
                     let predicted = self.forward(&input_batch)?;
-                    let loss = candle_nn::loss::mse(&predicted, &target_batch)?;
+                    let tgt = target_batch.clone();
+                    let pred_flat = predicted.flatten_all()?;
+                    let mut tgt_flat = tgt.flatten_all()?;
+                    // Align target to prediction shape early to avoid shape errors.
+                    if tgt_flat.elem_count() == 0 {
+                        log::error!(
+                            "Empty target tensor in train loop: pred shape {:?}, tgt shape {:?}",
+                            pred_flat.shape(),
+                            tgt_flat.shape()
+                        );
+                        tgt_flat = Tensor::zeros(
+                            pred_flat.shape(),
+                            pred_flat.dtype(),
+                            pred_flat.device(),
+                        )?;
+                        return Err(anyhow::anyhow!(
+                            "Empty target tensor after flatten in train loop"
+                        ));
+                    } else if tgt_flat.elem_count() == 1 && pred_flat.elem_count() > 1 {
+                        tgt_flat = tgt_flat.reshape(pred_flat.shape())?;
+                    } else if tgt_flat.shape() != pred_flat.shape() {
+                        match tgt_flat.broadcast_as(pred_flat.shape()) {
+                            Ok(b) => tgt_flat = b,
+                            Err(_) => tgt_flat = tgt_flat.reshape(pred_flat.shape())?,
+                        }
+                    }
+                    let loss = compute_loss(&pred_flat, &tgt_flat)?;
                     opt.backward_step(&loss)?;
 
                     // Update learning rate after optimizer step
@@ -566,16 +706,41 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     let predictions = predicted.to_vec1::<f32>()?;
                     let targets = target_batch.to_vec1::<f32>()?;
 
-                    let acc = match self.property_type() {
-                        PropertyType::RT => Some(Metrics::accuracy(&predictions, &targets, 0.5)), // is predicted RT within 0.5 min of target RT?
+                    let (mae, rmse, r2, acc) = match self.property_type() {
+                        PropertyType::RT => {
+                            let denorm = |v: &[f32]| -> Vec<f32> {
+                                match target_norm {
+                                    TargetNormalization::ZScore(mean, std) => {
+                                        v.iter().map(|x| *x * std + mean).collect()
+                                    }
+                                    TargetNormalization::MinMax(min, max) => {
+                                        v.iter().map(|x| *x * (max - min) + min).collect()
+                                    }
+                                    TargetNormalization::None => v.to_vec(),
+                                }
+                            };
+                            let predictions_dn = denorm(&predictions);
+                            let targets_dn = denorm(&targets);
+                            (
+                                Some(Metrics::mae(&predictions_dn, &targets_dn)),
+                                Some(Metrics::rmse(&predictions_dn, &targets_dn)),
+                                Some(Metrics::r2(&predictions_dn, &targets_dn)),
+                                None,
+                            )
+                        }
                         PropertyType::CCS => {
                             let tol: Vec<f32> = targets.iter().map(|t| t * 0.02).collect();
-                            Some(Metrics::accuracy_dynamic(&predictions, &targets, &tol))
-                        } // is predicted CCS within 2% of target CCS?
-                        _ => None,
+                            (
+                                Some(Metrics::mae(&predictions, &targets)),
+                                Some(Metrics::rmse(&predictions, &targets)),
+                                Some(Metrics::r2(&predictions, &targets)),
+                                Some(Metrics::accuracy_dynamic(&predictions, &targets, &tol)),
+                            )
+                        }
+                        _ => (None, None, None, None),
                     };
 
-                    if track_metrics{
+                    if track_metrics {
                         step_metrics.epochs.push(epoch);
                         step_metrics.steps.push(step_idx);
                         step_metrics
@@ -584,11 +749,13 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         step_metrics.losses.push(loss_val);
                         step_metrics.phases.push(TrainingPhase::Train);
                         step_metrics.accuracies.push(acc);
+                        step_metrics.maes.push(mae);
+                        step_metrics.rmses.push(rmse);
+                        step_metrics.r2s.push(r2);
                         step_metrics.precisions.push(None);
                         step_metrics.recalls.push(None);
                         step_idx += 1;
                     }
-                    
 
                     progress.update_description(&format!(
                         "[{}] Epoch {}: Loss: {:.4}",
@@ -612,53 +779,129 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 let val_batches =
                     (val_data.len() + validation_batch_size - 1) / validation_batch_size;
 
-                let val_results: Vec<(f32, usize, f64, Option<f32>)> = val_data
+                // Ensure the model is in evaluation mode during validation so
+                // layers like Dropout are disabled
+                self.set_evaluation_mode();
+
+                let val_results: Vec<(
+                    f32,
+                    usize,
+                    f64,
+                    Option<f32>,
+                    Option<f32>,
+                    Option<f32>,
+                    Option<f32>,
+                )> = val_data
                     .par_chunks(validation_batch_size)
                     .enumerate()
                     .map(|(idx, batch_data)| {
+                        
+
                         let (input_val, target_val) =
                             self.prepare_batch_inputs(batch_data, &modifications)?;
                         let predicted = self.forward(&input_val)?;
-                        let val_loss = candle_nn::loss::mse(&predicted, &target_val)?;
+                        let tgt = target_val.clone();
+                        let pred_flat = predicted.flatten_all()?;
+                        let mut tgt_flat = tgt.flatten_all()?;
+                        if tgt_flat.elem_count() == 0 {
+                            log::error!(
+                                "Empty target tensor in val loop: pred shape {:?}, tgt shape {:?}",
+                                pred_flat.shape(),
+                                tgt_flat.shape()
+                            );
+                            tgt_flat = Tensor::zeros(
+                                pred_flat.shape(),
+                                pred_flat.dtype(),
+                                pred_flat.device(),
+                            )?;
+                            return Err(anyhow::anyhow!(
+                                "Empty target tensor after flatten in val loop"
+                            ));
+                        } else if tgt_flat.elem_count() == 1 && pred_flat.elem_count() > 1 {
+                            tgt_flat = tgt_flat.reshape(pred_flat.shape())?;
+                        } else if tgt_flat.shape() != pred_flat.shape() {
+                            match tgt_flat.broadcast_as(pred_flat.shape()) {
+                                Ok(b) => tgt_flat = b,
+                                Err(_) => tgt_flat = tgt_flat.reshape(pred_flat.shape())?,
+                            }
+                        }
+                        let val_loss = compute_loss(&pred_flat, &tgt_flat)?;
                         let loss_val = val_loss.to_vec0::<f32>()?;
 
                         let predictions = predicted.to_vec1::<f32>()?;
                         let targets = target_val.to_vec1::<f32>()?;
 
-                        let acc = match self.property_type() {
+                        let (mae, rmse, r2, acc) = match self.property_type() {
                             PropertyType::RT => {
-                                // print first 5 predictions and targets
-                                println!("Predictions: {:?}", &predictions[0..5]);
-                                println!("Targets: {:?}", &targets[0..5]);
-                                Some(Metrics::accuracy(&predictions, &targets, 0.5))
+                                let denorm = |v: &[f32]| -> Vec<f32> {
+                                    match target_norm {
+                                        TargetNormalization::ZScore(mean, std) => {
+                                            v.iter().map(|x| *x * std + mean).collect()
+                                        }
+                                        TargetNormalization::MinMax(min, max) => {
+                                            v.iter().map(|x| *x * (max - min) + min).collect()
+                                        }
+                                        TargetNormalization::None => v.to_vec(),
+                                    }
+                                };
+                                let predictions_dn = denorm(&predictions);
+                                let targets_dn = denorm(&targets);
+                                (
+                                    Some(Metrics::mae(&predictions_dn, &targets_dn)),
+                                    Some(Metrics::rmse(&predictions_dn, &targets_dn)),
+                                    Some(Metrics::r2(&predictions_dn, &targets_dn)),
+                                    None,
+                                )
                             }
                             PropertyType::CCS => {
                                 let tol: Vec<f32> = targets.iter().map(|t| t * 0.02).collect();
-                                Some(Metrics::accuracy_dynamic(&predictions, &targets, &tol))
+                                (
+                                    Some(Metrics::mae(&predictions, &targets)),
+                                    Some(Metrics::rmse(&predictions, &targets)),
+                                    Some(Metrics::r2(&predictions, &targets)),
+                                    Some(Metrics::accuracy_dynamic(&predictions, &targets, &tol)),
+                                )
                             }
-                            _ => None,
+                            _ => (None, None, None, None),
                         };
 
-                        Ok((loss_val, idx, lr_scheduler.get_last_lr(), acc))
+                        Ok((
+                            loss_val,
+                            idx,
+                            lr_scheduler.get_last_lr(),
+                            acc,
+                            mae,
+                            rmse,
+                            r2,
+                        ))
                     })
                     .collect::<Result<_>>()?;
 
-                if track_metrics{
-                    for (val_loss, idx, lr, acc) in &val_results {
+                // Restore training mode after validation so subsequent training
+                // steps keep Dropout and other training-only behavior enabled.
+                self.set_training_mode();
+
+                if track_metrics {
+                    for (val_loss, idx, lr, acc, mae, rmse, r2) in &val_results {
                         step_metrics.epochs.push(epoch);
                         step_metrics.steps.push(val_step_idx + idx);
                         step_metrics.learning_rates.push(*lr);
                         step_metrics.losses.push(*val_loss);
                         step_metrics.phases.push(TrainingPhase::Validation);
                         step_metrics.accuracies.push(*acc);
+                        step_metrics.maes.push(*mae);
+                        step_metrics.rmses.push(*rmse);
+                        step_metrics.r2s.push(*r2);
                         step_metrics.precisions.push(None);
                         step_metrics.recalls.push(None);
                     }
                     val_step_idx += val_results.len();
                 }
 
-                let val_losses: Vec<f32> =
-                    val_results.iter().map(|(loss, _, _, _)| *loss).collect();
+                let val_losses: Vec<f32> = val_results
+                    .iter()
+                    .map(|(loss, _, _, _, _, _, _)| *loss)
+                    .collect();
                 let (avg_val_loss, std_val_loss): (f32, f32) = compute_loss_stats(&val_losses);
 
                 epoch_losses.push((
@@ -678,7 +921,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 if avg_val_loss < best_val_loss {
                     best_val_loss = avg_val_loss;
                     epochs_without_improvement = 0;
-                    if save_checkpoints{
+                    if save_checkpoints {
                         self.save_epoch_checkpoint(epoch, "val")?;
                     }
                 } else {
@@ -687,7 +930,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         info!("Early stopping triggered after {} epochs without validation loss improvement.", early_stopping_patience);
                         return Ok(step_metrics);
                     }
-                    if save_checkpoints{
+                    if save_checkpoints {
                         self.save_epoch_checkpoint(epoch, "train")?;
                     }
                 }
@@ -698,7 +941,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     epoch, avg_loss, std_loss
                 ));
                 progress.finish();
-                if save_checkpoints{
+                if save_checkpoints {
                     self.save_epoch_checkpoint(epoch, "train")?;
                 }
             }
@@ -719,6 +962,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         batch_size: usize,
         learning_rate: f64,
         epochs: usize,
+        target_norm: TargetNormalization,
     ) -> Result<()> {
         let _metrics = self.train(
             training_data,
@@ -732,6 +976,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             "fine-tuning",
             false, // No checkpoints
             false, // No metrics
+            target_norm,
+            None,
         )?;
 
         Ok(())
@@ -754,22 +1000,28 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             inference_data.len(),
             num_batches
         );
-    
+
         let progress = Progress::new(inference_data.len(), "[inference] Batch:");
         let mut result: Vec<Option<PeptideData>> = vec![None; inference_data.len()];
-    
+
+
+
         inference_data
             .par_chunks(batch_size)
             .enumerate()
             .map(|(batch_idx, batch_data)| {
                 let start_idx = batch_idx * batch_size;
-    
+
                 // Extract input features only (ignore targets)
                 let (input_tensor, _) = self.prepare_batch_inputs(batch_data, &modifications)?;
+
+                // Now run model forward.
                 let predicted = self.forward(&input_tensor)?;
-    
+
+
                 let predictions = predicted.to_vec1::<f32>()?;
-    
+
+
                 let updated = predictions
                     .into_iter()
                     .enumerate()
@@ -788,7 +1040,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         (start_idx + i, peptide)
                     })
                     .collect::<Vec<_>>();
-    
+
                 Ok(updated)
             })
             .collect::<Result<Vec<Vec<(usize, PeptideData)>>>>()?
@@ -798,11 +1050,10 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 result[idx] = Some(peptide);
                 progress.inc();
             });
-    
+
         progress.finish();
         Ok(result.into_iter().flatten().collect())
-    }  
-    
+    }
 
     /// Extract encoded input and target tensor for a batch of peptides.
     fn prepare_batch_inputs(
@@ -843,19 +1094,23 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
         let target_tensor = match self.property_type() {
             PropertyType::RT => {
-                let target_values: Vec<f32> = batch
+                let mut target_values: Vec<f32> = batch
                     .retention_times
                     .iter()
                     .map(|v| v.unwrap_or(0.0))
                     .collect();
+                if target_values.is_empty() {
+                    let batch_size = batch_data.len();
+                    log::warn!(
+                        "prepare_batch_inputs: empty RT targets for batch size {}; filling zeros",
+                        batch_size
+                    );
+                    target_values = vec![0.0; batch_size];
+                }
                 Tensor::new(target_values, &self.get_device())?
             }
             PropertyType::CCS => {
-                let target_values: Vec<f32> = batch
-                    .ccs
-                    .iter()
-                    .map(|v| v.unwrap_or(0.0))
-                    .collect();
+                let target_values: Vec<f32> = batch.ccs.iter().map(|v| v.unwrap_or(0.0)).collect();
                 Tensor::new(target_values, &self.get_device())?
             }
             PropertyType::MS2 => {
@@ -912,12 +1167,9 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
     /// Save model weights to a file in safetensors format.
     fn save(&mut self, path: &str) -> Result<()> {
-        info!(
-            "Saving {} model weights to: {:?}",
-            self.get_model_arch(),
-            path
-        );
-        self.get_mut_varmap().clone().save(&PathBuf::from(path))?;
+        let p = PathBuf::from(path);
+        info!("Saving {} model weights to: {:?}", self.get_model_arch(), p);
+    self.get_mut_varmap().save(&p)?;
         Ok(())
     }
 
@@ -960,6 +1212,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
     // TODO: Maybe move to ms2_bert_model, since it's specific to that model
     fn process_predictions(&self, predicts: &Tensor, min_inten: f32) -> Result<Tensor> {
+
         // Reshape and get max
         let (batch_size, seq_len, feature_size) = predicts.shape().dims3()?;
         let reshaped = predicts.reshape((batch_size, ()))?;
@@ -977,6 +1230,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
         // Divide predicts by broadcasted apex_intens
         let normalized = predicts.div(&broadcasted_apex_intens)?;
+
 
         // Replace values < min_inten with 0.0
         let zeros = Tensor::zeros_like(&normalized)?;

@@ -1445,12 +1445,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
         let x = self.input_cnn.forward(&x)?;
         let x = x.contiguous()?;
 
-        
-        // Keep a copy of the CNN output pre-projection so we can compute an
-        // explicit dot-product with the raw weight for an in-process sanity
-        // check (compare Linear.forward vs explicit matmul).
-        let pre_proj = x.clone();
-        let x = self.proj_cnn_to_transformer.forward(&pre_proj)?;
+        let x = self.proj_cnn_to_transformer.forward(&x)?;
         let x = x.contiguous()?;
         
         let x = self
@@ -1598,11 +1593,7 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
         let x = self.input_cnn.forward(&x)?;
         let x = x.contiguous()?;
 
-        // Keep a copy of the CNN output pre-projection so we can compute an
-        // explicit dot-product with the raw weight for an in-process sanity
-        // check (compare Linear.forward vs explicit matmul).
-        let pre_proj = x.clone();
-        let x = self.proj_cnn_to_transformer.forward(&pre_proj)?;
+        let x = self.proj_cnn_to_transformer.forward(&x)?;
         let x = x.contiguous()?;
 
         let x = self.input_transformer.forward(&x)?;
