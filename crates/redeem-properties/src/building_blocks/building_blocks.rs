@@ -1294,6 +1294,7 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 
         Ok(x)
     }
+
 }
 
 /// Encode AAs (26 AA letters) and modifications using CNN + Transformer + AttentionSum.
@@ -1601,6 +1602,12 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
         let x = self.attn_sum.forward(&x)?;
 
         Ok(x)
+    }
+
+    /// Set training/eval mode for nested components (e.g., SeqTransformer)
+    /// so that dropout and other training-only behavior can be toggled.
+    pub fn set_training(&mut self, training: bool) {
+        self.input_transformer.set_training(training);
     }
 }
 

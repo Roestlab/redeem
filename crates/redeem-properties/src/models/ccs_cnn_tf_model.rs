@@ -135,8 +135,13 @@ impl ModelInterface for CCSCNNTFModel {
         let mod_to_feature = load_mod_to_feature_arc(&constants)?;
         let dropout = Dropout::new(0.1);
 
+        // Use a scoped view of the varstore for the encoder so that
+        // internal keys resolve relative to the encoder scope. This
+        // avoids accidental key-scope mismatches (root vs scoped names)
+        // that can lead to tensors being read as zeros when the
+        // top-level VarBuilder is used directly.
         let ccs_encoder = Encoder26aaModChargeCnnTransformerAttnSum::from_varstore(
-            &var_store,
+            &var_store.pp("ccs_encoder"),
             8,   // mod_hidden_dim
             128, // hidden_dim
             256, // ff_dim
@@ -144,68 +149,64 @@ impl ModelInterface for CCSCNNTFModel {
             2,   // num_layers
             100, // max_len (set appropriately for your sequence length)
             0.1, // dropout_prob
-            vec!["ccs_encoder.mod_nn.nn.weight"],
+            // names are now relative to the `ccs_encoder` scope
+            vec!["mod_nn.nn.weight"],
             vec![
-                "ccs_encoder.input_cnn.cnn_short.weight",
-                "ccs_encoder.input_cnn.cnn_medium.weight",
-                "ccs_encoder.input_cnn.cnn_long.weight",
+                "input_cnn.cnn_short.weight",
+                "input_cnn.cnn_medium.weight",
+                "input_cnn.cnn_long.weight",
             ],
             vec![
-                "ccs_encoder.input_cnn.cnn_short.bias",
-                "ccs_encoder.input_cnn.cnn_medium.bias",
-                "ccs_encoder.input_cnn.cnn_long.bias",
+                "input_cnn.cnn_short.bias",
+                "input_cnn.cnn_medium.bias",
+                "input_cnn.cnn_long.bias",
             ],
-            "ccs_encoder.input_transformer",
-            vec!["ccs_encoder.attn_sum.attn.0.weight"],
+            // transformer prefix is local within the ccs_encoder scope
+            "input_transformer",
+            vec!["attn_sum.attn.0.weight"],
             &device,
         )?;
 
         // Detect decoder head layout in varstore and load the appropriate head.
         let ccs_decoder = if var_store.get((4, 129), "ccs_decoder.nn.0.weight").is_ok() {
+            // Use a scoped view of the var_store for the decoder so relative
+            // names like "nn.0.weight" resolve correctly within the
+            // `ccs_decoder` prefix. Using the root var_store here previously
+            // caused the decoder submodules to fall back to zeros when keys
+            // were looked up as local names.
             DecoderHead::Small(DecoderSmall::from_varstore(
-                &var_store,
+                &var_store.pp("ccs_decoder"),
                 129,
                 1,
-                vec![
-                    "ccs_decoder.nn.0.weight",
-                    "ccs_decoder.nn.1.weight",
-                    "ccs_decoder.nn.2.weight",
-                ],
+                vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
                 vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"],
             )?)
         } else if var_store.get((64, 129), "ccs_decoder.nn.0.weight").is_ok() {
             if var_store.get((16, 64), "ccs_decoder.nn.2.weight").is_ok() {
                 DecoderHead::MLP(DecoderMLP::from_varstore(
-                    &var_store,
+                    &var_store.pp("ccs_decoder"),
                     129,
                     1,
-                    vec![
-                        "ccs_decoder.nn.0.weight",
-                        "ccs_decoder.nn.1.weight",
-                        "ccs_decoder.nn.2.weight",
-                    ],
+                    vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
                     vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"],
                 )?)
             } else {
                 DecoderHead::Linear(DecoderLinear::from_varstore(
-                    &var_store,
+                    &var_store.pp("ccs_decoder"),
                     129,
                     1,
-                    vec![
-                        "ccs_decoder.nn.0.weight",
-                        "ccs_decoder.nn.1.weight",
-                        "ccs_decoder.nn.2.weight",
-                    ],
+                    vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
                     vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"],
                 )?)
             }
         } else {
-            return Err(anyhow::anyhow!(
-                "Unrecognized decoder layout in model varstore"
-            ));
+            return Err(anyhow::anyhow!("Unrecognized decoder layout in model varstore"));
         };
 
-        Ok(Self {
+        // Ensure nested encoder transformer is in eval mode when constructed
+        // from a pretrained varstore so dropout and training-only layers
+        // are disabled by default (prevents subtle mismatches).
+        let mut model = Self {
             var_store,
             varmap,
             constants,
@@ -215,7 +216,9 @@ impl ModelInterface for CCSCNNTFModel {
             ccs_encoder,
             ccs_decoder,
             is_training: false,
-        })
+        };
+        model.ccs_encoder.set_training(false);
+        Ok(model)
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor, candle_core::Error> {
