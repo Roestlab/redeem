@@ -1302,10 +1302,6 @@ pub struct Encoder26aaModCnnTransformerAttnSum {
     mod_nn: ModEmbeddingFixFirstK,
     input_cnn: SeqCNN,
     proj_cnn_to_transformer: candle_nn::Linear,
-    // Optional retained copy of the raw projection weight when loaded from a varstore.
-    // Used for in-process sanity checks comparing Linear.forward() against an
-    // explicit matmul of the same weight.
-    proj_cnn_to_transformer_weight: Option<Tensor>,
     input_transformer: SeqTransformer,
     attn_sum: SeqAttentionSum,
 }
@@ -1362,32 +1358,9 @@ impl Encoder26aaModCnnTransformerAttnSum {
                     }
                 };
                 
-                // Keep a clone of the raw weight in the struct for later checks.
                 let lin = candle_nn::Linear::new(w.clone(), None);
-                
+
                 lin
-            },
-            // Store the weight separately in the optional field using a second
-            // get() so we can access it in forward(). If the get fails later
-            // we simply leave the option as None. Also write a small sample
-            // of the loaded weight to disk for construction-time verification.
-            proj_cnn_to_transformer_weight: match varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight") {
-                Ok(w) => {
-                    
-                    Some(w)
-                    }
-                    Err(_) => {
-                        // Try fallback qualified name as above
-                        let prefix = transformer_pp.split('.').next().unwrap_or(transformer_pp);
-                        let qualified = format!("{}.proj_cnn_to_transformer.weight", prefix);
-                        match varstore.get((hidden_dim, input_dim * 4), &qualified) {
-                            Ok(w) => {
-                                        
-                                        Some(w)
-                            }
-                            Err(_) => None,
-                        }
-                    }
             },
             input_transformer: SeqTransformer::from_varstore(
                 varstore.pp(transformer_pp).clone(),
@@ -1433,7 +1406,6 @@ impl Encoder26aaModCnnTransformerAttnSum {
                 hidden_dim,
                 varbuilder.pp("proj_cnn_to_transformer"),
             )?,
-            proj_cnn_to_transformer_weight: None,
             input_transformer: SeqTransformer::new(
                 &varbuilder.pp("input_transformer"),
                 input_dim * 4,
@@ -1501,10 +1473,6 @@ pub struct Encoder26aaModChargeCnnTransformerAttnSum {
     mod_nn: ModEmbeddingFixFirstK,
     input_cnn: SeqCNN,
     proj_cnn_to_transformer: candle_nn::Linear,
-    // Optional retained copy of the raw projection weight when loaded from a varstore.
-    // Used for in-process sanity checks comparing Linear.forward() against an
-    // explicit matmul of the same weight.
-    proj_cnn_to_transformer_weight: Option<Tensor>,
     input_transformer: SeqTransformer,
     attn_sum: SeqAttentionSum,
 }
@@ -1554,23 +1522,6 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
                 };
                 candle_nn::Linear::new(w.clone(), None)
             },
-            proj_cnn_to_transformer_weight: match varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight") {
-                Ok(w) => {
-                    
-                    Some(w)
-                }
-                Err(_) => {
-                    let prefix = transformer_pp.split('.').next().unwrap_or(transformer_pp);
-                    let qualified = format!("{}.proj_cnn_to_transformer.weight", prefix);
-                    match varstore.get((hidden_dim, input_dim * 4), &qualified) {
-                        Ok(w) => {
-                            
-                            Some(w)
-                        }
-                        Err(_) => None,
-                    }
-                }
-            },
             input_transformer: SeqTransformer::from_varstore(
                 varstore.pp(transformer_pp).clone(),
                 input_dim * 4,
@@ -1615,7 +1566,6 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
                 hidden_dim,
                 varbuilder.pp("proj_cnn_to_transformer"),
             )?,
-            proj_cnn_to_transformer_weight: None,
             input_transformer: SeqTransformer::new(
                 &varbuilder.pp("input_transformer"),
                 input_dim * 4,
