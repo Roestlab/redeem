@@ -1,12 +1,12 @@
-use clap::{Arg, Command, ArgMatches, ValueHint};
+use anyhow::Result;
+use clap::{Arg, ArgMatches, Command, ValueHint};
 use log::LevelFilter;
 use std::path::PathBuf;
-use anyhow::Result;
 
+use redeem_cli::properties::inference::inference;
+use redeem_cli::properties::inference::input::PropertyInferenceConfig;
 use redeem_cli::properties::train::input::PropertyTrainConfig;
 use redeem_cli::properties::train::trainer;
-use redeem_cli::properties::inference::input::PropertyInferenceConfig;
-use redeem_cli::properties::inference::inference;
 
 fn main() -> Result<()> {
     env_logger::Builder::default()
@@ -163,7 +163,10 @@ fn handle_properties(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("train", train_matches)) => {
             let config_path: &PathBuf = train_matches.get_one("config").unwrap();
-            log::info!("[ReDeeM::Properties] Training from config: {:?}", config_path);
+            log::info!(
+                "[ReDeeM::Properties] Training from config: {:?}",
+                config_path
+            );
 
             let params: PropertyTrainConfig =
                 PropertyTrainConfig::from_arguments(config_path, train_matches)?;
@@ -175,10 +178,13 @@ fn handle_properties(matches: &ArgMatches) -> Result<()> {
                     std::process::exit(1)
                 }
             }
-        },
+        }
         Some(("inference", inference_matches)) => {
             let config_path: &PathBuf = inference_matches.get_one("config").unwrap();
-            log::info!("[ReDeeM::Properties] Inference using config: {:?}", config_path);
+            log::info!(
+                "[ReDeeM::Properties] Inference using config: {:?}",
+                config_path
+            );
 
             let params: PropertyInferenceConfig =
                 PropertyInferenceConfig::from_arguments(config_path, inference_matches)?;
@@ -195,12 +201,14 @@ fn handle_properties(matches: &ArgMatches) -> Result<()> {
     }
 }
 
-
 fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("rescore", rescore_matches)) => {
             let config_path: &PathBuf = rescore_matches.get_one("config").unwrap();
-            println!("[ReDeeM::Classifiers] Rescoring using config: {:?}", config_path);
+            println!(
+                "[ReDeeM::Classifiers] Rescoring using config: {:?}",
+                config_path
+            );
             // Call your classifier logic using config_path
             Ok(())
         }
