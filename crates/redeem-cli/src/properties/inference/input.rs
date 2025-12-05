@@ -1,8 +1,8 @@
+use anyhow::{Context, Result};
+use clap::ArgMatches;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use clap::ArgMatches;
-use anyhow::{Context, Result};
 
 use crate::properties::util::validate_tsv_or_csv_file;
 
@@ -18,6 +18,20 @@ pub struct PropertyInferenceConfig {
     pub batch_size: usize,
     pub instrument: String,
     pub nce: i32,
+    /// Optional path to a dataset whose normalization stats should be reused (e.g., training data).
+    /// If set, we will compute normalization from this file and apply it to inference data,
+    /// ensuring parity with training-time validation.
+    pub normalization_reference_data: Option<String>,
+    /// Optional explicit normalization override (min/max or mean/std). When provided,
+    /// this takes priority over the reference-data path.
+    pub normalization_override_type: Option<String>, // "min_max" or "z_score"
+    pub normalization_override_min: Option<f32>,
+    pub normalization_override_max: Option<f32>,
+    pub normalization_override_mean: Option<f32>,
+    pub normalization_override_std: Option<f32>,
+    /// Optional explicit decoder head selection (e.g., "small", "mlp", "linear") to force
+    /// a given head layout when loading checkpoints.
+    pub head_type: Option<String>,
 }
 
 impl Default for PropertyInferenceConfig {
@@ -33,6 +47,13 @@ impl Default for PropertyInferenceConfig {
             batch_size: 64,
             instrument: String::from("QE"),
             nce: 20,
+            normalization_reference_data: None,
+            normalization_override_type: None,
+            normalization_override_min: None,
+            normalization_override_max: None,
+            normalization_override_mean: None,
+            normalization_override_std: None,
+            head_type: None,
         }
     }
 }
@@ -53,13 +74,15 @@ impl PropertyInferenceConfig {
                     } else {
                         log::warn!(
                             "Config Invalid value for '{}', using default: {:?}",
-                            stringify!($field), config.$field
+                            stringify!($field),
+                            config.$field
                         );
                     }
                 } else {
                     log::warn!(
                         "Config Missing field '{}', using default: {:?}",
-                        stringify!($field), config.$field
+                        stringify!($field),
+                        config.$field
                     );
                 }
             };
@@ -74,6 +97,13 @@ impl PropertyInferenceConfig {
         load_or_default!(batch_size);
         load_or_default!(instrument);
         load_or_default!(nce);
+        load_or_default!(normalization_reference_data);
+        load_or_default!(normalization_override_type);
+        load_or_default!(normalization_override_min);
+        load_or_default!(normalization_override_max);
+        load_or_default!(normalization_override_mean);
+        load_or_default!(normalization_override_std);
+        load_or_default!(head_type);
 
         // Apply CLI overrides
         if let Some(model_path) = matches.get_one::<String>("model_path") {
@@ -88,11 +118,11 @@ impl PropertyInferenceConfig {
         if let Some(output_file) = matches.get_one::<String>("output_file") {
             config.output_file = output_file.clone();
         }
-        if let Some(model_arch) = matches.get_one::<String>("model_arch") {
-            config.model_arch = model_arch.clone();
-        }
+        // Note: the inference subcommand does not define a `model_arch` CLI arg (it's defined
+        // for `train`). We intentionally skip attempting to read a CLI override here to
+        // avoid mismatched-arg panics from clap. The config file value (or default) will be
+        // used for `model_arch`.
 
         Ok(config)
     }
 }
-
