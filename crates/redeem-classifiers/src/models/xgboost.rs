@@ -5,12 +5,12 @@
 //! executed (workaround for some upstream crate versions that omit updates).
 use log::debug;
 use xgb::{
-    Booster, DMatrix,
     parameters::{
-        BoosterParametersBuilder, BoosterType,
         learning::{LearningTaskParametersBuilder, Objective},
         tree::{TreeBoosterParametersBuilder, TreeMethod},
+        BoosterParametersBuilder, BoosterType,
     },
+    Booster, DMatrix,
 };
 
 use crate::config::{ModelConfig, ModelType};
