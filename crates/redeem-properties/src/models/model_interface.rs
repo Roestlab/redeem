@@ -1114,26 +1114,61 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                 Tensor::new(target_values, &self.get_device())?
             }
             PropertyType::MS2 => {
-                let mut targets = Vec::new();
+                let batch_size = batch.ms2_intensities.len();
+                if batch_size == 0 {
+                    anyhow::bail!("MS2 batch is empty; cannot build target tensor");
+                }
+
+                // MS2 intensities are per-fragment (len - 1). Pad to the max length in the batch
+                // so the target shape matches the padded model output.
+                let max_frag_len = batch
+                    .naked_sequence
+                    .iter()
+                    .map(|seq| seq.len().saturating_sub(1))
+                    .max()
+                    .unwrap_or(0);
+                if max_frag_len == 0 {
+                    anyhow::bail!("Could not determine fragment length for MS2 targets");
+                }
+
+                let mut targets = vec![0f32; batch_size * max_frag_len * 8];
                 for (i, opt_peptide) in batch.ms2_intensities.iter().enumerate() {
                     let peptide = opt_peptide.as_ref().ok_or_else(|| {
                         anyhow::anyhow!("Missing MS2 intensities for peptide at index {i}")
                     })?;
-                    for row in peptide {
-                        for val in row {
-                            targets.push(*val);
+                    let expected_len = batch.naked_sequence[i].len().saturating_sub(1);
+                    if peptide.len() != expected_len {
+                        log::warn!(
+                            "MS2 intensities length {} does not match expected {} for peptide {}",
+                            peptide.len(),
+                            expected_len,
+                            i
+                        );
+                    }
+
+                    for (row_idx, row) in peptide.iter().enumerate() {
+                        if row_idx >= max_frag_len {
+                            break;
                         }
+                        if row.len() != 8 {
+                            log::warn!(
+                                "MS2 intensity row {} for peptide {} has len {}, expected 8",
+                                row_idx,
+                                i,
+                                row.len()
+                            );
+                        }
+                        let cols = row.len().min(8);
+                        let base = (i * max_frag_len + row_idx) * 8;
+                        targets[base..base + cols].copy_from_slice(&row[..cols]);
                     }
                 }
-                let shape = (
-                    batch.ms2_intensities.len(),
-                    batch.ms2_intensities[0]
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("Missing MS2 intensities in batch"))?
-                        .len(),
-                    8,
-                );
-                Tensor::from_vec(targets, shape, &self.get_device())?
+
+                Tensor::from_vec(
+                    targets,
+                    (batch_size, max_frag_len, 8),
+                    &self.get_device(),
+                )?
             }
         };
 
