@@ -703,11 +703,10 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                     let loss_val = loss.to_vec0::<f32>().unwrap_or(999.0);
                     batch_losses.push(loss_val);
 
-                    let predictions = predicted.to_vec1::<f32>()?;
-                    let targets = target_batch.to_vec1::<f32>()?;
-
                     let (mae, rmse, r2, acc) = match self.property_type() {
                         PropertyType::RT => {
+                            let predictions = predicted.flatten_all()?.to_vec1::<f32>()?;
+                            let targets = target_batch.flatten_all()?.to_vec1::<f32>()?;
                             let denorm = |v: &[f32]| -> Vec<f32> {
                                 match target_norm {
                                     TargetNormalization::ZScore(mean, std) => {
@@ -729,6 +728,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                             )
                         }
                         PropertyType::CCS => {
+                            let predictions = predicted.flatten_all()?.to_vec1::<f32>()?;
+                            let targets = target_batch.flatten_all()?.to_vec1::<f32>()?;
                             let tol: Vec<f32> = targets.iter().map(|t| t * 0.02).collect();
                             (
                                 Some(Metrics::mae(&predictions, &targets)),
@@ -828,11 +829,10 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                         let val_loss = compute_loss(&pred_flat, &tgt_flat)?;
                         let loss_val = val_loss.to_vec0::<f32>()?;
 
-                        let predictions = predicted.to_vec1::<f32>()?;
-                        let targets = target_val.to_vec1::<f32>()?;
-
                         let (mae, rmse, r2, acc) = match self.property_type() {
                             PropertyType::RT => {
+                                let predictions = predicted.flatten_all()?.to_vec1::<f32>()?;
+                                let targets = target_val.flatten_all()?.to_vec1::<f32>()?;
                                 let denorm = |v: &[f32]| -> Vec<f32> {
                                     match target_norm {
                                         TargetNormalization::ZScore(mean, std) => {
@@ -854,6 +854,8 @@ pub trait ModelInterface: Send + Sync + ModelClone {
                                 )
                             }
                             PropertyType::CCS => {
+                                let predictions = predicted.flatten_all()?.to_vec1::<f32>()?;
+                                let targets = target_val.flatten_all()?.to_vec1::<f32>()?;
                                 let tol: Vec<f32> = targets.iter().map(|t| t * 0.02).collect();
                                 (
                                     Some(Metrics::mae(&predictions, &targets)),
