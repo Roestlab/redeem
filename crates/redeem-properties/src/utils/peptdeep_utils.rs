@@ -19,9 +19,9 @@ const MODIFICATIONS_TSV_BYTES: &[u8] = include_bytes!(concat!(
     "/assets/modification.tsv"
 ));
 
-const PRETRAINED_MODELS_URL: &str = "https://github.com/singjc/redeem/releases/download/v0.1.0-alpha/peptdeep_generic_pretrained_models.zip";
-const PRETRAINED_MODELS_ZIP: &str = "data/peptdeep_generic_pretrained_models.zip";
-const PRETRAINED_MODELS_PATH: &str = "data/peptdeep_generic_pretrained_models";
+const PRETRAINED_MODELS_URL: &str = "https://github.com/singjc/redeem/releases/download/v0.1.0-alpha/ pretrained_models.zip";
+const PRETRAINED_MODELS_ZIP: &str = "data/ pretrained_models.zip";
+const PRETRAINED_MODELS_PATH: &str = "data/ pretrained_models";
 
 // Constants and Utility Structs
 
