@@ -20,8 +20,8 @@ const MODIFICATIONS_TSV_BYTES: &[u8] = include_bytes!(concat!(
 ));
 
 const PRETRAINED_MODELS_URL: &str = "https://github.com/singjc/redeem/releases/download/v0.1.0-alpha/pretrained_models.zip";
-const PRETRAINED_MODELS_ZIP: &str = "data/ pretrained_models.zip";
-const PRETRAINED_MODELS_PATH: &str = "data/ pretrained_models";
+const PRETRAINED_MODELS_ZIP: &str = "data/pretrained_models.zip";
+const PRETRAINED_MODELS_PATH: &str = "data/pretrained_models";
 
 // Constants and Utility Structs
 
@@ -638,6 +638,27 @@ mod tests {
     fn test_ensure_pretrained_models_exist() {
         let result = download_pretrained_models_exist();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_download_pretrained_models_exist_returns_valid_path() {
+        let result = download_pretrained_models_exist();
+        
+        // Should return Ok with a valid path
+        assert!(result.is_ok(), "Failed to download/extract pretrained models");
+        
+        let path = result.unwrap();
+        
+        // Path should exist
+        assert!(path.exists(), "Pretrained models path does not exist: {:?}", path);
+        
+        // Path should be a directory
+        assert!(path.is_dir(), "Pretrained models path is not a directory: {:?}", path);
+        
+        // Check that the path matches expected location
+        assert_eq!(path, PathBuf::from(PRETRAINED_MODELS_PATH));
+        
+        println!("Pretrained models successfully available at: {:?}", path);
     }
 
     #[test]
