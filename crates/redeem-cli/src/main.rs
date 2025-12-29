@@ -3,6 +3,7 @@ use clap::{Arg, ArgMatches, Command, ValueHint};
 use log::LevelFilter;
 use std::path::PathBuf;
 
+use redeem_cli::classifiers::score::score::score_pin_with_config;
 use redeem_cli::properties::inference::inference;
 use redeem_cli::properties::inference::input::PropertyInferenceConfig;
 use redeem_cli::properties::train::input::PropertyTrainConfig;
@@ -150,6 +151,24 @@ fn main() -> Result<()> {
                                 .value_hint(ValueHint::FilePath),
                         ),
                 ),
+                .subcommand(
+                    Command::new("score")
+                        .about("Score a Percolator .pin file with the semi-supervised classifier")
+                        .arg(
+                            Arg::new("pin")
+                                .help("Path to the Percolator .pin input file")
+                                .required(true)
+                                .value_parser(clap::value_parser!(PathBuf))
+                                .value_hint(ValueHint::FilePath),
+                        )
+                        .arg(
+                            Arg::new("config")
+                                .help("Path to classifier JSON configuration file")
+                                .required(true)
+                                .value_parser(clap::value_parser!(PathBuf))
+                                .value_hint(ValueHint::FilePath),
+                        ),
+                ),
         )
         .help_template(
             "{usage-heading} {usage}\n\n\
@@ -217,6 +236,20 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
                 config_path
             );
             // Call your classifier logic using config_path
+            Ok(())
+        }
+        Some(("score", score_matches)) => {
+            let pin_path: &PathBuf = score_matches.get_one("pin").unwrap();
+            let config_path: &PathBuf = score_matches.get_one("config").unwrap();
+            println!(
+                "[ReDeeM::Classifiers] Scoring PIN file: {:?} using config: {:?}",
+                pin_path, config_path
+            );
+            let result = score_pin_with_config(pin_path, config_path)?;
+            println!(
+                "[ReDeeM::Classifiers] Completed scoring {} PSMs.",
+                result.predictions.as_slice().len()
+            );
             Ok(())
         }
         _ => unreachable!(),
