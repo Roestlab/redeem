@@ -14,8 +14,8 @@ use super::nn::TransformerEncoder;
 /// constants used by PeptDeep Models
 pub const AA_EMBEDDING_SIZE: usize = 27; // TODO: derive from constants yaml
 const MAX_INSTRUMENT_NUM: usize = 8; // TODO: derive from constants yaml
-// Number of features in the modification vector (kept as a single global
-// constant to match the legacy code paths that expect a fixed layout).
+                                     // Number of features in the modification vector (kept as a single global
+                                     // constant to match the legacy code paths that expect a fixed layout).
 pub const MOD_FEATURE_SIZE: usize = 109;
 
 /// Decode w linear NN
@@ -314,7 +314,6 @@ impl DecoderSmall {
             None
         };
 
-        
         Ok(Self { nn: nn_mod, scale })
     }
 }
@@ -323,7 +322,6 @@ impl Module for DecoderSmall {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         match self.nn.forward_all(x) {
             Ok(outputs) => {
-                
                 if let Some(last) = outputs.last() {
                     let mut out = last.clone();
                     if let Some(scale_layer) = &self.scale {
@@ -618,7 +616,6 @@ impl Input26aaModPositionalEncoding {
         // Compute embeddings
         let mod_out = self.mod_nn.forward(mod_x)?;
         let aa_out = self.aa_emb.forward(aa_indices)?;
-
 
         // Concatenate aa and mod embeddings and apply positional encoding
         let concatenated = Tensor::cat(&[&aa_out, &mod_out], 2)?;
@@ -1195,8 +1192,6 @@ impl Encoder26aaModCnnLstmAttnSum {
     pub fn forward(&self, aa_indices: &Tensor, mod_x: &Tensor) -> Result<Tensor> {
         let mod_out = self.mod_nn.forward(mod_x)?;
 
-        
-
         let additional_tensors: Vec<&Tensor> = vec![&mod_out];
 
         let x = aa_one_hot(&aa_indices, &additional_tensors)
@@ -1294,7 +1289,6 @@ impl Encoder26aaModChargeCnnLstmAttnSum {
 
         Ok(x)
     }
-
 }
 
 /// Encode AAs (26 AA letters) and modifications using CNN + Transformer + AttentionSum.
@@ -1349,8 +1343,11 @@ impl Encoder26aaModCnnTransformerAttnSum {
                 // Try local name first; if not present in this varstore scope,
                 // fall back to a qualified name derived from the transformer
                 // prefix (e.g. "rt_encoder.proj_cnn_to_transformer.weight").
-                
-                let w = match varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight") {
+
+                let w = match varstore.get(
+                    (hidden_dim, input_dim * 4),
+                    "proj_cnn_to_transformer.weight",
+                ) {
                     Ok(t) => t,
                     Err(_) => {
                         let prefix = transformer_pp.split('.').next().unwrap_or(transformer_pp);
@@ -1358,7 +1355,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
                         varstore.get((hidden_dim, input_dim * 4), &qualified)?
                     }
                 };
-                
+
                 let lin = candle_nn::Linear::new(w.clone(), None);
 
                 lin
@@ -1448,7 +1445,7 @@ impl Encoder26aaModCnnTransformerAttnSum {
 
         let x = self.proj_cnn_to_transformer.forward(&x)?;
         let x = x.contiguous()?;
-        
+
         let x = self
             .input_transformer
             .forward_with_mask(&x, Some(&padding_mask))?;
@@ -1508,7 +1505,10 @@ impl Encoder26aaModChargeCnnTransformerAttnSum {
                 // Try local name first; if not present in this varstore scope,
                 // fall back to a qualified name derived from the transformer
                 // prefix (e.g. "rt_encoder.proj_cnn_to_transformer.weight").
-                let w = match varstore.get((hidden_dim, input_dim * 4), "proj_cnn_to_transformer.weight") {
+                let w = match varstore.get(
+                    (hidden_dim, input_dim * 4),
+                    "proj_cnn_to_transformer.weight",
+                ) {
                     Ok(t) => t,
                     Err(_) => {
                         let prefix = transformer_pp.split('.').next().unwrap_or(transformer_pp);

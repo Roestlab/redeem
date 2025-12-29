@@ -1,3 +1,6 @@
+use crate::properties::train::plot::{
+    plot_delta_histogram, plot_error_cdf, plot_residuals_vs_feature,
+};
 use anyhow::{Context, Result};
 use maud::{PreEscaped, html};
 use redeem_properties::models::ccs_cnn_lstm_model::CCSCNNLSTMModel;
@@ -7,15 +10,14 @@ use redeem_properties::models::rt_cnn_lstm_model::RTCNNLSTMModel;
 use redeem_properties::models::rt_cnn_transformer_model::RTCNNTFModel;
 use redeem_properties::utils::data_handling::{PeptideData, TargetNormalization};
 use redeem_properties::utils::peptdeep_utils::{MODIFICATION_MAP, load_modifications};
+use redeem_properties::utils::stats::Metrics;
 use redeem_properties::utils::utils::get_device;
 use report_builder::{Report, ReportSection, plots::plot_scatter};
-use crate::properties::train::plot::{plot_delta_histogram, plot_error_cdf, plot_residuals_vs_feature};
-use redeem_properties::utils::stats::Metrics;
 
 use crate::properties::inference::input::PropertyInferenceConfig;
 use crate::properties::inference::output::write_peptide_data;
 use crate::properties::load_data::load_peptide_data;
-use crate::properties::train::{sample_peptides, sample_indices};
+use crate::properties::train::{sample_indices, sample_peptides};
 use crate::properties::util::write_bytes_to_file;
 
 pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
@@ -169,14 +171,19 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
             for (name, tensor) in tensors.iter() {
                 // Keep special "scale" dump as a separate artifact to aid debugging
                 let lname = name.to_lowercase();
-                    // (suppressed) Per-tensor scale dumps are disabled to avoid producing
-                    // analysis artifacts during normal CLI inference runs.
+                // (suppressed) Per-tensor scale dumps are disabled to avoid producing
+                // analysis artifacts during normal CLI inference runs.
 
                 // For parity with the trainer, write a summary line for every tensor
                 let mut info_line = format!("{} shape={:?}", name, tensor.shape());
                 if let Ok(flat) = tensor.clone().flatten_all() {
                     if let Ok(vals) = flat.to_vec1::<f32>() {
-                        let sample = vals.iter().take(8).map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                        let sample = vals
+                            .iter()
+                            .take(8)
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",");
                         info_line = format!("{} sample=[{}]", info_line, sample);
                     }
                 }
@@ -189,17 +196,35 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
             let sample_out = "analysis/model_load_sample_inference.txt";
             let mut sample_lines: Vec<String> = Vec::new();
             sample_lines.push(format!("model_path={}", &config.model_path));
-            if let Some((name, tensor)) = tensors.iter().find(|(n, _)| n.to_lowercase().contains("rt_decoder.nn.0.weight") ).cloned() {
+            if let Some((name, tensor)) = tensors
+                .iter()
+                .find(|(n, _)| n.to_lowercase().contains("rt_decoder.nn.0.weight"))
+                .cloned()
+            {
                 if let Ok(flat) = tensor.clone().flatten_all() {
                     if let Ok(vals) = flat.to_vec1::<f32>() {
-                        let sample = vals.iter().take(8).map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                        let sample = vals
+                            .iter()
+                            .take(8)
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",");
                         sample_lines.push(format!("{} sample=[{}]", name, sample));
                     }
                 }
-            } else if let Some((name, tensor)) = tensors.iter().find(|(n, _)| n.to_lowercase().contains("decoder") ).cloned() {
+            } else if let Some((name, tensor)) = tensors
+                .iter()
+                .find(|(n, _)| n.to_lowercase().contains("decoder"))
+                .cloned()
+            {
                 if let Ok(flat) = tensor.clone().flatten_all() {
                     if let Ok(vals) = flat.to_vec1::<f32>() {
-                        let sample = vals.iter().take(8).map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                        let sample = vals
+                            .iter()
+                            .take(8)
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",");
                         sample_lines.push(format!("{} sample=[{}]", name, sample));
                     }
                 }
@@ -254,7 +279,7 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
             "This report summarizes the inference process of the ReDeeM model."
         });
 
-    // Inference scatter plot
+        // Inference scatter plot
         // Index-based sampling: choose random indices from the full dataset,
         // then extract the corresponding inputs and predictions from the
         // already-computed `inference_results`. This guarantees perfect
@@ -349,7 +374,12 @@ pub fn run_inference(config: &PropertyInferenceConfig) -> Result<()> {
         overview_section.add_content(html! {
             p { "Delta histogram explanation: This histogram shows the distribution of prediction errors (Predicted − True). The center should be close to zero for an unbiased model. Narrower histograms indicate smaller typical errors; skew or heavy tails indicate bias or occasional large mistakes. Use the histogram to detect systematic offsets and outliers." }
         });
-        let delta_plot = plot_delta_histogram(&deltas, "Prediction Error Histogram", "Predicted - True", "Count");
+        let delta_plot = plot_delta_histogram(
+            &deltas,
+            "Prediction Error Histogram",
+            "Predicted - True",
+            "Count",
+        );
         overview_section.add_plot(delta_plot);
 
         // Absolute error CDF

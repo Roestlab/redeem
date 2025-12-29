@@ -237,7 +237,6 @@ impl MultiHeadAttention {
             .transpose(1, 2)?
             .contiguous()?;
 
-
         let k_t = k.transpose(2, 3)?.contiguous()?;
         let mut scores = match q.matmul(&k_t) {
             Ok(s) => (s / (self.head_dim as f64).sqrt())?,
@@ -279,7 +278,6 @@ impl MultiHeadAttention {
             };
         }
 
-
         let attn = match candle_nn::ops::softmax(&scores, scores.dims().len() - 1) {
             Ok(a) => a,
             Err(e) => {
@@ -287,7 +285,6 @@ impl MultiHeadAttention {
                 return Err(e.into());
             }
         };
-
 
         let context = match attn.matmul(&v) {
             Ok(ctx) => ctx

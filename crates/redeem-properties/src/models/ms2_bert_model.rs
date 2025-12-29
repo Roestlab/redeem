@@ -212,7 +212,7 @@ impl ModelInterface for MS2BertModel {
             mod_x_out.shape(),
             mod_x_out.device()
         );
-        
+
         log::trace!(
             "[MS2BertModel::forward] charge_out shape: {:?}, device: {:?}",
             charge_out.shape(),

@@ -125,7 +125,10 @@ impl ModelInterface for RTCNNTFModel {
         let mut varmap = candle_nn::VarMap::new();
         create_var_map(&mut varmap, tensor_data, &device)?;
         // varmap keys are available in `varmap` if needed;
-        log::debug!("VarMap populated with {} entries", varmap.data().lock().map(|m| m.len()).unwrap_or(0));
+        log::debug!(
+            "VarMap populated with {} entries",
+            varmap.data().lock().map(|m| m.len()).unwrap_or(0)
+        );
         let var_store = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let constants = match constants_path {
@@ -310,7 +313,10 @@ impl ModelInterface for RTCNNTFModel {
 
         let x = self.dropout.forward(&x, self.is_training)?;
 
-        log::debug!("Decoder input shape (post-dropout): {:?}", x.clone().shape());
+        log::debug!(
+            "Decoder input shape (post-dropout): {:?}",
+            x.clone().shape()
+        );
 
         let x = self.rt_decoder.forward(&x)?;
 

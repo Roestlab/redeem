@@ -140,8 +140,6 @@ pub fn aa_one_hot(aa_indices: &Tensor, cat_others: &[&Tensor]) -> Result<Tensor>
         // align with other encoder dumps.
         let concatenated = Tensor::cat(&features, 2)?;
 
-        
-
         Ok(concatenated)
     }
 }

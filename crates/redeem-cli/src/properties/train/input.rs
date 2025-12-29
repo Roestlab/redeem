@@ -29,6 +29,8 @@ pub struct PropertyTrainConfig {
     pub head_learnable_scaler: bool,
     // Optional list of variable name prefixes to train (head-only training). Example: ["rt_decoder.nn."]
     pub train_var_prefixes: Option<Vec<String>>,
+    /// Fraction of total steps used for LR warmup (0.0–1.0). Defaults to 0.12 if omitted.
+    pub warmup_fraction: Option<f32>,
 }
 
 impl Default for PropertyTrainConfig {
@@ -52,6 +54,7 @@ impl Default for PropertyTrainConfig {
             train_var_prefixes: None,
             head_type: String::from("mlp"),
             head_learnable_scaler: false,
+            warmup_fraction: Some(0.12),
         }
     }
 }
@@ -103,6 +106,7 @@ impl PropertyTrainConfig {
         load_or_default!(head_type);
         load_or_default!(head_learnable_scaler);
         load_or_default!(train_var_prefixes);
+        load_or_default!(warmup_fraction);
 
         // Apply CLI overrides
         if let Some(train_data) = matches.get_one::<String>("train_data") {

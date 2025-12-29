@@ -97,6 +97,13 @@ fn main() -> Result<()> {
                 .subcommand(Command::new("inference")
                     .about("Perform inference on new data using a trained model")
                     .arg(
+                        Arg::new("pretrained")
+                            .long("pretrained")
+                            .help("Name of a known pretrained model to use instead of passing --model. Examples: 'redeem-ccs', 'redeem-rt', 'alphapeptdeep-ccs'")
+                            .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                            .value_hint(ValueHint::Other),
+                    )
+                    .arg(
                         Arg::new("config")
                             .help("Path to training configuration file")
                             .required(true)

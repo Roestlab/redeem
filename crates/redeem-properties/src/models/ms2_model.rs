@@ -89,6 +89,7 @@ impl MS2ModelWrapper {
             learning_rate,
             epochs,
             target_norm,
+            None,
         )
     }
 

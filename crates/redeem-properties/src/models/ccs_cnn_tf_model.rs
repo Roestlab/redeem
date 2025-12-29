@@ -178,7 +178,11 @@ impl ModelInterface for CCSCNNTFModel {
                 &var_store.pp("ccs_decoder"),
                 129,
                 1,
-                vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
+                vec![
+                    "ccs_decoder.nn.0.weight",
+                    "ccs_decoder.nn.1.weight",
+                    "ccs_decoder.nn.2.weight",
+                ],
                 vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"],
             )?)
         } else if var_store.get((64, 129), "ccs_decoder.nn.0.weight").is_ok() {
@@ -187,7 +191,11 @@ impl ModelInterface for CCSCNNTFModel {
                     &var_store.pp("ccs_decoder"),
                     129,
                     1,
-                    vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
+                    vec![
+                        "ccs_decoder.nn.0.weight",
+                        "ccs_decoder.nn.1.weight",
+                        "ccs_decoder.nn.2.weight",
+                    ],
                     vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"],
                 )?)
             } else {
@@ -195,12 +203,18 @@ impl ModelInterface for CCSCNNTFModel {
                     &var_store.pp("ccs_decoder"),
                     129,
                     1,
-                    vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
+                    vec![
+                        "ccs_decoder.nn.0.weight",
+                        "ccs_decoder.nn.1.weight",
+                        "ccs_decoder.nn.2.weight",
+                    ],
                     vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"],
                 )?)
             }
         } else {
-            return Err(anyhow::anyhow!("Unrecognized decoder layout in model varstore"));
+            return Err(anyhow::anyhow!(
+                "Unrecognized decoder layout in model varstore"
+            ));
         };
 
         // Ensure nested encoder transformer is in eval mode when constructed

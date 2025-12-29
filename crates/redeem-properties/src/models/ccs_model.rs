@@ -87,6 +87,7 @@ impl CCSModelWrapper {
         early_stopping_patience: usize,
         target_norm: TargetNormalization,
         train_var_prefixes: Option<Vec<String>>,
+        warmup_fraction: Option<f64>,
     ) -> Result<TrainingStepMetrics> {
         self.model.train(
             training_data,
@@ -102,6 +103,7 @@ impl CCSModelWrapper {
             true,
             target_norm,
             train_var_prefixes,
+            warmup_fraction,
         )
     }
 
@@ -121,6 +123,7 @@ impl CCSModelWrapper {
             learning_rate,
             epochs,
             target_norm,
+            None,
         )
     }
 

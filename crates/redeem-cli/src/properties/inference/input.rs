@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::properties::util::validate_tsv_or_csv_file;
+use redeem_properties::pretrained::PretrainedModel;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PropertyInferenceConfig {
@@ -108,6 +109,28 @@ impl PropertyInferenceConfig {
         // Apply CLI overrides
         if let Some(model_path) = matches.get_one::<String>("model_path") {
             config.model_path = model_path.clone();
+        }
+        // If a pretrained shorthand is provided, resolve it to a cached model path and override model_path
+        if let Some(pre) = matches.get_one::<String>("pretrained") {
+            match pre.parse::<PretrainedModel>() {
+                Ok(pm) => match redeem_properties::pretrained::cache_pretrained_model(pm) {
+                    Ok(p) => config.model_path = p.to_string_lossy().into_owned(),
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Failed to resolve pretrained model '{}': {}",
+                            pre,
+                            e
+                        ));
+                    }
+                },
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Invalid pretrained model name '{}': {}",
+                        pre,
+                        e
+                    ));
+                }
+            }
         }
         if let Some(inference_data) = matches.get_one::<String>("inference_data") {
             validate_tsv_or_csv_file(inference_data)?;

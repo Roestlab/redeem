@@ -163,6 +163,7 @@ fn main() -> Result<()> {
         0.001,
         5,
         TargetNormalization::None,
+        None,
     )?;
 
     run_prediction(&mut model, &prediction_data)?;
