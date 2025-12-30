@@ -16,6 +16,7 @@ pub struct SVMClassifier {
     params: ModelConfig,
     model: Option<LinearSVC>,
     calibrator: Option<PlattCalibrator>,
+    n_features: Option<usize>,
 }
 
 impl SVMClassifier {
@@ -24,6 +25,7 @@ impl SVMClassifier {
             params,
             model: None,
             calibrator: None,
+            n_features: None,
         }
     }
 
@@ -85,6 +87,7 @@ impl SVMClassifier {
         _y_eval: Option<&[i32]>,
     ) {
         let labels: Vec<i32> = y.iter().map(|&val| if val == 1 { 1 } else { -1 }).collect();
+        self.n_features = Some(x.ncols());
         let dense_rows = Self::dense_rows(x);
         let dense_matrix = LightDenseMatrix::from_vec_rows(&dense_rows);
 
@@ -130,6 +133,35 @@ impl ClassifierModel for SVMClassifier {
 
     fn clone_box(&self) -> Box<dyn ClassifierModel> {
         Box::new(SVMClassifier::new(self.params.clone()))
+    }
+
+    fn feature_weights(&self) -> Option<Vec<f32>> {
+        let model = self.model.as_ref()?;
+        let n_features = self.n_features?;
+        if n_features == 0 {
+            return None;
+        }
+
+        let mut basis: Vec<Vec<f32>> = Vec::with_capacity(n_features + 1);
+        basis.push(vec![0.0; n_features]);
+        for idx in 0..n_features {
+            let mut row = vec![0.0; n_features];
+            row[idx] = 1.0;
+            basis.push(row);
+        }
+
+        let csr = CsrMatrix::from_dense(&basis, 0.0);
+        let scores = Self::collect_scores(model, &csr);
+        if scores.len() != n_features + 1 {
+            return None;
+        }
+
+        let bias = scores[0];
+        let weights = scores[1..]
+            .iter()
+            .map(|score| score - bias)
+            .collect::<Vec<f32>>();
+        Some(weights)
     }
 }
 

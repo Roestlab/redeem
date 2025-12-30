@@ -34,4 +34,10 @@ pub trait ClassifierModel: Send {
     fn name(&self) -> &str {
         "classifier"
     }
+
+    /// Optional linear feature weights/importances for the trained model.
+    /// Returns `None` when not supported or before fitting.
+    fn feature_weights(&self) -> Option<Vec<f32>> {
+        None
+    }
 }
