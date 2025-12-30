@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use redeem_cli::classifiers::score::score::{
-    load_score_config, score_pin, write_score_output, ScoreConfig,
+    load_score_config, score_pin, write_score_output, write_score_report, ScoreConfig,
 };
 use redeem_classifiers::config::ModelType;
 use redeem_classifiers::data_handling::RankGrouping;
@@ -189,6 +189,14 @@ fn main() -> Result<()> {
                                 .value_hint(ValueHint::Other),
                         )
                         .arg(
+                            Arg::new("report")
+                                .long("report")
+                                .help("Write an HTML report with score histograms. Optionally provide a path.")
+                                .num_args(0..=1)
+                                .value_parser(clap::value_parser!(PathBuf))
+                                .value_hint(ValueHint::FilePath),
+                        )
+                        .arg(
                             Arg::new("deduplicate")
                                 .long("dedup")
                                 .help("Deduplicate PSMs in the final output by grouping.")
@@ -274,6 +282,7 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
         Some(("score", score_matches)) => {
             let pin_path: &PathBuf = score_matches.get_one("pin").unwrap();
             let output_path: Option<&PathBuf> = score_matches.get_one("output_file");
+            let report_path: Option<&PathBuf> = score_matches.get_one("report");
             eprintln!("[ReDeeM::Classifiers] Scoring PIN file: {:?}", pin_path);
 
             let mut config = if let Some(config_path) = score_matches.get_one::<PathBuf>("config") {
@@ -312,6 +321,11 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
 
             let result = score_pin(pin_path, &config)?;
             write_score_output(pin_path, &result, output_path)?;
+            if score_matches.contains_id("report") {
+                let default_report = PathBuf::from("redeem_classifiers_report.html");
+                let path = report_path.unwrap_or(&default_report);
+                write_score_report(&result, path)?;
+            }
             eprintln!(
                 "[ReDeeM::Classifiers] Completed scoring {} PSMs.",
                 result.predictions.as_slice().len()

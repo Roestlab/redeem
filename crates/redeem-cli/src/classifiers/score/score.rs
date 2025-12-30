@@ -3,6 +3,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use plotly::{Histogram, Layout, Plot};
+use report_builder::{Report, ReportSection};
 
 use redeem_classifiers::config::ModelConfig;
 use redeem_classifiers::data_handling::{PsmMetadata, RankGrouping};
@@ -51,6 +53,7 @@ pub struct ScoreResult {
     pub metadata: PsmMetadata,
     pub default_direction: Option<Vec<f32>>,
     pub row_mapping: Option<Vec<Option<usize>>>,
+    pub labels: Array1<i32>,
 }
 
 /// Load a scorer configuration from a JSON file.
@@ -87,13 +90,14 @@ pub fn score_pin<P: AsRef<Path>>(pin_path: P, config: &ScoreConfig) -> Result<Sc
     let (predictions, ranks) = learner.fit(pin_data.x, pin_data.y, pin_data.metadata.clone())?;
     let default_direction = learner.feature_weights().map(|weights| weights.to_vec());
 
-    let (predictions, ranks, targets, metadata, row_mapping) = if config.deduplicate {
+    let (predictions, ranks, targets, labels, metadata, row_mapping) = if config.deduplicate {
         let keep = dedup_keep_mask(&pin_data.metadata, &predictions, config.rank_grouping);
         let mapping = build_row_mapping(&keep);
         (
             filter_array1(&predictions, &keep),
             filter_array1(&ranks, &keep),
             filter_array1(&targets, &keep),
+            filter_array1(&pin_data.y, &keep),
             pin_data.metadata.filter_by_indices(&keep_indices(&keep)),
             Some(mapping),
         )
@@ -102,6 +106,7 @@ pub fn score_pin<P: AsRef<Path>>(pin_path: P, config: &ScoreConfig) -> Result<Sc
             predictions,
             ranks,
             targets,
+            pin_data.y,
             pin_data.metadata,
             None,
         )
@@ -116,6 +121,7 @@ pub fn score_pin<P: AsRef<Path>>(pin_path: P, config: &ScoreConfig) -> Result<Sc
         metadata,
         default_direction,
         row_mapping,
+        labels,
     })
 }
 
@@ -186,10 +192,7 @@ pub fn write_score_output<P: AsRef<Path>>(
             .unwrap_or(false);
         let label_value = record.get(label_idx).unwrap_or("").trim();
         let label = label_value.parse::<i32>().ok();
-        let mut out_fields: Vec<String> = record.iter().map(|field| field.to_string()).collect();
-        while out_fields.len() < headers.len() {
-            out_fields.push(String::new());
-        }
+        let mut out_fields = normalize_record_fields(&record, headers.len());
         if is_default_direction {
             if let Some(weights) = feature_weights {
                 for (idx_opt, weight) in feature_indices.iter().zip(weights.iter()) {
@@ -241,6 +244,128 @@ pub fn write_score_output<P: AsRef<Path>>(
 
     writer.flush()?;
     Ok(())
+}
+
+fn normalize_record_fields(record: &csv::StringRecord, header_len: usize) -> Vec<String> {
+    let mut fields: Vec<String> = record.iter().map(|field| field.to_string()).collect();
+    if fields.len() > header_len && header_len > 0 {
+        let mut merged = Vec::with_capacity(header_len);
+        merged.extend(fields.drain(..header_len.saturating_sub(1)));
+        let mut last = String::new();
+        if header_len > 0 {
+            if let Some(base) = fields.first() {
+                last.push_str(base);
+            }
+            for extra in fields.iter().skip(1) {
+                if !extra.is_empty() {
+                    if !last.is_empty() {
+                        last.push(';');
+                    }
+                    last.push_str(extra);
+                }
+            }
+            merged.push(last);
+        }
+        fields = merged;
+    }
+    while fields.len() < header_len {
+        fields.push(String::new());
+    }
+    fields
+}
+
+/// Save an HTML report with a d_score histogram colored by label.
+pub fn write_score_report<P: AsRef<Path>>(results: &ScoreResult, report_path: P) -> Result<()> {
+    let mut report = Report::new(
+        "ReDeeM Classifier Report",
+        "1",
+        None,
+        "Classifier scoring summary",
+    );
+
+    let mut section = ReportSection::new("Score Distribution");
+    let plot = plot_dscore_histogram(&results.predictions, &results.labels);
+    section.add_plot(plot);
+    let qvalue_plot = plot_qvalue_histogram(&results.qvalues, &results.labels);
+    section.add_plot(qvalue_plot);
+    report.add_section(section);
+
+    report.save_to_file(&report_path.as_ref().to_string_lossy().to_string())?;
+    Ok(())
+}
+
+fn plot_dscore_histogram(scores: &Array1<f32>, labels: &Array1<i32>) -> Plot {
+    let mut targets = Vec::new();
+    let mut decoys = Vec::new();
+
+    for (score, label) in scores.iter().zip(labels.iter()) {
+        if *label == 1 {
+            targets.push(*score as f64);
+        } else if *label == -1 {
+            decoys.push(*score as f64);
+        }
+    }
+
+    let mut plot = Plot::new();
+    plot.add_trace(
+        Histogram::new(targets)
+            .name("Target")
+            .opacity(0.7)
+            .marker(plotly::common::Marker::new().color("rgba(31, 119, 180, 0.7)")),
+    );
+    plot.add_trace(
+        Histogram::new(decoys)
+            .name("Decoy")
+            .opacity(0.7)
+            .marker(plotly::common::Marker::new().color("rgba(214, 39, 40, 0.7)")),
+    );
+
+    plot.set_layout(
+        Layout::new()
+            .title(plotly::common::Title::new("d_score Histogram"))
+            .x_axis(plotly::layout::Axis::new().title("d_score"))
+            .y_axis(plotly::layout::Axis::new().title("Count"))
+            .barmode(plotly::layout::BarMode::Overlay),
+    );
+
+    plot
+}
+
+fn plot_qvalue_histogram(qvalues: &Array1<f32>, labels: &Array1<i32>) -> Plot {
+    let mut targets = Vec::new();
+    let mut decoys = Vec::new();
+
+    for (qvalue, label) in qvalues.iter().zip(labels.iter()) {
+        if *label == 1 {
+            targets.push(*qvalue as f64);
+        } else if *label == -1 {
+            decoys.push(*qvalue as f64);
+        }
+    }
+
+    let mut plot = Plot::new();
+    plot.add_trace(
+        Histogram::new(targets)
+            .name("Target")
+            .opacity(0.7)
+            .marker(plotly::common::Marker::new().color("rgba(31, 119, 180, 0.7)")),
+    );
+    plot.add_trace(
+        Histogram::new(decoys)
+            .name("Decoy")
+            .opacity(0.7)
+            .marker(plotly::common::Marker::new().color("rgba(214, 39, 40, 0.7)")),
+    );
+
+    plot.set_layout(
+        Layout::new()
+            .title(plotly::common::Title::new("spectrum_q Histogram"))
+            .x_axis(plotly::layout::Axis::new().title("spectrum_q"))
+            .y_axis(plotly::layout::Axis::new().title("Count"))
+            .barmode(plotly::layout::BarMode::Overlay),
+    );
+
+    plot
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
