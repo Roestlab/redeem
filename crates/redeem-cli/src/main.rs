@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use log::LevelFilter;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use redeem_cli::classifiers::score::score::{
     load_score_config, score_pin, write_score_output, ScoreConfig,
@@ -294,7 +295,7 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
 
             if let Some(model_type) = score_matches.get_one::<String>("model_type") {
                 config.model.model_type =
-                    ModelType::from_str(model_type).map_err(|err| anyhow::anyhow!(err))?;
+                    ModelType::from_str(model_type).map_err(anyhow::Error::msg)?;
             }
 
             if score_matches.get_flag("deduplicate") {
