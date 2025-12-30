@@ -7,7 +7,7 @@ use {
     csv::ReaderBuilder,
     maud::html,
     redeem_classifiers::config::ModelType,
-    redeem_classifiers::data_handling::PsmMetadata,
+    redeem_classifiers::data_handling::{PsmMetadata, RankGrouping},
     redeem_classifiers::math::{Array1, Array2},
     redeem_classifiers::psm_scorer::SemiSupervisedLearner,
     redeem_classifiers::report::plots::{plot_pp, plot_score_histogram},
@@ -99,6 +99,8 @@ pub fn load_test_psm_csv(path: &str) -> Result<(Array2<f32>, Array1<i32>, PsmMet
         file_id: file_ids,
         spec_id: spec_ids,
         feature_names,
+        scan_nr: None,
+        exp_mass: None,
     };
 
     Ok((x, y, metadata))
@@ -142,6 +144,7 @@ fn run_psm_scorer(
         Some((0.15, 1.0)),
         scale_features,
         normalize_scores,
+        RankGrouping::SpecId,
     );
     let (predictions, _ranks) = learner.fit(x.clone(), y.clone(), metadata.clone())?;
     Ok(predictions)

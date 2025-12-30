@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use rayon::prelude::*;
 
-use crate::data_handling::{Experiment, PsmMetadata};
+use crate::data_handling::{Experiment, PsmMetadata, RankGrouping};
 use crate::math::{Array1, Array2};
 use crate::preprocessing;
 use crate::stats::tdc;
@@ -37,6 +37,8 @@ pub struct SemiSupervisedLearner {
     /// If true, normalize final prediction scores to zero-mean/unit-variance
     /// before producing the final output.
     normalize_scores: bool,
+    last_feature_weights: Option<Vec<f32>>,
+    rank_grouping: RankGrouping,
 }
 
 impl SemiSupervisedLearner {
@@ -62,6 +64,7 @@ impl SemiSupervisedLearner {
         class_pct: Option<(f64, f64)>,
         scale_features: bool,
         normalize_scores: bool,
+        rank_grouping: RankGrouping,
     ) -> Self {
         // Centralize construction to the models factory which returns a
         // `Box<dyn ClassifierModel>`.
@@ -79,6 +82,8 @@ impl SemiSupervisedLearner {
             class_pct,
             scale_features,
             normalize_scores,
+            last_feature_weights: None,
+            rank_grouping,
         }
     }
 
@@ -514,10 +519,60 @@ impl SemiSupervisedLearner {
             }
         }
 
+        self.last_feature_weights = self.fit_final_model_for_weights(&experiment, &labels);
+
         experiment.update_rank_feature(&final_predictions, &experiment.psm_metadata.clone());
-        let updated_ranks = experiment.get_rank_column()?;
+        let updated_ranks = match experiment.get_rank_column() {
+            Ok(ranks) => ranks,
+            Err(err) => {
+                log::warn!(
+                    "Rank feature missing or invalid ({}); computing ranks from scores.",
+                    err
+                );
+                experiment.compute_rank_from_scores(&final_predictions, self.rank_grouping)?
+            }
+        };
 
         Ok((final_predictions, updated_ranks))
+    }
+
+    pub fn feature_weights(&self) -> Option<&[f32]> {
+        self.last_feature_weights.as_deref()
+    }
+
+    fn fit_final_model_for_weights(
+        &mut self,
+        experiment: &Experiment,
+        labels: &Array1<i32>,
+    ) -> Option<Vec<f32>> {
+        let n_samples = experiment.x.nrows();
+        if n_samples == 0 {
+            return None;
+        }
+
+        let candidates: Vec<usize> = (0..n_samples).collect();
+        let mut selected = Self::sample_training_indices(labels, &candidates, self.class_pct);
+        if selected.is_empty() {
+            return None;
+        }
+        selected.sort_unstable();
+
+        let train_mask = Self::mask_from_indices(n_samples, &selected);
+        let mut train_exp = experiment.filter(&train_mask);
+        train_exp.y = Array1::from_vec(selected.iter().map(|&idx| labels[idx]).collect());
+        Self::remove_unlabeled_psms(&mut train_exp);
+
+        let has_pos = train_exp.y.iter().any(|&v| v == 1);
+        let has_neg = train_exp.y.iter().any(|&v| v == -1);
+        if !(has_pos && has_neg) {
+            log::warn!(
+                "Final model training skipped; requires both target and decoy examples."
+            );
+            return None;
+        }
+
+        self.model.fit(&train_exp.x, train_exp.y.as_slice(), None, None);
+        self.model.feature_weights()
     }
 }
 
@@ -638,11 +693,14 @@ mod tests {
             Some((0.2, 0.5)),
             false,
             false,
+            RankGrouping::SpecId,
         );
         let metadata = crate::data_handling::PsmMetadata {
             file_id: vec![0usize; x.nrows()],
             spec_id: vec!["spec".to_string(); x.nrows()],
             feature_names: (0..x.ncols()).map(|i| format!("f{}", i)).collect(),
+            scan_nr: None,
+            exp_mass: None,
         };
 
         let (predictions, _ranks) = learner.fit(x, y.clone(), metadata).unwrap();
@@ -683,11 +741,14 @@ mod tests {
             Some((0.2, 0.5)),
             false,
             false,
+            RankGrouping::SpecId,
         );
         let metadata = crate::data_handling::PsmMetadata {
             file_id: vec![0usize; x.nrows()],
             spec_id: vec!["spec".to_string(); x.nrows()],
             feature_names: (0..x.ncols()).map(|i| format!("f{}", i)).collect(),
+            scan_nr: None,
+            exp_mass: None,
         };
 
         let (predictions, _ranks) = learner.fit(x, y.clone(), metadata).unwrap();

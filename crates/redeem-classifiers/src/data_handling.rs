@@ -11,6 +11,26 @@ use rand::thread_rng;
 use crate::math::{Array1, Array2};
 use crate::stats::tdc;
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RankGrouping {
+    SpecId,
+    Percolator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ScanOrSpec {
+    Scan(i32),
+    Spec(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RankGroupKey {
+    file_id: usize,
+    scan_or_spec: ScanOrSpec,
+    exp_mass_bits: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PsmMetadata {
     /// Spectrum id
@@ -19,6 +39,10 @@ pub struct PsmMetadata {
     pub file_id: Vec<usize>,
     /// Feature names
     pub feature_names: Vec<String>,
+    /// Optional scan numbers (per-row)
+    pub scan_nr: Option<Vec<Option<i32>>>,
+    /// Optional experimental mass values (per-row)
+    pub exp_mass: Option<Vec<Option<f32>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +205,39 @@ impl Experiment {
         Ok(rank_u32)
     }
 
+    /// Compute per-spectrum ranks from scores without relying on a rank feature.
+    pub fn compute_rank_from_scores(
+        &self,
+        scores: &Array1<f32>,
+        grouping: RankGrouping,
+    ) -> anyhow::Result<Array1<u32>> {
+        if scores.len() != self.x.nrows() {
+            anyhow::bail!(
+                "Scores length {} does not match number of rows {}",
+                scores.len(),
+                self.x.nrows()
+            );
+        }
+
+        let mut spectrum_groups: HashMap<RankGroupKey, Vec<(usize, f32)>> = HashMap::new();
+        for i in 0..self.x.nrows() {
+            spectrum_groups
+                .entry(self.psm_metadata.rank_group_key(i, grouping))
+                .or_default()
+                .push((i, scores[i]));
+        }
+
+        let mut ranks = vec![0u32; self.x.nrows()];
+        for group in spectrum_groups.values_mut() {
+            group.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (rank, (row_idx, _)) in group.iter().enumerate() {
+                ranks[*row_idx] = (rank + 1) as u32;
+            }
+        }
+
+        Ok(Array1::from_vec(ranks))
+    }
+
     pub fn get_top_test_peaks(&self) -> Experiment {
         let not_train = self.is_train.mapv(|x| !x);
         let mask = (&not_train) & (&self.is_top_peak);
@@ -240,10 +297,6 @@ impl Experiment {
             .filter_map(|(i, &m)| if m { Some(i) } else { None })
             .collect();
 
-        fn filter_vec<T: Clone>(v: &[T], indices: &[usize]) -> Vec<T> {
-            indices.iter().map(|&i| v[i].clone()).collect()
-        }
-
         Experiment {
             x: self.x.select_rows(&selected_indices),
             y: self.y.select(&selected_indices),
@@ -251,11 +304,7 @@ impl Experiment {
             is_top_peak: self.is_top_peak.select(&selected_indices),
             tg_num_id: self.tg_num_id.select(&selected_indices),
             classifier_score: self.classifier_score.select(&selected_indices),
-            psm_metadata: PsmMetadata {
-                spec_id: filter_vec(&self.psm_metadata.spec_id, &selected_indices),
-                file_id: filter_vec(&self.psm_metadata.file_id, &selected_indices),
-                feature_names: self.psm_metadata.feature_names.clone(), // not row-aligned
-            },
+            psm_metadata: self.psm_metadata.filter_by_indices(&selected_indices),
         }
     }
 
@@ -297,5 +346,71 @@ impl Experiment {
         self.is_top_peak = self.is_top_peak.select(&keep);
         self.tg_num_id = self.tg_num_id.select(&keep);
         self.classifier_score = self.classifier_score.select(&keep);
+        self.psm_metadata = self.psm_metadata.filter_by_indices(&keep);
+    }
+}
+
+impl PsmMetadata {
+    pub fn filter_by_indices(&self, indices: &[usize]) -> PsmMetadata {
+        let scan_nr = self.scan_nr.as_ref().map(|values| {
+            indices
+                .iter()
+                .map(|&i| values.get(i).copied().unwrap_or(None))
+                .collect::<Vec<_>>()
+        });
+        let exp_mass = self.exp_mass.as_ref().map(|values| {
+            indices
+                .iter()
+                .map(|&i| values.get(i).copied().unwrap_or(None))
+                .collect::<Vec<_>>()
+        });
+        PsmMetadata {
+            spec_id: indices
+                .iter()
+                .map(|&i| self.spec_id[i].clone())
+                .collect(),
+            file_id: indices.iter().map(|&i| self.file_id[i]).collect(),
+            feature_names: self.feature_names.clone(),
+            scan_nr,
+            exp_mass,
+        }
+    }
+
+    fn rank_group_key(&self, idx: usize, grouping: RankGrouping) -> RankGroupKey {
+        match grouping {
+            RankGrouping::SpecId => RankGroupKey {
+                file_id: self.file_id[idx],
+                scan_or_spec: ScanOrSpec::Spec(self.spec_id[idx].clone()),
+                exp_mass_bits: None,
+            },
+            RankGrouping::Percolator => {
+                let scan_value = self
+                    .scan_nr
+                    .as_ref()
+                    .and_then(|values| values.get(idx).copied())
+                    .flatten();
+                let exp_mass_bits = self
+                    .exp_mass
+                    .as_ref()
+                    .and_then(|values| values.get(idx).copied())
+                    .flatten()
+                    .and_then(|value| {
+                        if value.is_finite() {
+                            Some(value.to_bits())
+                        } else {
+                            None
+                        }
+                    });
+                let scan_or_spec = match scan_value {
+                    Some(scan) => ScanOrSpec::Scan(scan),
+                    None => ScanOrSpec::Spec(self.spec_id[idx].clone()),
+                };
+                RankGroupKey {
+                    file_id: self.file_id[idx],
+                    scan_or_spec,
+                    exp_mass_bits,
+                }
+            }
+        }
     }
 }

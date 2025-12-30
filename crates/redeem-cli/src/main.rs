@@ -1,9 +1,13 @@
-use anyhow::Result;
-use clap::{Arg, ArgMatches, Command, ValueHint};
+use anyhow::{anyhow, Result};
+use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use log::LevelFilter;
 use std::path::PathBuf;
 
-use redeem_cli::classifiers::score::score::score_pin_with_config;
+use redeem_cli::classifiers::score::score::{
+    load_score_config, score_pin, write_score_output, ScoreConfig,
+};
+use redeem_classifiers::config::ModelType;
+use redeem_classifiers::data_handling::RankGrouping;
 use redeem_cli::properties::inference::inference;
 use redeem_cli::properties::inference::input::PropertyInferenceConfig;
 use redeem_cli::properties::train::input::PropertyTrainConfig;
@@ -150,7 +154,7 @@ fn main() -> Result<()> {
                                 .value_parser(clap::value_parser!(PathBuf))
                                 .value_hint(ValueHint::FilePath),
                         ),
-                ),
+                )
                 .subcommand(
                     Command::new("score")
                         .about("Score a Percolator .pin file with the semi-supervised classifier")
@@ -162,13 +166,41 @@ fn main() -> Result<()> {
                                 .value_hint(ValueHint::FilePath),
                         )
                         .arg(
+                            Arg::new("output_file")
+                                .short('o')
+                                .long("output")
+                                .help("Path to write the scored PIN output (TSV). Defaults to stdout.")
+                                .value_parser(clap::value_parser!(PathBuf))
+                                .value_hint(ValueHint::FilePath),
+                        )
+                        .arg(
+                            Arg::new("rank_grouping")
+                                .long("rank-grouping")
+                                .help("Grouping strategy for rank inference/deduplication.")
+                                .value_parser(["percolator", "spec-id"])
+                                .value_hint(ValueHint::Other),
+                        )
+                        .arg(
+                            Arg::new("model_type")
+                                .long("model-type")
+                                .help("Override the model type from the JSON config.")
+                                .value_parser(["gbdt", "xgboost", "svm"])
+                                .value_hint(ValueHint::Other),
+                        )
+                        .arg(
+                            Arg::new("deduplicate")
+                                .long("dedup")
+                                .help("Deduplicate PSMs in the final output by grouping.")
+                                .action(ArgAction::SetTrue),
+                        )
+                        .arg(
                             Arg::new("config")
                                 .help("Path to classifier JSON configuration file")
-                                .required(true)
+                                .required(false)
                                 .value_parser(clap::value_parser!(PathBuf))
                                 .value_hint(ValueHint::FilePath),
                         ),
-                ),
+                )
         )
         .help_template(
             "{usage-heading} {usage}\n\n\
@@ -240,13 +272,46 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
         }
         Some(("score", score_matches)) => {
             let pin_path: &PathBuf = score_matches.get_one("pin").unwrap();
-            let config_path: &PathBuf = score_matches.get_one("config").unwrap();
-            println!(
-                "[ReDeeM::Classifiers] Scoring PIN file: {:?} using config: {:?}",
-                pin_path, config_path
-            );
-            let result = score_pin_with_config(pin_path, config_path)?;
-            println!(
+            let output_path: Option<&PathBuf> = score_matches.get_one("output_file");
+            eprintln!("[ReDeeM::Classifiers] Scoring PIN file: {:?}", pin_path);
+
+            let mut config = if let Some(config_path) = score_matches.get_one::<PathBuf>("config") {
+                eprintln!("[ReDeeM::Classifiers] Using config: {:?}", config_path);
+                load_score_config(config_path)?
+            } else {
+                let default_config = ScoreConfig::default();
+                eprintln!("[ReDeeM::Classifiers] No config provided; using defaults.");
+                default_config
+            };
+
+            if let Some(grouping) = score_matches.get_one::<String>("rank_grouping") {
+                config.rank_grouping = match grouping.as_str() {
+                    "percolator" => RankGrouping::Percolator,
+                    "spec-id" => RankGrouping::SpecId,
+                    _ => config.rank_grouping,
+                };
+            }
+
+            if let Some(model_type) = score_matches.get_one::<String>("model_type") {
+                config.model.model_type =
+                    ModelType::from_str(model_type).map_err(|err| anyhow::anyhow!(err))?;
+            }
+
+            if score_matches.get_flag("deduplicate") {
+                config.deduplicate = true;
+            }
+
+            if score_matches.get_one::<PathBuf>("config").is_none() {
+                let default_json = serde_json::to_string_pretty(&config).unwrap_or_default();
+                eprintln!(
+                    "[ReDeeM::Classifiers] Default config:\n{}",
+                    default_json
+                );
+            }
+
+            let result = score_pin(pin_path, &config)?;
+            write_score_output(pin_path, &result, output_path)?;
+            eprintln!(
                 "[ReDeeM::Classifiers] Completed scoring {} PSMs.",
                 result.predictions.as_slice().len()
             );

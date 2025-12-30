@@ -47,6 +47,7 @@ impl Default for PinReaderConfig {
                 "Label".to_string(),
                 "ScanNr".to_string(),
                 "Scan".to_string(),
+                "ExpMass".to_string(),
                 "Peptide".to_string(),
                 "Proteins".to_string(),
                 "ProteinId".to_string(),
@@ -70,6 +71,7 @@ pub fn read_pin_tsv_with_config<P: AsRef<Path>>(path: P, config: &PinReaderConfi
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(true)
+        .flexible(true)
         .from_path(&path)
         .with_context(|| format!("Failed to open PIN file: {}", path.as_ref().display()))?;
 
@@ -95,6 +97,7 @@ pub fn read_pin_tsv_with_config<P: AsRef<Path>>(path: P, config: &PinReaderConfi
             &["FileId", "FileIdx", "FileName", "File", "SpecFile", "RawFile"],
         ),
     };
+    let exp_mass_idx = find_any_column(&headers, &["ExpMass"]);
 
     let feature_indices =
         resolve_feature_indices(&headers, config, label_idx, spec_id_idx, scan_idx, file_idx)?;
@@ -106,17 +109,29 @@ pub fn read_pin_tsv_with_config<P: AsRef<Path>>(path: P, config: &PinReaderConfi
     let mut labels = Vec::new();
     let mut spec_ids = Vec::new();
     let mut file_ids = Vec::new();
+    let mut scan_numbers = Vec::new();
+    let mut exp_masses = Vec::new();
 
     let mut file_id_map: HashMap<String, usize> = HashMap::new();
 
     for (row_idx, result) in reader.records().enumerate() {
         let record = result.with_context(|| format!("Failed to read row {}", row_idx + 1))?;
 
-        let label = record
-            .get(label_idx)
-            .ok_or_else(|| anyhow!("Missing label value at row {}", row_idx + 1))?
-            .parse::<i32>()
-            .with_context(|| format!("Invalid label at row {}", row_idx + 1))?;
+        if record
+            .get(0)
+            .map(|value| value.eq_ignore_ascii_case("DefaultDirection"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let label_value = record.get(label_idx).unwrap_or("").trim();
+        let label = match label_value.parse::<i32>() {
+            Ok(value) => value,
+            Err(_) => {
+                continue;
+            }
+        };
         labels.push(label);
 
         let (spec_id, file_key) = extract_spec_and_file(
@@ -136,17 +151,29 @@ pub fn read_pin_tsv_with_config<P: AsRef<Path>>(path: P, config: &PinReaderConfi
         };
         file_ids.push(file_id);
 
+        let scan_value = scan_idx
+            .and_then(|idx| record.get(idx))
+            .and_then(|value| value.trim().parse::<i32>().ok());
+        scan_numbers.push(scan_value);
+
+        let exp_mass_value = exp_mass_idx
+            .and_then(|idx| record.get(idx))
+            .and_then(|value| value.trim().parse::<f32>().ok());
+        exp_masses.push(exp_mass_value);
+
         for &idx in &feature_indices {
-            let value = record
-                .get(idx)
-                .ok_or_else(|| anyhow!("Missing feature value at row {}", row_idx + 1))?;
-            let parsed = value.parse::<f32>().with_context(|| {
-                format!(
-                    "Invalid feature '{}' at row {}",
-                    headers.get(idx).unwrap_or(""),
-                    row_idx + 1
-                )
-            })?;
+            let value = record.get(idx).unwrap_or("").trim();
+            let parsed = if value.is_empty() {
+                0.0
+            } else {
+                value.parse::<f32>().with_context(|| {
+                    format!(
+                        "Invalid feature '{}' at row {}",
+                        headers.get(idx).unwrap_or(""),
+                        row_idx + 1
+                    )
+                })?
+            };
             features.push(parsed);
         }
     }
@@ -166,6 +193,8 @@ pub fn read_pin_tsv_with_config<P: AsRef<Path>>(path: P, config: &PinReaderConfi
         spec_id: spec_ids,
         file_id: file_ids,
         feature_names,
+        scan_nr: scan_idx.map(|_| scan_numbers),
+        exp_mass: exp_mass_idx.map(|_| exp_masses),
     };
 
     Ok(PinData { x, y, metadata })
