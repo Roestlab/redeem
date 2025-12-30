@@ -3,6 +3,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use plotly::common::Title;
+use plotly::layout::BarMode;
 use plotly::{Histogram, Layout, Plot};
 use report_builder::{Report, ReportSection};
 
@@ -75,6 +77,7 @@ pub fn score_pin_with_config<P: AsRef<Path>>(pin_path: P, config_path: P) -> Res
 pub fn score_pin<P: AsRef<Path>>(pin_path: P, config: &ScoreConfig) -> Result<ScoreResult> {
     let pin_data = read_pin_tsv(pin_path)?;
     let targets = pin_data.y.mapv(|&v| v == 1);
+    let labels = pin_data.y.clone();
     let mut learner = SemiSupervisedLearner::new(
         config.model.model_type.clone(),
         config.model.learning_rate,
@@ -106,7 +109,7 @@ pub fn score_pin<P: AsRef<Path>>(pin_path: P, config: &ScoreConfig) -> Result<Sc
             predictions,
             ranks,
             targets,
-            pin_data.y,
+            labels,
             pin_data.metadata,
             None,
         )
@@ -322,10 +325,10 @@ fn plot_dscore_histogram(scores: &Array1<f32>, labels: &Array1<i32>) -> Plot {
 
     plot.set_layout(
         Layout::new()
-            .title(plotly::common::Title::new("d_score Histogram"))
+            .title(Title::new("d_score Histogram"))
             .x_axis(plotly::layout::Axis::new().title("d_score"))
             .y_axis(plotly::layout::Axis::new().title("Count"))
-            .barmode(plotly::layout::BarMode::Overlay),
+            .bar_mode(BarMode::Overlay),
     );
 
     plot
@@ -359,10 +362,10 @@ fn plot_qvalue_histogram(qvalues: &Array1<f32>, labels: &Array1<i32>) -> Plot {
 
     plot.set_layout(
         Layout::new()
-            .title(plotly::common::Title::new("spectrum_q Histogram"))
+            .title(Title::new("spectrum_q Histogram"))
             .x_axis(plotly::layout::Axis::new().title("spectrum_q"))
             .y_axis(plotly::layout::Axis::new().title("Count"))
-            .barmode(plotly::layout::BarMode::Overlay),
+            .bar_mode(BarMode::Overlay),
     );
 
     plot
