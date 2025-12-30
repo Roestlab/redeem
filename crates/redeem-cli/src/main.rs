@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use log::LevelFilter;
 use std::path::PathBuf;
@@ -189,12 +189,10 @@ fn main() -> Result<()> {
                                 .value_hint(ValueHint::Other),
                         )
                         .arg(
-                            Arg::new("report")
-                                .long("report")
-                                .help("Write an HTML report with score histograms. Optionally provide a path.")
-                                .num_args(0..=1)
-                                .value_parser(clap::value_parser!(PathBuf))
-                                .value_hint(ValueHint::FilePath),
+                            Arg::new("no_report")
+                                .long("no-report")
+                                .help("Disable HTML report generation.")
+                                .action(ArgAction::SetTrue),
                         )
                         .arg(
                             Arg::new("deduplicate")
@@ -282,7 +280,6 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
         Some(("score", score_matches)) => {
             let pin_path: &PathBuf = score_matches.get_one("pin").unwrap();
             let output_path: Option<&PathBuf> = score_matches.get_one("output_file");
-            let report_path: Option<&PathBuf> = score_matches.get_one("report");
             eprintln!("[ReDeeM::Classifiers] Scoring PIN file: {:?}", pin_path);
 
             let mut config = if let Some(config_path) = score_matches.get_one::<PathBuf>("config") {
@@ -321,10 +318,12 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
 
             let result = score_pin(pin_path, &config)?;
             write_score_output(pin_path, &result, output_path)?;
-            if score_matches.contains_id("report") {
-                let default_report = PathBuf::from("redeem_classifiers_report.html");
-                let path = report_path.unwrap_or(&default_report);
-                write_score_report(&result, path)?;
+            if !score_matches.get_flag("no_report") {
+                let report_name = format!(
+                    "redeem_score_{}.html",
+                    model_type_name(&config.model.model_type)
+                );
+                write_score_report(&result, &PathBuf::from(report_name))?;
             }
             eprintln!(
                 "[ReDeeM::Classifiers] Completed scoring {} PSMs.",
@@ -333,5 +332,15 @@ fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
             Ok(())
         }
         _ => unreachable!(),
+    }
+}
+
+fn model_type_name(model_type: &ModelType) -> &'static str {
+    match model_type {
+        ModelType::GBDT { .. } => "gbdt",
+        #[cfg(feature = "xgboost")]
+        ModelType::XGBoost { .. } => "xgboost",
+        #[cfg(feature = "svm")]
+        ModelType::SVM { .. } => "svm",
     }
 }

@@ -3,7 +3,6 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use plotly::common::Title;
 use plotly::layout::BarMode;
 use plotly::{Histogram, Layout, Plot};
 use report_builder::{Report, ReportSection};
@@ -100,7 +99,7 @@ pub fn score_pin<P: AsRef<Path>>(pin_path: P, config: &ScoreConfig) -> Result<Sc
             filter_array1(&predictions, &keep),
             filter_array1(&ranks, &keep),
             filter_array1(&targets, &keep),
-            filter_array1(&pin_data.y, &keep),
+            filter_array1(&labels, &keep),
             pin_data.metadata.filter_by_indices(&keep_indices(&keep)),
             Some(mapping),
         )
@@ -325,7 +324,7 @@ fn plot_dscore_histogram(scores: &Array1<f32>, labels: &Array1<i32>) -> Plot {
 
     plot.set_layout(
         Layout::new()
-            .title(Title::new("d_score Histogram"))
+            .title("d_score Histogram")
             .x_axis(plotly::layout::Axis::new().title("d_score"))
             .y_axis(plotly::layout::Axis::new().title("Count"))
             .bar_mode(BarMode::Overlay),
@@ -362,7 +361,7 @@ fn plot_qvalue_histogram(qvalues: &Array1<f32>, labels: &Array1<i32>) -> Plot {
 
     plot.set_layout(
         Layout::new()
-            .title(Title::new("spectrum_q Histogram"))
+            .title("spectrum_q Histogram")
             .x_axis(plotly::layout::Axis::new().title("spectrum_q"))
             .y_axis(plotly::layout::Axis::new().title("Count"))
             .bar_mode(BarMode::Overlay),
