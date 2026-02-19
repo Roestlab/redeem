@@ -482,6 +482,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     /// * `save_checkpoints` - Flag to save model checkpoints during training.
     /// * `track_metrics` - Flag to track training and validation metrics.
     /// * `target_norm` - Normalization parameters to de-normalize metrics for reporting.
+    /// * `warmup_fraction` - Optional fraction of total steps to use for LR warmup (0.0–1.0). Defaults to 0.12.
     ///
     /// # Returns
     /// [`TrainingStepMetrics`] - A struct containing training and validation loss statistics, learning rates, and other metrics.
@@ -504,11 +505,13 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         target_norm: TargetNormalization,
         // Optional list of variable name prefixes to train. When `None`, all vars are trained.
         train_var_prefixes: Option<Vec<String>>,
+        warmup_fraction: Option<f64>,
     ) -> Result<TrainingStepMetrics> {
         let num_batches = (training_data.len() + batch_size - 1) / batch_size;
         let total_steps = num_batches * epochs;
-        // Use a longer warmup (~12% of total steps) for better stability with z-score or raw targets.
-        let warmup_steps = ((total_steps as f64) * 0.12).ceil() as usize;
+        // Default warmup is 12% of total steps unless overridden.
+        let warmup_frac = warmup_fraction.unwrap_or(0.12).clamp(0.0, 1.0);
+        let warmup_steps = ((total_steps as f64) * warmup_frac).ceil() as usize;
 
         info!(
             "{} {} model on {} peptide features ({} batches) for {} epochs",
@@ -965,6 +968,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
         learning_rate: f64,
         epochs: usize,
         target_norm: TargetNormalization,
+        warmup_fraction: Option<f64>,
     ) -> Result<()> {
         let _metrics = self.train(
             training_data,
@@ -980,6 +984,7 @@ pub trait ModelInterface: Send + Sync + ModelClone {
             false, // No metrics
             target_norm,
             None,
+            warmup_fraction,
         )?;
 
         Ok(())

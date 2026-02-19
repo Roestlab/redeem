@@ -158,6 +158,7 @@ pub fn run_training(config: &PropertyTrainConfig) -> Result<()> {
             true,
             norm_factor.clone(),
             config.train_var_prefixes.clone(),
+            config.warmup_fraction.map(|v| v as f64),
         )
         .with_context(|| "Training failed: an error occurred during the model training process")?;
     log::info!("Training completed in {:?}", start_time.elapsed());
