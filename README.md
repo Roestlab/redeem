@@ -24,9 +24,35 @@ redeem-classifiers = { git = "https://github.com/singjc/redeem.git", branch = "m
 
 **Note**: The ReDeeM crates are still under development and are not yet available on crates.io.
 
+#### Python
+
+Install the Python bindings using [maturin](https://www.maturin.rs):
+
+```bash
+pip install maturin
+git clone https://github.com/singjc/redeem.git
+cd redeem/crates/redeem-properties-py
+maturin develop
+```
+
+Quick example:
+
+```python
+import redeem_properties_py
+
+# Retention time prediction
+rt_model = redeem_properties_py.RTModel(
+    model_path="path/to/rt.pth",
+    arch="rt_cnn_lstm",
+    constants_path="path/to/rt.pth.model_const.yaml",
+)
+rt_values = rt_model.predict(["PEPTIDE", "SEQUENCE"], ["", ""], ["", ""])
+print(rt_values)  # numpy array of RT predictions
+```
+
 ### Current Crates
 
-The ReDeeM project consists of two primary crates:
+The ReDeeM project consists of three primary crates:
 
 1. **redeem-properties**: 
    - This crate focuses on deep learning models for peptide property prediction. It implements models for predicting retention time (RT), ion mobility (IM), and MS2 fragment intensities using the Candle library.
@@ -52,6 +78,10 @@ The ReDeeM project consists of two primary crates:
     XGBoost Classifier | `redeem_classifiers::XGBoostClassifier` | XGBoost | :heavy_check_mark:
     GBDT Classifier | `redeem_classifiers::GBDTClassifier` | GBDT | :heavy_check_mark:
     SVM Classifier | `redeem_classifiers::SVMClassifier` | SVM | :heavy_check_mark:
+
+3. **redeem-properties-py**:
+   - Python bindings for `redeem-properties` via [PyO3](https://pyo3.rs), exposing RT, CCS, and MS2 prediction models to Python.
+   - Build with [maturin](https://www.maturin.rs) for use in Python workflows.
 
 > [!NOTE]
 > To use the XGBoost classifier, or the SVM classifier, you need to compile with the `--features xgboost` or `--features linfa` flag respectively.
