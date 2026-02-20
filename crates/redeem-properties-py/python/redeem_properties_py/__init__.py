@@ -36,9 +36,11 @@ from redeem_properties_py._lib import (  # noqa: F401  (re-exported)
     CCSModel as _CCSLib,
     MS2Model as _MS2Lib,
     RTModel as _RTLib,
+    locate_pretrained as locate_pretrained,
+    validate_pretrained as validate_pretrained,
 )
 
-__all__ = ["RTModel", "CCSModel", "MS2Model"]
+__all__ = ["RTModel", "CCSModel", "MS2Model", "locate_pretrained"]
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +177,7 @@ class CCSModel:
         self,
         model_path: str,
         arch: str,
-        constants_path: str,
+        constants_path: Optional[str] = None,
         use_cuda: bool = False,
     ) -> None:
         self._inner = _CCSLib(model_path, arch, constants_path, use_cuda=use_cuda)
@@ -267,7 +269,7 @@ class MS2Model:
         self,
         model_path: str,
         arch: str,
-        constants_path: str,
+        constants_path: Optional[str] = None,
         use_cuda: bool = False,
     ) -> None:
         self._inner = _MS2Lib(model_path, arch, constants_path, use_cuda=use_cuda)
