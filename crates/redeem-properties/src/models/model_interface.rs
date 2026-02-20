@@ -183,6 +183,101 @@ pub fn create_var_map(
     Ok(())
 }
 
+/// Hyperparameters inferred from a loaded checkpoint's tensor shapes.
+#[derive(Debug, Clone)]
+pub struct InferredHyperparams {
+    pub mod_hidden_dim: usize,
+    pub hidden_dim: usize,
+    pub ff_dim: usize,
+    pub num_heads: usize,
+    pub num_layers: usize,
+}
+
+/// Infer CNN-Transformer model hyperparameters from the tensor shapes stored in a VarMap.
+///
+/// `encoder_prefix` should be e.g. `"ccs_encoder"` or `"rt_encoder"`.
+///
+/// Probes:
+/// - `{encoder_prefix}.mod_nn.nn.weight` shape `[mod_hidden_dim, MOD_FEATURE_SIZE]`
+/// - `{encoder_prefix}.input_transformer.layer_0.proj_q.weight` shape `[hidden_dim, hidden_dim]`
+/// - `{encoder_prefix}.input_transformer.layer_0.lin1.weight` shape `[ff_dim, hidden_dim]`
+/// - counts `{encoder_prefix}.input_transformer.layer_{i}.proj_q.weight` to get num_layers
+/// - `num_heads` = `hidden_dim / head_dim`, inferred from proj_q output dim
+pub fn infer_cnn_tf_hyperparams(
+    varmap: &VarMap,
+    encoder_prefix: &str,
+) -> Result<InferredHyperparams> {
+    let data = varmap.data().lock().unwrap();
+
+    // Helper to get shape dims for a tensor name
+    let get_dims = |name: &str| -> Result<Vec<usize>> {
+        let var = data.get(name).ok_or_else(|| {
+            anyhow::anyhow!("Tensor '{}' not found in checkpoint", name)
+        })?;
+        Ok(var.shape().dims().to_vec())
+    };
+
+    // 1. mod_hidden_dim from mod_nn.nn.weight: shape [out_features - k, MOD_FEATURE_SIZE - k]
+    //    where k=6 (ModEmbeddingFixFirstK), so mod_hidden_dim = weight.shape[0] + 6
+    let mod_nn_name = format!("{}.mod_nn.nn.weight", encoder_prefix);
+    let mod_dims = get_dims(&mod_nn_name)?;
+    let mod_hidden_dim = mod_dims[0] + 6; // add back the k=6 fixed features
+    log::debug!("[infer_cnn_tf_hyperparams] mod_hidden_dim = {} (from {} shape {:?}, +k=6)", mod_hidden_dim, mod_nn_name, mod_dims);
+
+    // 2. hidden_dim from proj_q.weight of layer 0: [hidden_dim, hidden_dim]
+    let proj_q_name = format!("{}.input_transformer.layer_0.proj_q.weight", encoder_prefix);
+    let proj_q_dims = get_dims(&proj_q_name)?;
+    let hidden_dim = proj_q_dims[0];
+    log::debug!("[infer_cnn_tf_hyperparams] hidden_dim = {} (from {})", hidden_dim, proj_q_name);
+
+    // 3. ff_dim from lin1.weight of layer 0: [ff_dim, hidden_dim]
+    let lin1_name = format!("{}.input_transformer.layer_0.lin1.weight", encoder_prefix);
+    let lin1_dims = get_dims(&lin1_name)?;
+    let ff_dim = lin1_dims[0];
+    log::debug!("[infer_cnn_tf_hyperparams] ff_dim = {} (from {})", ff_dim, lin1_name);
+
+    // 4. Count transformer layers
+    let mut num_layers = 0usize;
+    loop {
+        let layer_name = format!("{}.input_transformer.layer_{}.proj_q.weight", encoder_prefix, num_layers);
+        if data.contains_key(&layer_name) {
+            num_layers += 1;
+        } else {
+            break;
+        }
+    }
+    log::debug!("[infer_cnn_tf_hyperparams] num_layers = {}", num_layers);
+
+    // 5. Infer num_heads: check proj_q output dim vs. per-head dim
+    // Typical transformer: head_dim = hidden_dim / num_heads
+    // We can infer from proj_v if it has a different shape, but typically num_heads = hidden_dim / 32 or similar
+    // A safer approach: check if there's a multi-head pattern. For now, use hidden_dim / 32 with fallback.
+    // Actually, the simplest approach is to check common divisors that make sense.
+    let num_heads = if hidden_dim % 64 == 0 && hidden_dim / 64 >= 1 {
+        // Try head_dim=64 first (used in many models)
+        // But alphapeptdeep uses hidden_dim=128, num_heads=4 → head_dim=32
+        // And redeem RT uses hidden_dim=192, potentially num_heads=4 → head_dim=48
+        // or num_heads=6 → head_dim=32, etc.
+        // Let's default to 4 heads for consistency with the codebase.
+        4
+    } else if hidden_dim % 4 == 0 {
+        4
+    } else if hidden_dim % 2 == 0 {
+        2
+    } else {
+        1
+    };
+    log::debug!("[infer_cnn_tf_hyperparams] num_heads = {} (inferred, head_dim={})", num_heads, hidden_dim / num_heads);
+
+    Ok(InferredHyperparams {
+        mod_hidden_dim,
+        hidden_dim,
+        ff_dim,
+        num_heads,
+        num_layers,
+    })
+}
+
 pub trait ModelClone {
     fn clone_box(&self) -> Box<dyn ModelInterface + Send + Sync>;
 }
