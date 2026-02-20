@@ -6,12 +6,14 @@ use numpy::{PyArray1, PyArray2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3::wrap_pyfunction;
 
 use redeem_properties::models::ccs_model::CCSModelWrapper;
 use redeem_properties::models::model_interface::PredictionResult;
 use redeem_properties::models::ms2_model::MS2ModelWrapper;
 use redeem_properties::models::rt_model::RTModelWrapper;
 use redeem_properties::pretrained::{locate_pretrained_model, PretrainedModel};
+use std::io::Read;
 use redeem_properties::utils::peptdeep_utils::{
     get_modification_indices, get_modification_string, remove_mass_shift, MODIFICATION_MAP,
 };
@@ -74,6 +76,80 @@ fn resolve_pretrained(name: &str, family: &str) -> PyResult<(String, PathBuf)> {
     Ok((arch.to_string(), model_path))
 }
 
+/// Expose a small helper to Python to show which pretrained model path will be used.
+#[pyfunction]
+fn locate_pretrained(name: &str) -> PyResult<String> {
+    let pm = PretrainedModel::from_str(name).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let p = locate_pretrained_model(pm).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(p.to_string_lossy().into_owned())
+}
+
+/// Validate and inspect a pretrained model lookup.
+///
+/// Returns a dict with keys:
+/// - `located_path`: concrete path used by the pretrained registry
+/// - `extension`: file extension (if any)
+/// - `file_type`: one of `safetensors`, `pth`, or `unknown` (best-effort)
+/// - `sidecar_exists`: whether a `<model>.<ext>.model_const.yaml` sidecar exists
+/// - `sidecar_path`: path to the sidecar or None
+/// - `sidecar_preview`: first 2048 characters of the sidecar (if present)
+#[pyfunction]
+fn validate_pretrained(py: Python, name: &str) -> PyResult<PyObject> {
+    let pm = PretrainedModel::from_str(name).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let model_path = locate_pretrained_model(pm).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    let ext = model_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Heuristic file type detection: prefer extension, fall back to magic byte for pickle
+    let mut file_type = "unknown".to_string();
+    if ext.eq_ignore_ascii_case("safetensors") {
+        file_type = "safetensors".to_string();
+    } else if ext.eq_ignore_ascii_case("pth") || ext.eq_ignore_ascii_case("pt") {
+        file_type = "pth".to_string();
+    } else {
+        // Try to read first byte to detect pickle (.pth/.pt often start with 0x80)
+        if let Ok(mut f) = std::fs::File::open(&model_path) {
+            let mut buf = [0u8; 1];
+            if let Ok(n) = f.read(&mut buf) {
+                if n > 0 && buf[0] == 0x80 {
+                    file_type = "pth".to_string();
+                }
+            }
+        }
+    }
+
+    // Sidecar YAML candidate (e.g., model.safetensors.model_const.yaml)
+    let sidecar_candidate: Option<std::path::PathBuf> = model_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|ext| model_path.with_extension(format!("{}.model_const.yaml", ext)))
+        .and_then(|cand| if cand.exists() { Some(cand) } else { None });
+
+    let (sidecar_exists, sidecar_path, sidecar_preview) = match sidecar_candidate.as_ref() {
+        Some(p) => {
+            let preview = std::fs::read_to_string(p)
+                .map(|s| s.chars().take(2048).collect::<String>())
+                .unwrap_or_else(|_| "<failed to read sidecar>".to_string());
+            (true, Some(p.to_string_lossy().into_owned()), Some(preview))
+        }
+        None => (false, None, None),
+    };
+
+    let dict = PyDict::new_bound(py);
+    dict.set_item("located_path", model_path.to_string_lossy().into_owned())?;
+    dict.set_item("extension", ext)?;
+    dict.set_item("file_type", file_type)?;
+    dict.set_item("sidecar_exists", sidecar_exists)?;
+    dict.set_item("sidecar_path", sidecar_path)?;
+    dict.set_item("sidecar_preview", sidecar_preview)?;
+
+    Ok(dict.into())
+}
+
 /// Python wrapper for the RT (retention time) prediction model.
 #[pyclass]
 struct RTModel {
@@ -131,8 +207,18 @@ impl RTModel {
     fn from_pretrained(name: String, use_cuda: bool) -> PyResult<Self> {
         let (arch, model_path) = resolve_pretrained(&name, "rt")?;
         let device = get_device(use_cuda)?;
-        let wrapper = RTModelWrapper::new(&model_path, None::<std::path::PathBuf>.as_ref(), &arch, device)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let wrapper = {
+            let call = || RTModelWrapper::new(&model_path, None::<std::path::PathBuf>.as_ref(), &arch, device);
+            match std::panic::catch_unwind(call) {
+                Ok(Ok(w)) => w,
+                Ok(Err(e)) => return Err(PyRuntimeError::new_err(e.to_string())),
+                Err(payload) => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "panic while loading pretrained RT model: {:?}", payload
+                    )))
+                }
+            }
+        };
         Ok(Self { inner: wrapper })
     }
 
@@ -200,11 +286,20 @@ impl CCSModel {
     fn new(
         model_path: String,
         arch: String,
-        constants_path: String,
+        constants_path: Option<String>,
         use_cuda: bool,
     ) -> PyResult<Self> {
         let device = get_device(use_cuda)?;
-        let wrapper = CCSModelWrapper::new(&model_path, &constants_path, &arch, device)
+        let model_path_arg = std::path::Path::new(&model_path);
+        let cpath_buf_opt: Option<std::path::PathBuf> = constants_path.map(|s| std::path::PathBuf::from(s));
+        let cpath_arg_opt: Option<&std::path::Path> = cpath_buf_opt.as_ref().map(|p| p.as_path());
+
+        let wrapper = CCSModelWrapper::new(
+            model_path_arg,
+            cpath_arg_opt,
+            &arch,
+            device,
+        )
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner: wrapper })
     }
@@ -228,10 +323,33 @@ impl CCSModel {
     fn from_pretrained(name: String, use_cuda: bool) -> PyResult<Self> {
         let (arch, model_path) = resolve_pretrained(&name, "ccs")?;
         let device = get_device(use_cuda)?;
-        // CCSModelWrapper requires a non-optional constants_path. For pretrained .pth files
-        // the constants are embedded in the file itself, so model_path is passed for both.
-        let wrapper = CCSModelWrapper::new(&model_path, &model_path, &arch, device)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        // Try to find a sidecar constants YAML next to the model file instead of
+        // blindly parsing the model file itself (which is binary for safetensors).
+        let constants_candidate: Option<std::path::PathBuf> = model_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| model_path.with_extension(format!("{}.model_const.yaml", ext)))
+            .and_then(|cand| if cand.exists() { Some(cand) } else { None });
+
+        // Build the wrapper while catching panics so we return a Python error
+        let wrapper = {
+            let call = || {
+                match constants_candidate.as_ref() {
+                    Some(cpath) => CCSModelWrapper::new(&model_path, Some(cpath), &arch, device),
+                    None => CCSModelWrapper::new(&model_path, None::<&std::path::PathBuf>, &arch, device),
+                }
+            };
+
+            match std::panic::catch_unwind(call) {
+                Ok(Ok(w)) => w,
+                Ok(Err(e)) => return Err(PyRuntimeError::new_err(e.to_string())),
+                Err(payload) => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "panic while loading pretrained CCS model: {:?}", payload
+                    )))
+                }
+            }
+        };
         Ok(Self { inner: wrapper })
     }
 
@@ -320,11 +438,20 @@ impl MS2Model {
     fn new(
         model_path: String,
         arch: String,
-        constants_path: String,
+        constants_path: Option<String>,
         use_cuda: bool,
     ) -> PyResult<Self> {
         let device = get_device(use_cuda)?;
-        let wrapper = MS2ModelWrapper::new(&model_path, &constants_path, &arch, device)
+        let model_path_arg = std::path::Path::new(&model_path);
+        let cpath_buf_opt: Option<std::path::PathBuf> = constants_path.map(|s| std::path::PathBuf::from(s));
+        let cpath_arg_opt: Option<&std::path::Path> = cpath_buf_opt.as_ref().map(|p| p.as_path());
+
+        let wrapper = MS2ModelWrapper::new(
+            model_path_arg,
+            cpath_arg_opt,
+            &arch,
+            device,
+        )
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner: wrapper })
     }
@@ -347,10 +474,32 @@ impl MS2Model {
     fn from_pretrained(name: String, use_cuda: bool) -> PyResult<Self> {
         let (arch, model_path) = resolve_pretrained(&name, "ms2")?;
         let device = get_device(use_cuda)?;
-        // MS2ModelWrapper requires a non-optional constants_path. For pretrained .pth files
-        // the constants are embedded in the file itself, so model_path is passed for both.
-        let wrapper = MS2ModelWrapper::new(&model_path, &model_path, &arch, device)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        // Try to find a sidecar constants YAML next to the model file instead of
+        // parsing the model file itself (binary for safetensors).
+        let constants_candidate: Option<std::path::PathBuf> = model_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| model_path.with_extension(format!("{}.model_const.yaml", ext)))
+            .and_then(|cand| if cand.exists() { Some(cand) } else { None });
+
+        let wrapper = {
+            let call = || {
+                match constants_candidate.as_ref() {
+                    Some(cpath) => MS2ModelWrapper::new(&model_path, Some(cpath), &arch, device),
+                    None => MS2ModelWrapper::new(&model_path, None::<&std::path::PathBuf>, &arch, device),
+                }
+            };
+
+            match std::panic::catch_unwind(call) {
+                Ok(Ok(w)) => w,
+                Ok(Err(e)) => return Err(PyRuntimeError::new_err(e.to_string())),
+                Err(payload) => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "panic while loading pretrained MS2 model: {:?}", payload
+                    )))
+                }
+            }
+        };
         Ok(Self { inner: wrapper })
     }
 
@@ -502,5 +651,7 @@ fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RTModel>()?;
     m.add_class::<CCSModel>()?;
     m.add_class::<MS2Model>()?;
+    m.add_function(wrap_pyfunction!(locate_pretrained, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_pretrained, m)?)?;
     Ok(())
 }
