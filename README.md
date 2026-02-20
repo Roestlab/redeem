@@ -40,14 +40,17 @@ Quick example:
 ```python
 import redeem_properties_py
 
-# Retention time prediction
+# Load from shipped pretrained weights (downloaded automatically on first use)
+rt_model = redeem_properties_py.RTModel.from_pretrained("rt_cnn_lstm")
+rt_values = rt_model.predict(["PEPTIDE", "SEQUENCE"], ["", ""], ["", ""])
+print(rt_values)  # numpy array of RT predictions
+
+# Or load from a custom model file
 rt_model = redeem_properties_py.RTModel(
     model_path="path/to/rt.pth",
     arch="rt_cnn_lstm",
     constants_path="path/to/rt.pth.model_const.yaml",
 )
-rt_values = rt_model.predict(["PEPTIDE", "SEQUENCE"], ["", ""], ["", ""])
-print(rt_values)  # numpy array of RT predictions
 ```
 
 ### Current Crates

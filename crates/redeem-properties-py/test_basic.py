@@ -33,6 +33,34 @@ def test_ms2_model_has_docstring():
     assert redeem_properties_py.MS2Model.__doc__, "MS2Model missing docstring"
 
 
+def test_rt_model_has_from_pretrained():
+    import redeem_properties_py
+
+    assert hasattr(redeem_properties_py.RTModel, "from_pretrained"), \
+        "RTModel missing from_pretrained classmethod"
+
+
+def test_ccs_model_has_from_pretrained():
+    import redeem_properties_py
+
+    assert hasattr(redeem_properties_py.CCSModel, "from_pretrained"), \
+        "CCSModel missing from_pretrained classmethod"
+
+
+def test_ms2_model_has_from_pretrained():
+    import redeem_properties_py
+
+    assert hasattr(redeem_properties_py.MS2Model, "from_pretrained"), \
+        "MS2Model missing from_pretrained classmethod"
+
+
+def test_from_pretrained_bad_arch_raises():
+    import redeem_properties_py
+
+    with pytest.raises(RuntimeError):
+        redeem_properties_py.RTModel.from_pretrained("unknown_arch_xyz")
+
+
 def test_rt_model_nonexistent_path_raises():
     import redeem_properties_py
 
@@ -72,6 +100,10 @@ if __name__ == "__main__":
     test_rt_model_has_docstring()
     test_ccs_model_has_docstring()
     test_ms2_model_has_docstring()
+    test_rt_model_has_from_pretrained()
+    test_ccs_model_has_from_pretrained()
+    test_ms2_model_has_from_pretrained()
+    test_from_pretrained_bad_arch_raises()
     test_rt_model_nonexistent_path_raises()
     test_ccs_model_nonexistent_path_raises()
     test_ms2_model_nonexistent_path_raises()
