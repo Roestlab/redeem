@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModCnnTransformerAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
+use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map, infer_cnn_tf_hyperparams};
 use crate::utils::peptdeep_utils::{
     load_mod_to_feature_arc,
     parse_model_constants, ModelConstants,
@@ -107,13 +107,20 @@ impl ModelInterface for RTCNNTFModel {
         let mod_to_feature = load_mod_to_feature_arc(&constants)?;
         let dropout = Dropout::new(0.1);
 
+        // Infer hyperparameters from the checkpoint tensor shapes
+        let hp = infer_cnn_tf_hyperparams(&varmap, "rt_encoder")?;
+        log::info!(
+            "[RTCNNTFModel] Inferred hyperparams: mod_hidden_dim={}, hidden_dim={}, ff_dim={}, num_heads={}, num_layers={}",
+            hp.mod_hidden_dim, hp.hidden_dim, hp.ff_dim, hp.num_heads, hp.num_layers
+        );
+
         let rt_encoder = Encoder26aaModCnnTransformerAttnSum::from_varstore(
             &var_store,
-            8,      // mod_hidden_dim
-            128,    // hidden_dim
-            256,    // ff_dim
-            4,      // num_heads
-            2,      // num_layers
+            hp.mod_hidden_dim,
+            hp.hidden_dim,
+            hp.ff_dim,
+            hp.num_heads,
+            hp.num_layers,
             100,    // max_len (sequence length)
             0.1,    // dropout_prob
             vec!["rt_encoder.mod_nn.nn.weight"],
@@ -131,15 +138,10 @@ impl ModelInterface for RTCNNTFModel {
             vec!["rt_encoder.attn_sum.attn.0.weight"],
             &device,
         )?;
-        
 
-        let rt_decoder = DecoderLinear::from_varstore(
-            &var_store,
-            128,
-            1,
-            vec!["rt_decoder.nn.0.weight", "rt_decoder.nn.1.weight", "rt_decoder.nn.2.weight"],
-            vec!["rt_decoder.nn.0.bias", "rt_decoder.nn.2.bias"]
-        )?;
+        // Dynamically build the decoder from the checkpoint layer structure
+        let rt_decoder = DecoderLinear::from_varmap_dynamic(&varmap, "rt_decoder")
+            .map_err(|e| anyhow::anyhow!("Failed to build RT decoder: {}", e))?;
 
         Ok(Self {
             var_store,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::building_blocks::building_blocks::{
     DecoderLinear, Encoder26aaModChargeCnnTransformerAttnSum, MOD_FEATURE_SIZE,
 };
-use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map};
+use crate::models::model_interface::{ModelInterface, PropertyType, load_tensors_from_model, create_var_map, infer_cnn_tf_hyperparams};
 use crate::utils::peptdeep_utils::{
     load_mod_to_feature_arc,
     parse_model_constants, ModelConstants,
@@ -108,13 +108,20 @@ impl ModelInterface for CCSCNNTFModel {
         let mod_to_feature = load_mod_to_feature_arc(&constants)?;
         let dropout = Dropout::new(0.1);
 
+        // Infer hyperparameters from the checkpoint tensor shapes
+        let hp = infer_cnn_tf_hyperparams(&varmap, "ccs_encoder")?;
+        log::info!(
+            "[CCSCNNTFModel] Inferred hyperparams: mod_hidden_dim={}, hidden_dim={}, ff_dim={}, num_heads={}, num_layers={}",
+            hp.mod_hidden_dim, hp.hidden_dim, hp.ff_dim, hp.num_heads, hp.num_layers
+        );
+
         let ccs_encoder = Encoder26aaModChargeCnnTransformerAttnSum::from_varstore(
             &var_store,
-            8,      // mod_hidden_dim
-            128,    // hidden_dim
-            256,    // ff_dim
-            4,      // num_heads
-            2,      // num_layers
+            hp.mod_hidden_dim,
+            hp.hidden_dim,
+            hp.ff_dim,
+            hp.num_heads,
+            hp.num_layers,
             100,    // max_len (set appropriately for your sequence length)
             0.1,    // dropout_prob
             vec!["ccs_encoder.mod_nn.nn.weight"],
@@ -132,15 +139,10 @@ impl ModelInterface for CCSCNNTFModel {
             vec!["ccs_encoder.attn_sum.attn.0.weight"],
             &device,
         )?;
-        
 
-        let ccs_decoder = DecoderLinear::from_varstore(
-            &var_store,
-            129,
-            1,
-            vec!["ccs_decoder.nn.0.weight", "ccs_decoder.nn.1.weight", "ccs_decoder.nn.2.weight"],
-            vec!["ccs_decoder.nn.0.bias", "ccs_decoder.nn.2.bias"]
-        )?;
+        // Dynamically build the decoder from the checkpoint layer structure
+        let ccs_decoder = DecoderLinear::from_varmap_dynamic(&varmap, "ccs_decoder")
+            .map_err(|e| anyhow::anyhow!("Failed to build CCS decoder: {}", e))?;
 
         Ok(Self {
             var_store,
