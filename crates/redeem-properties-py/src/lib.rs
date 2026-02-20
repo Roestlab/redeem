@@ -238,14 +238,17 @@ impl CCSModel {
     /// Predict CCS values for a list of peptides.
     ///
     /// Peptides may contain inline modification annotations, which are parsed
-    /// automatically — no need to supply separate mod or mod_site strings:
+    /// automatically — no need to supply separate mod or mod_site strings.
     ///
     /// .. code-block:: python
     ///
-    ///     ccs_values = model.predict(
+    ///     results = model.predict(
     ///         ["PEPTIDE", "SEQU[+42.0106]ENCE"],
     ///         charges=[2, 3],
     ///     )
+    ///     for res in results:
+    ///         print(res["ccs"])     # predicted CCS value (Å²)
+    ///         print(res["charge"])  # charge state used for this prediction
     ///
     /// Args:
     ///     peptides (list[str]): Peptide sequences, optionally containing inline
@@ -254,13 +257,16 @@ impl CCSModel {
     ///     charges (list[int]): Charge states per peptide.
     ///
     /// Returns:
-    ///     numpy.ndarray: 1-D array of predicted CCS values (f32).
+    ///     list[dict]: One dict per peptide, each containing:
+    ///
+    ///         * ``"ccs"`` (*float*): predicted CCS value in Å².
+    ///         * ``"charge"`` (*int*): charge state used for this prediction.
     fn predict<'py>(
         &self,
         py: Python<'py>,
         peptides: Vec<String>,
         charges: Vec<i32>,
-    ) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (naked, mods, sites) = parse_peptides(&peptides);
         let seqs = strings_to_arcs(naked);
         let mods_arc = strings_to_arcs(mods);
@@ -268,12 +274,26 @@ impl CCSModel {
 
         let result = self
             .inner
-            .predict(&seqs, &mods_arc, &sites_arc, charges)
+            .predict(&seqs, &mods_arc, &sites_arc, charges.clone())
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         match result {
             PredictionResult::CCSResult(values) => {
-                Ok(PyArray1::from_slice_bound(py, &values))
+                if values.len() != charges.len() {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "CCS prediction returned {} values but {} charges were provided",
+                        values.len(),
+                        charges.len()
+                    )));
+                }
+                let mut out = Vec::with_capacity(values.len());
+                for (ccs, charge) in values.into_iter().zip(charges.into_iter()) {
+                    let d = PyDict::new_bound(py);
+                    d.set_item("ccs", ccs)?;
+                    d.set_item("charge", charge)?;
+                    out.push(d);
+                }
+                Ok(out)
             }
             _ => Err(PyRuntimeError::new_err("Unexpected prediction result type")),
         }

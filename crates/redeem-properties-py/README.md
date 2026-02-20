@@ -75,7 +75,10 @@ ccs_values = model.predict(
     ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
     charges=[2, 3],
 )
-print(ccs_values)  # numpy.ndarray of shape (2,)
+# List of dicts, one per peptide
+for res in ccs_values:
+    print(res["ccs"])     # predicted CCS value (Å²)
+    print(res["charge"])  # charge state used for this prediction
 ```
 
 ### MS2 Fragment Intensity Prediction
