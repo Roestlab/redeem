@@ -35,14 +35,14 @@ impl Clone for CCSModelWrapper {
 impl CCSModelWrapper {
     pub fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         arch: &str,
         device: Device,
     ) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
             "ccs_cnn_lstm" => Box::new(CCSCNNLSTMModel::new(
                 model_path,
-                Some(constants_path),
+                constants_path,
                 0,
                 8,
                 4,
@@ -51,7 +51,7 @@ impl CCSModelWrapper {
             )?),
             "ccs_cnn_tf" => Box::new(CCSCNNTFModel::new(
                 model_path,
-                Some(constants_path),
+                constants_path,
                 0,
                 8,
                 4,
@@ -142,7 +142,7 @@ impl CCSModelWrapper {
 // Public API Function to load a new CCS model
 pub fn load_collision_cross_section_model<P: AsRef<Path>>(
     model_path: P,
-    constants_path: P,
+    constants_path: Option<P>,
     arch: &str,
     device: Device,
 ) -> Result<CCSModelWrapper> {

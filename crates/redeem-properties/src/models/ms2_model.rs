@@ -33,14 +33,14 @@ impl Clone for MS2ModelWrapper {
 impl MS2ModelWrapper {
     pub fn new<P: AsRef<Path>>(
         model_path: P,
-        constants_path: P,
+        constants_path: Option<P>,
         arch: &str,
         device: Device,
     ) -> Result<Self> {
         let model: Box<dyn ModelInterface> = match arch {
             "ms2_bert" => Box::new(MS2BertModel::new(
                 model_path,
-                Some(constants_path),
+                constants_path,
                 0,
                 8,
                 4,
@@ -114,7 +114,7 @@ impl MS2ModelWrapper {
 // Public API Function to load a new MS2 model
 pub fn load_ms2_model<P: AsRef<Path>>(
     model_path: P,
-    constants_path: P,
+    constants_path: Option<P>,
     arch: &str,
     device: Device,
 ) -> Result<MS2ModelWrapper> {
