@@ -11,6 +11,9 @@ use redeem_properties::models::model_interface::PredictionResult;
 use redeem_properties::models::ms2_model::MS2ModelWrapper;
 use redeem_properties::models::rt_model::RTModelWrapper;
 use redeem_properties::pretrained::{locate_pretrained_model, PretrainedModel};
+use redeem_properties::utils::peptdeep_utils::{
+    get_modification_indices, get_modification_string, remove_mass_shift, MODIFICATION_MAP,
+};
 
 fn strings_to_arcs(v: Vec<String>) -> Vec<Arc<[u8]>> {
     v.into_iter()
@@ -22,6 +25,29 @@ fn opt_strings_to_arcs(v: Vec<Option<String>>) -> Vec<Option<Arc<[u8]>>> {
     v.into_iter()
         .map(|opt| opt.map(|s| Arc::from(s.into_bytes().into_boxed_slice())))
         .collect()
+}
+
+/// Decompose a list of (possibly modified) peptides into naked sequences, mod strings,
+/// and mod site strings that the Rust model API expects.
+///
+/// Each peptide may contain inline modification annotations, e.g.:
+///   `"SEQU[+42.0106]ENCE"` — mass-shift notation
+///   `"SEQUEN(UniMod:4)CE"` — UniMod notation
+///
+/// Unmodified peptides are handled transparently.
+fn parse_peptides(peptides: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mod_map = &*MODIFICATION_MAP;
+    let mut naked_seqs = Vec::with_capacity(peptides.len());
+    let mut mods_out = Vec::with_capacity(peptides.len());
+    let mut sites_out = Vec::with_capacity(peptides.len());
+
+    for pep in peptides {
+        naked_seqs.push(remove_mass_shift(pep));
+        mods_out.push(get_modification_string(pep, mod_map));
+        sites_out.push(get_modification_indices(pep));
+    }
+
+    (naked_seqs, mods_out, sites_out)
 }
 
 /// Parse a pretrained model name and validate it belongs to the expected family.
@@ -109,25 +135,35 @@ impl RTModel {
         Ok(Self { inner: wrapper })
     }
 
-    /// Predict retention times for a list of peptide sequences.
+    /// Predict retention times for a list of peptides.
+    ///
+    /// Peptides may contain inline modification annotations, which are parsed
+    /// automatically — no need to supply separate mod or mod_site strings:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     rt_values = model.predict([
+    ///         "PEPTIDE",
+    ///         "SEQU[+42.0106]ENCE",
+    ///         "SEQUEN(UniMod:4)CE",
+    ///     ])
     ///
     /// Args:
-    ///     sequences (list[str]): Peptide sequences.
-    ///     mods (list[str]): Modification strings per peptide.
-    ///     mod_sites (list[str]): Modification site strings per peptide.
+    ///     peptides (list[str]): Peptide sequences, optionally containing inline
+    ///         modification annotations (mass-shift ``[+X.X]`` or UniMod
+    ///         ``(UniMod:N)`` notation).
     ///
     /// Returns:
     ///     numpy.ndarray: 1-D array of predicted RT values (f32).
     fn predict<'py>(
         &self,
         py: Python<'py>,
-        sequences: Vec<String>,
-        mods: Vec<String>,
-        mod_sites: Vec<String>,
+        peptides: Vec<String>,
     ) -> PyResult<Bound<'py, PyArray1<f32>>> {
-        let seqs = strings_to_arcs(sequences);
+        let (naked, mods, sites) = parse_peptides(&peptides);
+        let seqs = strings_to_arcs(naked);
         let mods_arc = strings_to_arcs(mods);
-        let sites_arc = strings_to_arcs(mod_sites);
+        let sites_arc = strings_to_arcs(sites);
 
         let result = self
             .inner
@@ -198,12 +234,22 @@ impl CCSModel {
         Ok(Self { inner: wrapper })
     }
 
-    /// Predict CCS values for a list of peptide sequences.
+    /// Predict CCS values for a list of peptides.
+    ///
+    /// Peptides may contain inline modification annotations, which are parsed
+    /// automatically — no need to supply separate mod or mod_site strings:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     ccs_values = model.predict(
+    ///         ["PEPTIDE", "SEQU[+42.0106]ENCE"],
+    ///         charges=[2, 3],
+    ///     )
     ///
     /// Args:
-    ///     sequences (list[str]): Peptide sequences.
-    ///     mods (list[str]): Modification strings per peptide.
-    ///     mod_sites (list[str]): Modification site strings per peptide.
+    ///     peptides (list[str]): Peptide sequences, optionally containing inline
+    ///         modification annotations (mass-shift ``[+X.X]`` or UniMod
+    ///         ``(UniMod:N)`` notation).
     ///     charges (list[int]): Charge states per peptide.
     ///
     /// Returns:
@@ -211,14 +257,13 @@ impl CCSModel {
     fn predict<'py>(
         &self,
         py: Python<'py>,
-        sequences: Vec<String>,
-        mods: Vec<String>,
-        mod_sites: Vec<String>,
+        peptides: Vec<String>,
         charges: Vec<i32>,
     ) -> PyResult<Bound<'py, PyArray1<f32>>> {
-        let seqs = strings_to_arcs(sequences);
+        let (naked, mods, sites) = parse_peptides(&peptides);
+        let seqs = strings_to_arcs(naked);
         let mods_arc = strings_to_arcs(mods);
-        let sites_arc = strings_to_arcs(mod_sites);
+        let sites_arc = strings_to_arcs(sites);
 
         let result = self
             .inner
@@ -288,12 +333,24 @@ impl MS2Model {
         Ok(Self { inner: wrapper })
     }
 
-    /// Predict MS2 fragment intensities for a list of peptide sequences.
+    /// Predict MS2 fragment intensities for a list of peptides.
+    ///
+    /// Peptides may contain inline modification annotations, which are parsed
+    /// automatically — no need to supply separate mod or mod_site strings:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     intensities = model.predict(
+    ///         ["PEPTIDE", "SEQU[+42.0106]ENCE"],
+    ///         charges=[2, 2],
+    ///         nces=[20, 20],
+    ///         instruments=["QE", "QE"],
+    ///     )
     ///
     /// Args:
-    ///     sequences (list[str]): Peptide sequences.
-    ///     mods (list[str]): Modification strings per peptide.
-    ///     mod_sites (list[str]): Modification site strings per peptide.
+    ///     peptides (list[str]): Peptide sequences, optionally containing inline
+    ///         modification annotations (mass-shift ``[+X.X]`` or UniMod
+    ///         ``(UniMod:N)`` notation).
     ///     charges (list[int]): Charge states per peptide.
     ///     nces (list[int]): Normalized collision energies per peptide.
     ///     instruments (list[str | None], optional): Instrument names per peptide.
@@ -301,21 +358,20 @@ impl MS2Model {
     /// Returns:
     ///     list[numpy.ndarray]: List of 2-D arrays of fragment intensities (f32),
     ///         one per peptide.
-    #[pyo3(signature = (sequences, mods, mod_sites, charges, nces, instruments=None))]
+    #[pyo3(signature = (peptides, charges, nces, instruments=None))]
     fn predict<'py>(
         &self,
         py: Python<'py>,
-        sequences: Vec<String>,
-        mods: Vec<String>,
-        mod_sites: Vec<String>,
+        peptides: Vec<String>,
         charges: Vec<i32>,
         nces: Vec<i32>,
         instruments: Option<Vec<Option<String>>>,
     ) -> PyResult<Vec<Bound<'py, PyArray2<f32>>>> {
-        let seqs = strings_to_arcs(sequences);
+        let (naked, mods, sites) = parse_peptides(&peptides);
+        let n = naked.len();
+        let seqs = strings_to_arcs(naked);
         let mods_arc = strings_to_arcs(mods);
-        let sites_arc = strings_to_arcs(mod_sites);
-        let n = seqs.len();
+        let sites_arc = strings_to_arcs(sites);
         let instr_vec = match instruments {
             Some(v) => opt_strings_to_arcs(v),
             None => vec![None; n],

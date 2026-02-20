@@ -24,6 +24,10 @@ maturin build --release --features cuda
 
 ## Usage
 
+Peptides can be passed with inline modification annotations — the binding handles
+parsing automatically. Both mass-shift (`[+X.X]`) and UniMod (`(UniMod:N)`) notation
+are supported.
+
 ### Retention Time (RT) Prediction
 
 ```python
@@ -41,12 +45,13 @@ model = redeem_properties_py.RTModel(
     constants_path="path/to/rt.pth.model_const.yaml",
 )
 
-sequences  = ["AGHCEWQMKYR", "PEPTIDE"]
-mods       = ["Acetyl@Protein N-term;Oxidation@M", ""]
-mod_sites  = ["0;8", ""]
-
-rt_values = model.predict(sequences, mods, mod_sites)
-print(rt_values)  # numpy.ndarray of shape (2,)
+# Peptides with inline modifications — no separate mod/site strings needed
+rt_values = model.predict([
+    "AGHCEWQMKYR",
+    "SEQU[+42.0106]ENCE",        # mass-shift notation
+    "SEQUEN(UniMod:4)CE",        # UniMod notation
+])
+print(rt_values)  # numpy.ndarray of shape (3,)
 ```
 
 ### Collision Cross Section (CCS) Prediction
@@ -66,12 +71,10 @@ model = redeem_properties_py.CCSModel(
     constants_path="path/to/ccs.pth.model_const.yaml",
 )
 
-sequences  = ["AGHCEWQMKYR", "PEPTIDE"]
-mods       = ["Oxidation@M", ""]
-mod_sites  = ["8", ""]
-charges    = [2, 3]
-
-ccs_values = model.predict(sequences, mods, mod_sites, charges)
+ccs_values = model.predict(
+    ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
+    charges=[2, 3],
+)
 print(ccs_values)  # numpy.ndarray of shape (2,)
 ```
 
@@ -91,14 +94,12 @@ model = redeem_properties_py.MS2Model(
     constants_path="path/to/ms2.pth.model_const.yaml",
 )
 
-sequences   = ["AGHCEWQMKYR"]
-mods        = ["Oxidation@M"]
-mod_sites   = ["8"]
-charges     = [2]
-nces        = [20]
-instruments = ["QE"]
-
-intensities = model.predict(sequences, mods, mod_sites, charges, nces, instruments)
+intensities = model.predict(
+    ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
+    charges=[2, 2],
+    nces=[20, 20],
+    instruments=["QE", "QE"],
+)
 # List of 2-D numpy arrays, one per peptide
 print(intensities[0].shape)
 ```
