@@ -12,6 +12,14 @@ cd crates/redeem-properties-py
 maturin develop
 ```
 
+For `predict_df` support install pandas or polars as extras:
+
+```bash
+pip install "redeem-properties-py[pandas]"   # or [polars]
+# from source:
+pip install ".[pandas]"
+```
+
 ### Build a wheel
 
 ```bash
@@ -52,6 +60,11 @@ rt_values = model.predict([
     "SEQUEN(UniMod:4)CE",        # UniMod notation
 ])
 print(rt_values)  # numpy.ndarray of shape (3,)
+
+# DataFrame output (pandas or polars)
+rt_df = model.predict_df(["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"])
+# columns: peptide, rt
+rt_df_polars = model.predict_df(["AGHCEWQMKYR"], framework="polars")
 ```
 
 ### Collision Cross Section (CCS) Prediction
@@ -79,6 +92,10 @@ ccs_values = model.predict(
 for res in ccs_values:
     print(res["ccs"])     # predicted CCS value (Å²)
     print(res["charge"])  # charge state used for this prediction
+
+# DataFrame output — columns: peptide, ccs, charge
+ccs_df = model.predict_df(["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"], charges=[2, 3])
+ccs_df_polars = model.predict_df(["AGHCEWQMKYR"], charges=[2], framework="polars")
 ```
 
 ### MS2 Fragment Intensity Prediction
@@ -111,24 +128,22 @@ for res in results:
     print(res["b_ordinals"])         # [1, 2, ..., n_positions]
     print(res["y_ordinals"])         # [n_positions, ..., 1]
 
-# Easy pandas DataFrame creation (one row per position × fragment-type combination):
-import pandas as pd
-import numpy as np
+# Long-format DataFrame — one row per (peptide, ion_type, fragment_charge, ordinal):
+ms2_df = model.predict_df(
+    ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
+    charges=[2, 2],
+    nces=[20, 20],
+    instruments=["QE", "QE"],
+)
+# columns: peptide, ion_type, fragment_charge, ordinal, intensity
+print(ms2_df.head())
 
-res = results[0]
-n_pos, n_types = res["intensities"].shape
-b_types = {"b", "b_nl"}
-ordinals = [
-    int(res["b_ordinals"][r]) if t in b_types else int(res["y_ordinals"][r])
-    for r in range(n_pos) for t in res["ion_types"]
-]
-df = pd.DataFrame({
-    "ion_type":  np.tile(res["ion_types"], n_pos),
-    "charge":    np.tile(res["ion_charges"], n_pos),
-    "ordinal":   ordinals,
-    "intensity": res["intensities"].ravel(),
-})
-print(df.head())
+# polars variant
+ms2_df_polars = model.predict_df(
+    ["AGHCEWQMKYR"],
+    charges=[2], nces=[20],
+    framework="polars",
+)
 ```
 
 ## Pretrained Model Names

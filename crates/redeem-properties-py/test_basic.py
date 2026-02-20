@@ -104,6 +104,33 @@ def test_ms2_model_nonexistent_path_raises():
         )
 
 
+def test_models_have_predict_df():
+    import redeem_properties_py
+
+    assert hasattr(redeem_properties_py.RTModel, "predict_df"), \
+        "RTModel missing predict_df method"
+    assert hasattr(redeem_properties_py.CCSModel, "predict_df"), \
+        "CCSModel missing predict_df method"
+    assert hasattr(redeem_properties_py.MS2Model, "predict_df"), \
+        "MS2Model missing predict_df method"
+
+
+def test_predict_df_unknown_framework_raises():
+    """predict_df should raise ValueError for unknown framework names."""
+    import redeem_properties_py
+
+    # We can't run actual inference without model files, but we can test that
+    # the framework validation happens at the _make_df level via monkey-patching
+    # the predict output.
+    rt = redeem_properties_py.RTModel.__new__(redeem_properties_py.RTModel)
+    import unittest.mock as mock
+    import numpy as np
+    rt._inner = mock.MagicMock()
+    rt._inner.predict.return_value = np.array([1.0], dtype="f4")
+    with pytest.raises(ValueError, match="Unknown framework"):
+        rt.predict_df(["PEPTIDE"], framework="spark")
+
+
 if __name__ == "__main__":
     test_module_importable()
     test_classes_exist()
@@ -118,4 +145,6 @@ if __name__ == "__main__":
     test_rt_model_nonexistent_path_raises()
     test_ccs_model_nonexistent_path_raises()
     test_ms2_model_nonexistent_path_raises()
+    test_models_have_predict_df()
+    test_predict_df_unknown_framework_raises()
     print("All tests passed.")

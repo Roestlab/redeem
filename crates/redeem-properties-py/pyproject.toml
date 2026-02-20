@@ -7,6 +7,11 @@ name = "redeem-properties-py"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.20"]
 
+[project.optional-dependencies]
+pandas = ["pandas>=1.3"]
+polars = ["polars>=0.20"]
+
 [tool.maturin]
-module-name = "redeem_properties_py"
+python-source = "python"
+module-name = "redeem_properties_py._lib"
 features = ["pyo3/extension-module"]
