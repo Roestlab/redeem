@@ -498,7 +498,7 @@ fn get_device(use_cuda: bool) -> PyResult<candle_core::Device> {
 
 /// Python bindings for the redeem-properties peptide property prediction models.
 #[pymodule]
-fn redeem_properties_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RTModel>()?;
     m.add_class::<CCSModel>()?;
     m.add_class::<MS2Model>()?;
