@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use numpy::{PyArray1, PyArray2};
@@ -9,7 +10,7 @@ use redeem_properties::models::ccs_model::CCSModelWrapper;
 use redeem_properties::models::model_interface::PredictionResult;
 use redeem_properties::models::ms2_model::MS2ModelWrapper;
 use redeem_properties::models::rt_model::RTModelWrapper;
-use redeem_properties::utils::peptdeep_utils::download_pretrained_models_exist;
+use redeem_properties::pretrained::{locate_pretrained_model, PretrainedModel};
 
 fn strings_to_arcs(v: Vec<String>) -> Vec<Arc<[u8]>> {
     v.into_iter()
@@ -23,32 +24,27 @@ fn opt_strings_to_arcs(v: Vec<Option<String>>) -> Vec<Option<Arc<[u8]>>> {
         .collect()
 }
 
-/// Map an arch string (e.g. "rt_cnn_lstm") to the base filename stem used by the
-/// shipped pretrained models (e.g. "rt").
-fn arch_to_basename(arch: &str) -> PyResult<&'static str> {
-    if arch.starts_with("rt_") || arch == "rt" {
-        Ok("rt")
-    } else if arch.starts_with("ccs_") || arch == "ccs" {
-        Ok("ccs")
-    } else if arch.starts_with("ms2_") || arch == "ms2" {
-        Ok("ms2")
-    } else {
-        Err(PyRuntimeError::new_err(format!(
-            "Unknown model architecture '{}'. Expected an arch starting with 'rt_', 'ccs_', or 'ms2_'.",
-            arch
-        )))
-    }
-}
+/// Parse a pretrained model name and validate it belongs to the expected family.
+///
+/// Returns `(arch_str, model_path)` on success.  The `family` argument is one of
+/// `"rt"`, `"ccs"`, or `"ms2"` and is used only for the error message.
+fn resolve_pretrained(name: &str, family: &str) -> PyResult<(String, PathBuf)> {
+    let pm = PretrainedModel::from_str(name)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-/// Download (if necessary) the shipped pretrained models and return
-/// `(model_path, constants_path)` for the given architecture.
-fn pretrained_paths(arch: &str) -> PyResult<(PathBuf, PathBuf)> {
-    let base = arch_to_basename(arch)?;
-    let dir = download_pretrained_models_exist()
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to fetch pretrained models: {}", e)))?;
-    let model_path = dir.join(format!("{}.pth", base));
-    let constants_path = dir.join(format!("{}.pth.model_const.yaml", base));
-    Ok((model_path, constants_path))
+    let arch = pm.arch();
+    if !arch.starts_with(family) {
+        return Err(PyRuntimeError::new_err(format!(
+            "Pretrained model '{}' (arch '{}') is not a {} model. \
+             Pass the correct name to the matching class.",
+            name, arch, family
+        )));
+    }
+
+    let model_path = locate_pretrained_model(pm)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    Ok((arch.to_string(), model_path))
 }
 
 /// Python wrapper for the RT (retention time) prediction model.
@@ -87,27 +83,29 @@ impl RTModel {
 
     /// Load an RTModel from the shipped pretrained weights.
     ///
-    /// The pretrained models are downloaded automatically on first use from the
-    /// official redeem GitHub release assets.
+    /// Models are located using the ``redeem_properties`` pretrained-model registry.
+    /// On first use the search order is:
+    ///   1. ``$REDEEM_PRETRAINED_MODELS_DIR/<name>``
+    ///   2. ``data/pretrained_models/`` relative to the current directory
+    ///   3. ``$HOME/.local/share/redeem/models/<name>``
+    ///
+    /// Accepted ``name`` values (case-insensitive):
+    ///   - ``"rt"`` / ``"alphapeptdeep-rt"`` / ``"alphapeptdeep-rt-cnn-lstm"``
+    ///   - ``"redeem-rt"`` / ``"redeem-rt-cnn-tf"``
     ///
     /// Args:
-    ///     arch (str): Model architecture to load (e.g. "rt_cnn_lstm" or "rt_cnn_tf").
+    ///     name (str): Pretrained model identifier.
     ///     use_cuda (bool): Whether to use CUDA for inference. Defaults to False.
     ///
     /// Returns:
     ///     RTModel: A ready-to-use model loaded with pretrained weights.
     #[staticmethod]
-    #[pyo3(signature = (arch, use_cuda=false))]
-    fn from_pretrained(arch: String, use_cuda: bool) -> PyResult<Self> {
-        let (model_path, constants_path) = pretrained_paths(&arch)?;
+    #[pyo3(signature = (name, use_cuda=false))]
+    fn from_pretrained(name: String, use_cuda: bool) -> PyResult<Self> {
+        let (arch, model_path) = resolve_pretrained(&name, "rt")?;
         let device = get_device(use_cuda)?;
-        let wrapper = RTModelWrapper::new(
-            &model_path,
-            Some(&constants_path),
-            &arch,
-            device,
-        )
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let wrapper = RTModelWrapper::new(&model_path, None::<std::path::PathBuf>.as_ref(), &arch, device)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner: wrapper })
     }
 
@@ -176,21 +174,26 @@ impl CCSModel {
 
     /// Load a CCSModel from the shipped pretrained weights.
     ///
-    /// The pretrained models are downloaded automatically on first use from the
-    /// official redeem GitHub release assets.
+    /// Models are located using the ``redeem_properties`` pretrained-model registry.
+    ///
+    /// Accepted ``name`` values (case-insensitive):
+    ///   - ``"ccs"`` / ``"alphapeptdeep-ccs"`` / ``"alphapeptdeep-ccs-cnn-lstm"``
+    ///   - ``"redeem-ccs"`` / ``"redeem-ccs-cnn-tf"``
     ///
     /// Args:
-    ///     arch (str): Model architecture to load (e.g. "ccs_cnn_lstm" or "ccs_cnn_tf").
+    ///     name (str): Pretrained model identifier.
     ///     use_cuda (bool): Whether to use CUDA for inference. Defaults to False.
     ///
     /// Returns:
     ///     CCSModel: A ready-to-use model loaded with pretrained weights.
     #[staticmethod]
-    #[pyo3(signature = (arch, use_cuda=false))]
-    fn from_pretrained(arch: String, use_cuda: bool) -> PyResult<Self> {
-        let (model_path, constants_path) = pretrained_paths(&arch)?;
+    #[pyo3(signature = (name, use_cuda=false))]
+    fn from_pretrained(name: String, use_cuda: bool) -> PyResult<Self> {
+        let (arch, model_path) = resolve_pretrained(&name, "ccs")?;
         let device = get_device(use_cuda)?;
-        let wrapper = CCSModelWrapper::new(&model_path, &constants_path, &arch, device)
+        // CCSModelWrapper requires a non-optional constants_path. For pretrained .pth files
+        // the constants are embedded in the file itself, so model_path is passed for both.
+        let wrapper = CCSModelWrapper::new(&model_path, &model_path, &arch, device)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner: wrapper })
     }
@@ -262,21 +265,25 @@ impl MS2Model {
 
     /// Load an MS2Model from the shipped pretrained weights.
     ///
-    /// The pretrained models are downloaded automatically on first use from the
-    /// official redeem GitHub release assets.
+    /// Models are located using the ``redeem_properties`` pretrained-model registry.
+    ///
+    /// Accepted ``name`` values (case-insensitive):
+    ///   - ``"ms2"`` / ``"alphapeptdeep-ms2"`` / ``"alphapeptdeep-ms2-bert"``
     ///
     /// Args:
-    ///     arch (str): Model architecture to load (e.g. "ms2_bert").
+    ///     name (str): Pretrained model identifier.
     ///     use_cuda (bool): Whether to use CUDA for inference. Defaults to False.
     ///
     /// Returns:
     ///     MS2Model: A ready-to-use model loaded with pretrained weights.
     #[staticmethod]
-    #[pyo3(signature = (arch, use_cuda=false))]
-    fn from_pretrained(arch: String, use_cuda: bool) -> PyResult<Self> {
-        let (model_path, constants_path) = pretrained_paths(&arch)?;
+    #[pyo3(signature = (name, use_cuda=false))]
+    fn from_pretrained(name: String, use_cuda: bool) -> PyResult<Self> {
+        let (arch, model_path) = resolve_pretrained(&name, "ms2")?;
         let device = get_device(use_cuda)?;
-        let wrapper = MS2ModelWrapper::new(&model_path, &constants_path, &arch, device)
+        // MS2ModelWrapper requires a non-optional constants_path. For pretrained .pth files
+        // the constants are embedded in the file itself, so model_path is passed for both.
+        let wrapper = MS2ModelWrapper::new(&model_path, &model_path, &arch, device)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner: wrapper })
     }

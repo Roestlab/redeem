@@ -29,15 +29,17 @@ maturin build --release --features cuda
 ```python
 import redeem_properties_py
 
-# From a custom model file
+# From the shipped pretrained weights using the pretrained model registry
+# Accepted names: "rt", "alphapeptdeep-rt", "alphapeptdeep-rt-cnn-lstm",
+#                 "redeem-rt", "redeem-rt-cnn-tf"
+model = redeem_properties_py.RTModel.from_pretrained("rt")
+
+# Or load from a custom model file
 model = redeem_properties_py.RTModel(
     model_path="path/to/rt.pth",
     arch="rt_cnn_lstm",
     constants_path="path/to/rt.pth.model_const.yaml",
 )
-
-# Or from the shipped pretrained weights (downloaded automatically on first use)
-model = redeem_properties_py.RTModel.from_pretrained("rt_cnn_lstm")
 
 sequences  = ["AGHCEWQMKYR", "PEPTIDE"]
 mods       = ["Acetyl@Protein N-term;Oxidation@M", ""]
@@ -52,15 +54,17 @@ print(rt_values)  # numpy.ndarray of shape (2,)
 ```python
 import redeem_properties_py
 
-# From a custom model file
+# From the shipped pretrained weights
+# Accepted names: "ccs", "alphapeptdeep-ccs", "alphapeptdeep-ccs-cnn-lstm",
+#                 "redeem-ccs", "redeem-ccs-cnn-tf"
+model = redeem_properties_py.CCSModel.from_pretrained("ccs")
+
+# Or load from a custom model file
 model = redeem_properties_py.CCSModel(
     model_path="path/to/ccs.pth",
     arch="ccs_cnn_lstm",
     constants_path="path/to/ccs.pth.model_const.yaml",
 )
-
-# Or from the shipped pretrained weights
-model = redeem_properties_py.CCSModel.from_pretrained("ccs_cnn_lstm")
 
 sequences  = ["AGHCEWQMKYR", "PEPTIDE"]
 mods       = ["Oxidation@M", ""]
@@ -76,15 +80,16 @@ print(ccs_values)  # numpy.ndarray of shape (2,)
 ```python
 import redeem_properties_py
 
-# From a custom model file
+# From the shipped pretrained weights
+# Accepted names: "ms2", "alphapeptdeep-ms2", "alphapeptdeep-ms2-bert"
+model = redeem_properties_py.MS2Model.from_pretrained("ms2")
+
+# Or load from a custom model file
 model = redeem_properties_py.MS2Model(
     model_path="path/to/ms2.pth",
     arch="ms2_bert",
     constants_path="path/to/ms2.pth.model_const.yaml",
 )
-
-# Or from the shipped pretrained weights
-model = redeem_properties_py.MS2Model.from_pretrained("ms2_bert")
 
 sequences   = ["AGHCEWQMKYR"]
 mods        = ["Oxidation@M"]
@@ -98,7 +103,24 @@ intensities = model.predict(sequences, mods, mod_sites, charges, nces, instrumen
 print(intensities[0].shape)
 ```
 
-## Supported Architectures
+## Pretrained Model Names
+
+The `from_pretrained` method accepts the following names (case-insensitive):
+
+| Short name | Full name | Model class |
+|------------|-----------|-------------|
+| `"rt"` | `"alphapeptdeep-rt-cnn-lstm"` | `RTModel` |
+| `"redeem-rt"` | `"redeem-rt-cnn-tf"` | `RTModel` |
+| `"ccs"` | `"alphapeptdeep-ccs-cnn-lstm"` | `CCSModel` |
+| `"redeem-ccs"` | `"redeem-ccs-cnn-tf"` | `CCSModel` |
+| `"ms2"` | `"alphapeptdeep-ms2-bert"` | `MS2Model` |
+
+Model files are looked up in this order:
+1. `$REDEEM_PRETRAINED_MODELS_DIR/<path>`
+2. `data/pretrained_models/` relative to the working directory
+3. `$HOME/.local/share/redeem/models/<path>`
+
+## Supported Architectures (manual loading)
 
 | Model | `arch` value |
 |-------|-------------|

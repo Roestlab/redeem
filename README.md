@@ -41,7 +41,7 @@ Quick example:
 import redeem_properties_py
 
 # Load from shipped pretrained weights (downloaded automatically on first use)
-rt_model = redeem_properties_py.RTModel.from_pretrained("rt_cnn_lstm")
+rt_model = redeem_properties_py.RTModel.from_pretrained("rt")
 rt_values = rt_model.predict(["PEPTIDE", "SEQUENCE"], ["", ""], ["", ""])
 print(rt_values)  # numpy array of RT predictions
 

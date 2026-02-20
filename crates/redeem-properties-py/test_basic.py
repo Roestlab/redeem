@@ -54,11 +54,21 @@ def test_ms2_model_has_from_pretrained():
         "MS2Model missing from_pretrained classmethod"
 
 
-def test_from_pretrained_bad_arch_raises():
+def test_from_pretrained_unknown_name_raises():
+    """Unknown pretrained model names should raise RuntimeError."""
     import redeem_properties_py
 
     with pytest.raises(RuntimeError):
-        redeem_properties_py.RTModel.from_pretrained("unknown_arch_xyz")
+        redeem_properties_py.RTModel.from_pretrained("completely_unknown_model_xyz")
+
+
+def test_from_pretrained_wrong_family_raises():
+    """Passing a CCS model name to RTModel.from_pretrained should raise RuntimeError."""
+    import redeem_properties_py
+
+    with pytest.raises(RuntimeError):
+        # "ccs" is a valid pretrained name but belongs to the CCS family, not RT
+        redeem_properties_py.RTModel.from_pretrained("ccs")
 
 
 def test_rt_model_nonexistent_path_raises():
@@ -103,7 +113,8 @@ if __name__ == "__main__":
     test_rt_model_has_from_pretrained()
     test_ccs_model_has_from_pretrained()
     test_ms2_model_has_from_pretrained()
-    test_from_pretrained_bad_arch_raises()
+    test_from_pretrained_unknown_name_raises()
+    test_from_pretrained_wrong_family_raises()
     test_rt_model_nonexistent_path_raises()
     test_ccs_model_nonexistent_path_raises()
     test_ms2_model_nonexistent_path_raises()
