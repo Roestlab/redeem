@@ -5,6 +5,7 @@ use std::sync::Arc;
 use numpy::{PyArray1, PyArray2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use redeem_properties::models::ccs_model::CCSModelWrapper;
 use redeem_properties::models::model_interface::PredictionResult;
@@ -336,16 +337,44 @@ impl MS2Model {
     /// Predict MS2 fragment intensities for a list of peptides.
     ///
     /// Peptides may contain inline modification annotations, which are parsed
-    /// automatically — no need to supply separate mod or mod_site strings:
+    /// automatically — no need to supply separate mod or mod_site strings.
     ///
     /// .. code-block:: python
     ///
-    ///     intensities = model.predict(
+    ///     results = model.predict(
     ///         ["PEPTIDE", "SEQU[+42.0106]ENCE"],
     ///         charges=[2, 2],
     ///         nces=[20, 20],
     ///         instruments=["QE", "QE"],
     ///     )
+    ///     for res in results:
+    ///         print(res["intensities"].shape)    # (n_positions, 8)
+    ///         print(res["ion_types"])            # ["b", "b", "y", "y", ...]
+    ///         print(res["ion_charges"])          # [1, 2, 1, 2, ...]
+    ///         print(res["b_ordinals"])           # [1, 2, ..., n_positions]
+    ///         print(res["y_ordinals"])           # [n_positions, ..., 1]
+    ///
+    ///     # Easy DataFrame creation:
+    ///     import pandas as pd, numpy as np
+    ///     res = results[0]
+    ///     n_pos, n_types = res["intensities"].shape
+    ///     # Build per-row ordinals respecting ion type (b and y have reversed numbering)
+    ///     b_types = {"b", "b_nl"}
+    ///     ordinals = np.array([
+    ///         res["b_ordinals"][r] if t in b_types else res["y_ordinals"][r]
+    ///         for r in range(n_pos) for t in res["ion_types"]
+    ///     ])
+    ///     df = pd.DataFrame({
+    ///         "ion_type":  np.tile(res["ion_types"], n_pos),
+    ///         "charge":    np.tile(res["ion_charges"], n_pos),
+    ///         "ordinal":   ordinals,
+    ///         "intensity": res["intensities"].ravel(),
+    ///     })
+    ///
+    /// The 8 columns per position correspond to, in order:
+    ///   ``b+1``, ``b+2``, ``y+1``, ``y+2``,
+    ///   ``b_nl+1``, ``b_nl+2``, ``y_nl+1``, ``y_nl+2``
+    ///   where ``nl`` denotes neutral-loss variants (zeros when not applicable).
     ///
     /// Args:
     ///     peptides (list[str]): Peptide sequences, optionally containing inline
@@ -356,8 +385,18 @@ impl MS2Model {
     ///     instruments (list[str | None], optional): Instrument names per peptide.
     ///
     /// Returns:
-    ///     list[numpy.ndarray]: List of 2-D arrays of fragment intensities (f32),
-    ///         one per peptide.
+    ///     list[dict]: One dict per peptide, each containing:
+    ///
+    ///         * ``"intensities"`` (*numpy.ndarray* shape ``(n_positions, 8)``): predicted
+    ///           fragment intensities.
+    ///         * ``"ion_types"`` (*list[str]* len 8): ion type per column —
+    ///           ``"b"``, ``"b"``, ``"y"``, ``"y"``, ``"b_nl"``, ``"b_nl"``, ``"y_nl"``, ``"y_nl"``.
+    ///         * ``"ion_charges"`` (*list[int]* len 8): fragment ion charge per column —
+    ///           ``1``, ``2``, ``1``, ``2``, ``1``, ``2``, ``1``, ``2``.
+    ///         * ``"b_ordinals"`` (*numpy.ndarray* len ``n_positions``): 1-indexed b-ion
+    ///           ordinals for each row — ``[1, 2, …, n_positions]``.
+    ///         * ``"y_ordinals"`` (*numpy.ndarray* len ``n_positions``): 1-indexed y-ion
+    ///           ordinals for each row — ``[n_positions, …, 1]``.
     #[pyo3(signature = (peptides, charges, nces, instruments=None))]
     fn predict<'py>(
         &self,
@@ -366,7 +405,7 @@ impl MS2Model {
         charges: Vec<i32>,
         nces: Vec<i32>,
         instruments: Option<Vec<Option<String>>>,
-    ) -> PyResult<Vec<Bound<'py, PyArray2<f32>>>> {
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (naked, mods, sites) = parse_peptides(&peptides);
         let n = naked.len();
         let seqs = strings_to_arcs(naked);
@@ -382,15 +421,32 @@ impl MS2Model {
             .predict(&seqs, &mods_arc, &sites_arc, charges, nces, instr_vec)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
+        // Fixed column metadata for all 8 fragment type columns
+        // Order: b+1, b+2, y+1, y+2, b_nl+1, b_nl+2, y_nl+1, y_nl+2
+        let ion_types: Vec<&str> = vec!["b", "b", "y", "y", "b_nl", "b_nl", "y_nl", "y_nl"];
+        let ion_charges: Vec<i32> = vec![1, 2, 1, 2, 1, 2, 1, 2];
+
         match result {
             PredictionResult::MS2Result(matrices) => {
                 let mut out = Vec::with_capacity(matrices.len());
                 for matrix in matrices {
-                    let rows = matrix.len();
-                    let cols = if rows > 0 { matrix[0].len() } else { 0 };
+                    let n_pos = matrix.len();
+                    let n_cols = if n_pos > 0 { matrix[0].len() } else { 0 };
                     let arr =
-                        ndarray::Array2::from_shape_fn((rows, cols), |(r, c)| matrix[r][c]);
-                    out.push(PyArray2::from_array_bound(py, &arr));
+                        ndarray::Array2::from_shape_fn((n_pos, n_cols), |(r, c)| matrix[r][c]);
+
+                    // b ordinals: 1, 2, ..., n_pos
+                    let b_ords: Vec<i32> = (1..=(n_pos as i32)).collect();
+                    // y ordinals: n_pos, n_pos-1, ..., 1
+                    let y_ords: Vec<i32> = (1..=(n_pos as i32)).rev().collect();
+
+                    let d = PyDict::new_bound(py);
+                    d.set_item("intensities", PyArray2::from_array_bound(py, &arr))?;
+                    d.set_item("ion_types", ion_types.to_vec())?;
+                    d.set_item("ion_charges", ion_charges.to_vec())?;
+                    d.set_item("b_ordinals", PyArray1::from_slice_bound(py, &b_ords))?;
+                    d.set_item("y_ordinals", PyArray1::from_slice_bound(py, &y_ords))?;
+                    out.push(d);
                 }
                 Ok(out)
             }

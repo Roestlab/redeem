@@ -94,14 +94,38 @@ model = redeem_properties_py.MS2Model(
     constants_path="path/to/ms2.pth.model_const.yaml",
 )
 
-intensities = model.predict(
+results = model.predict(
     ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
     charges=[2, 2],
     nces=[20, 20],
     instruments=["QE", "QE"],
 )
-# List of 2-D numpy arrays, one per peptide
-print(intensities[0].shape)
+# Each element is a dict with intensities + fragment annotations
+for res in results:
+    print(res["intensities"].shape)  # (n_positions, 8)
+    print(res["ion_types"])          # ["b", "b", "y", "y", "b_nl", "b_nl", "y_nl", "y_nl"]
+    print(res["ion_charges"])        # [1, 2, 1, 2, 1, 2, 1, 2]
+    print(res["b_ordinals"])         # [1, 2, ..., n_positions]
+    print(res["y_ordinals"])         # [n_positions, ..., 1]
+
+# Easy pandas DataFrame creation (one row per position × fragment-type combination):
+import pandas as pd
+import numpy as np
+
+res = results[0]
+n_pos, n_types = res["intensities"].shape
+b_types = {"b", "b_nl"}
+ordinals = [
+    int(res["b_ordinals"][r]) if t in b_types else int(res["y_ordinals"][r])
+    for r in range(n_pos) for t in res["ion_types"]
+]
+df = pd.DataFrame({
+    "ion_type":  np.tile(res["ion_types"], n_pos),
+    "charge":    np.tile(res["ion_charges"], n_pos),
+    "ordinal":   ordinals,
+    "intensity": res["intensities"].ravel(),
+})
+print(df.head())
 ```
 
 ## Pretrained Model Names
