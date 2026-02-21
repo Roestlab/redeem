@@ -49,7 +49,7 @@ html_theme_options = {
     "use_edit_page_button": True,
     "path_to_docs": "crates/redeem-properties-py/docs/source",
     "logo": {
-        "image_light": "redeem_logo_new_submark.png",
+        "image_light": "redeem_logo_new_submark_dark.png",
         "image_dark": "redeem_logo_new_submark.png",
     }
 }
