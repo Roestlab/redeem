@@ -32,11 +32,6 @@ rustyms = { version = "0.11", default-features = false }
 version = "0.7"
 optional = true
 
-# Optional embedding of pretrained model files into the crate binary.
-[dependencies.include_dir]
-version = "0.7"
-optional = true
-
 [dependencies.candle-core]
 version = "0.8.4"
 default-features = false
