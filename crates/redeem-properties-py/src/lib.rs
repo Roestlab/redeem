@@ -264,6 +264,30 @@ impl RTModel {
             _ => Err(PyRuntimeError::new_err("Unexpected prediction result type")),
         }
     }
+
+    /// Return the total number of parameters in the loaded model.
+    #[pyo3(name = "param_count")]
+    fn param_count_py(&mut self) -> PyResult<usize> {
+        Ok(self.inner.param_count())
+    }
+
+    /// Return a pretty hierarchical model summary (preferred) or fall back to
+    /// the detailed tabular summary.
+    fn summary(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_pretty())
+    }
+
+    /// Return the full detailed summary (groups and top tensors).
+    #[pyo3(name = "summary_detailed")]
+    fn summary_detailed_py(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_detailed())
+    }
+
+    /// Expose pretty hierarchical summary to Python.
+    #[pyo3(name = "summary_pretty")]
+    fn summary_pretty_py(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_pretty())
+    }
 }
 
 /// Python wrapper for the CCS (collision cross section) prediction model.
@@ -415,6 +439,29 @@ impl CCSModel {
             }
             _ => Err(PyRuntimeError::new_err("Unexpected prediction result type")),
         }
+    }
+
+    /// Return the total number of parameters in the loaded model.
+    #[pyo3(name = "param_count")]
+    fn param_count_py(&mut self) -> PyResult<usize> {
+        Ok(self.inner.param_count())
+    }
+
+    /// Return a pretty hierarchical model summary (preferred) or fall back to
+    /// the detailed tabular summary.
+    fn summary(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_pretty())
+    }
+
+    /// Expose detailed summary to Python.
+    #[pyo3(name = "summary_detailed")]
+    fn summary_detailed_py(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_detailed())
+    }
+
+    #[pyo3(name = "summary_pretty")]
+    fn summary_pretty_py(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_pretty())
     }
 }
 
@@ -621,6 +668,29 @@ impl MS2Model {
             }
             _ => Err(PyRuntimeError::new_err("Unexpected prediction result type")),
         }
+    }
+
+    /// Return the total number of parameters in the loaded model.
+    #[pyo3(name = "param_count")]
+    fn param_count_py(&mut self) -> PyResult<usize> {
+        Ok(self.inner.param_count())
+    }
+
+    /// Return a pretty hierarchical model summary (preferred) or fall back to
+    /// the detailed tabular summary.
+    fn summary(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_pretty())
+    }
+
+    /// Expose detailed summary to Python.
+    #[pyo3(name = "summary_detailed")]
+    fn summary_detailed_py(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_detailed())
+    }
+
+    #[pyo3(name = "summary_pretty")]
+    fn summary_pretty_py(&mut self) -> PyResult<String> {
+        Ok(self.inner.summary_pretty())
     }
 }
 

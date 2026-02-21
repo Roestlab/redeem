@@ -98,6 +98,9 @@ class RTModel:
         use_cuda: bool = False,
     ) -> None:
         self._inner = _RTLib(model_path, arch, constants_path=constants_path, use_cuda=use_cuda)
+        # preserve construction metadata for nicer repr/str
+        self._model_path = model_path
+        self._arch = arch
 
     @classmethod
     def from_pretrained(cls, name: str, use_cuda: bool = False) -> "RTModel":
@@ -115,7 +118,23 @@ class RTModel:
         """
         obj = cls.__new__(cls)
         obj._inner = _RTLib.from_pretrained(name, use_cuda=use_cuda)
+        # remember the requested pretrained name and located path (best-effort)
+        obj._requested_name = name
+        try:
+            obj._model_path = locate_pretrained(name)
+        except Exception:
+            obj._model_path = None
+        obj._arch = None
         return obj
+
+    def __repr__(self) -> str:
+        arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
+        path = getattr(self, "_model_path", None)
+        param_count = self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        return f"<RTModel arch={arch!r} params={param_count} path={path!r}>"
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     def predict(self, peptides: list[str]):
         """Predict retention times for a list of peptides.
@@ -134,6 +153,47 @@ class RTModel:
             1-D float32 array of predicted RT values, one per peptide.
         """
         return self._inner.predict(peptides)
+
+    def param_count(self) -> int:
+        """Return total number of parameters in the loaded model (if available).
+
+        This delegates to the compiled Rust extension when present. If the
+        underlying extension does not expose a param_count method an
+        AttributeError is raised.
+        """
+        if hasattr(self._inner, "param_count"):
+            try:
+                return self._inner.param_count()
+            except Exception as e:
+                raise RuntimeError(f"failed to get param_count from inner model: {e}")
+        raise AttributeError("underlying model does not expose 'param_count'")
+
+    def summary(self) -> str:
+        """Return a compact/detailed model summary string delegated to the Rust extension.
+
+        Prefer the detailed Rust-side summary when available.
+        """
+        # Prefer pretty hierarchical summary if available
+        if hasattr(self._inner, "summary_pretty"):
+            try:
+                return self._inner.summary_pretty()
+            except Exception:
+                pass
+        if hasattr(self._inner, "summary"):
+            try:
+                return self._inner.summary()
+            except Exception:
+                pass
+        # Fallback: try a compact repr using arch/requested name
+        arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
+        try:
+            # if param_count available, include it
+            pc = self.param_count() if hasattr(self._inner, "param_count") else None
+            if pc is not None:
+                return f"{arch} params={pc}"
+        except Exception:
+            pass
+        return f"{arch}"
 
     def predict_df(self, peptides: list[str], framework: str = "pandas"):
         """Predict retention times and return the result as a DataFrame.
@@ -181,6 +241,9 @@ class CCSModel:
         use_cuda: bool = False,
     ) -> None:
         self._inner = _CCSLib(model_path, arch, constants_path, use_cuda=use_cuda)
+        # preserve construction metadata for nicer repr/str
+        self._model_path = model_path
+        self._arch = arch
 
     @classmethod
     def from_pretrained(cls, name: str, use_cuda: bool = False) -> "CCSModel":
@@ -191,7 +254,22 @@ class CCSModel:
         """
         obj = cls.__new__(cls)
         obj._inner = _CCSLib.from_pretrained(name, use_cuda=use_cuda)
+        obj._requested_name = name
+        try:
+            obj._model_path = locate_pretrained(name)
+        except Exception:
+            obj._model_path = None
+        obj._arch = None
         return obj
+
+    def __repr__(self) -> str:
+        arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
+        path = getattr(self, "_model_path", None)
+        param_count = self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        return f"<CCSModel arch={arch!r} params={param_count} path={path!r}>"
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     def predict(self, peptides: list[str], charges: list[int]):
         """Predict CCS values for a list of peptides.
@@ -212,6 +290,41 @@ class CCSModel:
             * ``"charge"`` – charge state used for the prediction.
         """
         return self._inner.predict(peptides, charges)
+
+    def param_count(self) -> int:
+        """Return total number of parameters in the loaded model (if available)."""
+        if hasattr(self._inner, "param_count"):
+            try:
+                return self._inner.param_count()
+            except Exception as e:
+                raise RuntimeError(f"failed to get param_count from inner model: {e}")
+        raise AttributeError("underlying model does not expose 'param_count'")
+
+    def summary(self) -> str:
+        """Return a model summary string delegated to the Rust extension.
+
+        Prefers the pretty hierarchical summary when available.
+        """
+        # Prefer pretty hierarchical summary if available
+        if hasattr(self._inner, "summary_pretty"):
+            try:
+                return self._inner.summary_pretty()
+            except Exception:
+                pass
+        if hasattr(self._inner, "summary"):
+            try:
+                return self._inner.summary()
+            except Exception:
+                pass
+        # Fallback: compact repr using arch/requested name
+        arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
+        try:
+            pc = self.param_count() if hasattr(self._inner, "param_count") else None
+            if pc is not None:
+                return f"{arch} params={pc}"
+        except Exception:
+            pass
+        return f"{arch}"
 
     def predict_df(
         self,
@@ -273,6 +386,9 @@ class MS2Model:
         use_cuda: bool = False,
     ) -> None:
         self._inner = _MS2Lib(model_path, arch, constants_path, use_cuda=use_cuda)
+        # preserve construction metadata for nicer repr/str
+        self._model_path = model_path
+        self._arch = arch
 
     @classmethod
     def from_pretrained(cls, name: str, use_cuda: bool = False) -> "MS2Model":
@@ -283,7 +399,22 @@ class MS2Model:
         """
         obj = cls.__new__(cls)
         obj._inner = _MS2Lib.from_pretrained(name, use_cuda=use_cuda)
+        obj._requested_name = name
+        try:
+            obj._model_path = locate_pretrained(name)
+        except Exception:
+            obj._model_path = None
+        obj._arch = None
         return obj
+
+    def __repr__(self) -> str:
+        arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
+        path = getattr(self, "_model_path", None)
+        param_count = self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        return f"<MS2Model arch={arch!r} params={param_count} path={path!r}>"
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     def predict(
         self,
@@ -317,6 +448,41 @@ class MS2Model:
             * ``"y_ordinals"`` – 1-D int array ``[n_positions, …, 1]``.
         """
         return self._inner.predict(peptides, charges, nces, instruments=instruments)
+
+    def param_count(self) -> int:
+        """Return total number of parameters in the loaded model (if available)."""
+        if hasattr(self._inner, "param_count"):
+            try:
+                return self._inner.param_count()
+            except Exception as e:
+                raise RuntimeError(f"failed to get param_count from inner model: {e}")
+        raise AttributeError("underlying model does not expose 'param_count'")
+
+    def summary(self) -> str:
+        """Return a model summary string delegated to the Rust extension.
+
+        Prefers the pretty hierarchical summary when available.
+        """
+        # Prefer pretty hierarchical summary if available
+        if hasattr(self._inner, "summary_pretty"):
+            try:
+                return self._inner.summary_pretty()
+            except Exception:
+                pass
+        if hasattr(self._inner, "summary"):
+            try:
+                return self._inner.summary()
+            except Exception:
+                pass
+        # Fallback: compact repr using arch/requested name
+        arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
+        try:
+            pc = self.param_count() if hasattr(self._inner, "param_count") else None
+            if pc is not None:
+                return f"{arch} params={pc}"
+        except Exception:
+            pass
+        return f"{arch}"
 
     def predict_df(
         self,
