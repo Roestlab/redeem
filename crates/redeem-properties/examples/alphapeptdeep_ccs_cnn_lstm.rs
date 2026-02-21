@@ -75,8 +75,8 @@ fn run_prediction(model: &mut CCSCNNLSTMModel, ctx: &PredictionContext) -> Resul
 }
 
 fn main() -> Result<()> {
-    let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
-    let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+    let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth");
+    let constants_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
     let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
 
     let mut model = CCSCNNLSTMModel::new(
