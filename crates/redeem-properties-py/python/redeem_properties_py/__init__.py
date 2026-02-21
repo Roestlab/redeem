@@ -38,9 +38,23 @@ from redeem_properties_py._lib import (  # noqa: F401  (re-exported)
     RTModel as _RTLib,
     locate_pretrained as locate_pretrained,
     validate_pretrained as validate_pretrained,
+    compute_precursor_mz as compute_precursor_mz,
+    compute_fragment_mzs as compute_fragment_mzs,
+    compute_peptide_mz_info as compute_peptide_mz_info,
+    match_fragment_mzs as match_fragment_mzs,
 )
 
-__all__ = ["RTModel", "CCSModel", "MS2Model", "PropertyPrediction", "locate_pretrained"]
+__all__ = [
+    "RTModel",
+    "CCSModel",
+    "MS2Model",
+    "PropertyPrediction",
+    "locate_pretrained",
+    "compute_precursor_mz",
+    "compute_fragment_mzs",
+    "compute_peptide_mz_info",
+    "match_fragment_mzs",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +532,7 @@ class MS2Model:
         instruments: Optional[list[Optional[str]]] = None,
         multiplier: float = 10_000.0,
         exclude_zeros: bool = True,
+        annotate_mz: bool = False,
         framework: str = "pandas",
     ):
         """Predict MS2 fragment intensities and return a long-format DataFrame.
@@ -539,6 +554,11 @@ class MS2Model:
             ``10000.0`` to scale normalized outputs into typical intensity ranges.
         exclude_zeros:
             If True, exclude rows where all predicted intensities are zero.
+        annotate_mz:
+            If ``True``, append a ``mz`` column with the theoretical
+            monoisotopic m/z for each fragment ion (computed via *rustyms*).
+            Neutral-loss ions (``b_nl``, ``y_nl``) receive ``NaN``.
+            Default ``False``.
         framework:
             ``'pandas'`` (default) or ``'polars'``.
 
@@ -546,7 +566,7 @@ class MS2Model:
         -------
         pandas.DataFrame or polars.DataFrame
             Columns: ``peptide``, ``ion_type``, ``fragment_charge``,
-            ``ordinal``, ``intensity``.
+            ``ordinal``, ``intensity``, and optionally ``mz``.
 
         Example
         -------
@@ -570,14 +590,34 @@ class MS2Model:
         frag_charge_col: list[int] = []
         ordinal_col: list[int] = []
         intensity_col: list[float] = []
+        mz_col: list[float] = []
 
-        for pep, res in zip(peptides, results):
+        for pep, charge, res in zip(peptides, charges, results):
             intensities = res["intensities"]
             ion_types = res["ion_types"]
             frag_charges = res["ion_charges"]
             b_ords = res["b_ordinals"]
             y_ords = res["y_ordinals"]
             n_pos, n_types = intensities.shape
+
+            # Pre-compute theoretical fragment m/z for this peptide (if needed)
+            frag_mz_lookup: dict[tuple[str, int, int], float] | None = None
+            if annotate_mz:
+                max_frag_charge = max(int(fc) for fc in frag_charges)
+                try:
+                    frag_info = compute_fragment_mzs(pep, max_frag_charge)
+                    frag_mz_lookup = {
+                        (t, c, o): m
+                        for t, c, o, m in zip(
+                            frag_info["ion_types"],
+                            frag_info["charges"],
+                            frag_info["ordinals"],
+                            frag_info["mzs"],
+                        )
+                    }
+                except Exception:
+                    frag_mz_lookup = {}
+
             for r in range(n_pos):
                 for c in range(n_types):
                     t = ion_types[c]
@@ -591,17 +631,27 @@ class MS2Model:
                     frag_charge_col.append(int(frag_charges[c]))
                     ordinal_col.append(ordinal)
                     intensity_col.append(val)
+                    if annotate_mz and frag_mz_lookup is not None:
+                        # Strip _nl suffix for lookup; NL ions won't match → NaN
+                        base_type = t.replace("_nl", "")
+                        mz_col.append(
+                            frag_mz_lookup.get(
+                                (base_type, int(frag_charges[c]), ordinal),
+                                float("nan"),
+                            )
+                        )
 
-        return _make_df(
-            {
-                "peptide": pep_col,
-                "ion_type": ion_type_col,
-                "fragment_charge": frag_charge_col,
-                "ordinal": ordinal_col,
-                "intensity": intensity_col,
-            },
-            framework,
-        )
+        data: dict = {
+            "peptide": pep_col,
+            "ion_type": ion_type_col,
+            "fragment_charge": frag_charge_col,
+            "ordinal": ordinal_col,
+            "intensity": intensity_col,
+        }
+        if annotate_mz:
+            data["mz"] = mz_col
+
+        return _make_df(data, framework)
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +835,7 @@ class PropertyPrediction:
         instruments: Optional[list[Optional[str]]] = None,
         multiplier: float = 10_000.0,
         exclude_zeros: bool = True,
+        annotate_mz: bool = True,
         framework: str = "pandas",
     ):
         """Predict all enabled properties and return a single long-format DataFrame.
@@ -810,6 +861,11 @@ class PropertyPrediction:
             Scalar applied to MS2 predicted intensities (default 10 000).
         exclude_zeros:
             If ``True``, individual zero-intensity fragment rows are dropped.
+        annotate_mz:
+            If ``True`` (default), compute and add m/z columns.  When MS2 is
+            enabled a ``precursor_mz`` column and a per-fragment ``mz``
+            column are added.  When MS2 is disabled only ``precursor_mz``
+            is added.  Requires *charges* to be provided.
         framework:
             ``'pandas'`` (default) or ``'polars'``.
 
@@ -818,8 +874,8 @@ class PropertyPrediction:
         pandas.DataFrame or polars.DataFrame
             Possible columns (depending on which models are enabled):
             ``peptide``, ``charge``, ``nce``, ``instrument``,
-            ``rt``, ``ccs``, ``ion_type``, ``fragment_charge``,
-            ``ordinal``, ``intensity``.
+            ``rt``, ``ccs``, ``precursor_mz``, ``ion_type``,
+            ``fragment_charge``, ``ordinal``, ``intensity``, ``mz``.
         """
         n = len(peptides)
 
@@ -858,10 +914,12 @@ class PropertyPrediction:
             instrument_col: list[Optional[str]] = []
             rt_col: list[float] = []
             ccs_col: list[float] = []
+            precursor_mz_col: list[float] = []
             ion_type_col: list[str] = []
             frag_charge_col: list[int] = []
             ordinal_col: list[int] = []
             intensity_col: list[float] = []
+            mz_col: list[float] = []
 
             for idx, (pep, res) in enumerate(zip(peptides, ms2_results)):
                 intensities = res["intensities"]
@@ -877,6 +935,29 @@ class PropertyPrediction:
                 _instrument = instruments[idx] if instruments is not None else None
                 _rt = float(rt_values[idx]) if rt_values is not None else float("nan")
                 _ccs = float(ccs_values[idx]) if ccs_values is not None else float("nan")
+
+                # Precompute m/z info for this peptide (if requested)
+                _precursor_mz = float("nan")
+                frag_mz_lookup: dict[tuple[str, int, int], float] | None = None
+                if annotate_mz and charges is not None:
+                    try:
+                        _precursor_mz = compute_precursor_mz(pep, _charge)
+                    except Exception:
+                        pass
+                    max_frag_charge = max(int(fc) for fc in frag_charges)
+                    try:
+                        frag_info = compute_fragment_mzs(pep, max_frag_charge)
+                        frag_mz_lookup = {
+                            (t, c, o): m
+                            for t, c, o, m in zip(
+                                frag_info["ion_types"],
+                                frag_info["charges"],
+                                frag_info["ordinals"],
+                                frag_info["mzs"],
+                            )
+                        }
+                    except Exception:
+                        frag_mz_lookup = {}
 
                 for r in range(n_pos):
                     for c in range(n_types):
@@ -895,6 +976,18 @@ class PropertyPrediction:
                         frag_charge_col.append(int(frag_charges[c]))
                         ordinal_col.append(ordinal)
                         intensity_col.append(val)
+                        if annotate_mz:
+                            precursor_mz_col.append(_precursor_mz)
+                            if frag_mz_lookup is not None:
+                                base_type = t.replace("_nl", "")
+                                mz_col.append(
+                                    frag_mz_lookup.get(
+                                        (base_type, int(frag_charges[c]), ordinal),
+                                        float("nan"),
+                                    )
+                                )
+                            else:
+                                mz_col.append(float("nan"))
 
             data: dict = {"peptide": pep_col}
             if charges is not None:
@@ -907,10 +1000,14 @@ class PropertyPrediction:
                 data["rt"] = rt_col
             if ccs_values is not None:
                 data["ccs"] = ccs_col
+            if annotate_mz:
+                data["precursor_mz"] = precursor_mz_col
             data["ion_type"] = ion_type_col
             data["fragment_charge"] = frag_charge_col
             data["ordinal"] = ordinal_col
             data["intensity"] = intensity_col
+            if annotate_mz:
+                data["mz"] = mz_col
 
         else:
             # No MS2 – one row per peptide with scalar columns only
@@ -921,6 +1018,14 @@ class PropertyPrediction:
                 data["rt"] = [float(v) for v in rt_values]
             if ccs_values is not None:
                 data["ccs"] = ccs_values
+            if annotate_mz and charges is not None:
+                prec_mz: list[float] = []
+                for pep, ch in zip(peptides, charges):
+                    try:
+                        prec_mz.append(compute_precursor_mz(pep, ch))
+                    except Exception:
+                        prec_mz.append(float("nan"))
+                data["precursor_mz"] = prec_mz
 
         return _make_df(data, framework)
 

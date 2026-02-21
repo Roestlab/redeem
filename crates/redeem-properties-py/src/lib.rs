@@ -17,6 +17,7 @@ use std::io::Read;
 use redeem_properties::utils::peptdeep_utils::{
     get_modification_indices, get_modification_string, remove_mass_shift, MODIFICATION_MAP,
 };
+use redeem_properties::utils::mz_utils;
 
 fn strings_to_arcs(v: Vec<String>) -> Vec<Arc<[u8]>> {
     v.into_iter()
@@ -715,6 +716,152 @@ fn get_device(use_cuda: bool) -> PyResult<candle_core::Device> {
     }
 }
 
+/// Compute the precursor m/z for a peptide in ProForma notation.
+///
+/// Parameters
+/// ----------
+/// proforma_sequence : str
+///     Peptide sequence in ProForma notation (e.g., "PEPTM[+15.9949]IDE").
+/// charge : int
+///     Precursor charge state (must be > 0).
+///
+/// Returns
+/// -------
+/// float
+///     The monoisotopic precursor m/z value.
+#[pyfunction]
+fn compute_precursor_mz(proforma_sequence: &str, charge: i32) -> PyResult<f64> {
+    mz_utils::compute_precursor_mz(proforma_sequence, charge)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Compute theoretical product (fragment) ion m/z values for a peptide.
+///
+/// Generates b and y ion m/z values (without neutral losses) up to the
+/// specified maximum fragment charge.
+///
+/// Parameters
+/// ----------
+/// proforma_sequence : str
+///     Peptide sequence in ProForma notation.
+/// max_fragment_charge : int
+///     Maximum fragment ion charge state to generate.
+///
+/// Returns
+/// -------
+/// dict
+///     A dictionary with keys:
+///     - "ion_types": list of str ("b" or "y")
+///     - "charges": list of int
+///     - "ordinals": list of int (1-based series number)
+///     - "mzs": list of float (monoisotopic m/z values)
+#[pyfunction]
+fn compute_fragment_mzs<'py>(
+    py: Python<'py>,
+    proforma_sequence: &str,
+    max_fragment_charge: i32,
+) -> PyResult<Bound<'py, PyDict>> {
+    let product_ions = mz_utils::compute_product_mzs(proforma_sequence, max_fragment_charge)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    let ion_types: Vec<String> = product_ions.iter().map(|i| i.ion_type.clone()).collect();
+    let charges: Vec<i32> = product_ions.iter().map(|i| i.charge).collect();
+    let ordinals: Vec<usize> = product_ions.iter().map(|i| i.ordinal).collect();
+    let mzs: Vec<f64> = product_ions.iter().map(|i| i.mz).collect();
+
+    let dict = PyDict::new_bound(py);
+    dict.set_item("ion_types", ion_types)?;
+    dict.set_item("charges", charges)?;
+    dict.set_item("ordinals", ordinals)?;
+    dict.set_item("mzs", mzs)?;
+    Ok(dict)
+}
+
+/// Compute both precursor and fragment m/z values for a peptide.
+///
+/// Parameters
+/// ----------
+/// proforma_sequence : str
+///     Peptide sequence in ProForma notation.
+/// charge : int
+///     Precursor charge state.
+/// max_fragment_charge : int
+///     Maximum fragment ion charge state to generate.
+///
+/// Returns
+/// -------
+/// dict
+///     A dictionary with keys:
+///     - "precursor_mz": float
+///     - "ion_types": list of str
+///     - "charges": list of int
+///     - "ordinals": list of int
+///     - "mzs": list of float
+#[pyfunction]
+fn compute_peptide_mz_info<'py>(
+    py: Python<'py>,
+    proforma_sequence: &str,
+    charge: i32,
+    max_fragment_charge: i32,
+) -> PyResult<Bound<'py, PyDict>> {
+    let info = mz_utils::compute_peptide_mz_info(proforma_sequence, charge, max_fragment_charge)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    let ion_types: Vec<String> = info.product_ions.iter().map(|i| i.ion_type.clone()).collect();
+    let charges: Vec<i32> = info.product_ions.iter().map(|i| i.charge).collect();
+    let ordinals: Vec<usize> = info.product_ions.iter().map(|i| i.ordinal).collect();
+    let mzs: Vec<f64> = info.product_ions.iter().map(|i| i.mz).collect();
+
+    let dict = PyDict::new_bound(py);
+    dict.set_item("precursor_mz", info.precursor_mz)?;
+    dict.set_item("ion_types", ion_types)?;
+    dict.set_item("charges", charges)?;
+    dict.set_item("ordinals", ordinals)?;
+    dict.set_item("mzs", mzs)?;
+    Ok(dict)
+}
+
+/// Match theoretical product ion m/z values to predicted fragment annotations.
+///
+/// Given the predicted ion types, charges, and ordinals from the MS2 model,
+/// look up the corresponding theoretical m/z for each.
+///
+/// Parameters
+/// ----------
+/// proforma_sequence : str
+///     Peptide sequence in ProForma notation.
+/// max_fragment_charge : int
+///     Maximum fragment charge used to generate theoretical fragments.
+/// predicted_ion_types : list of str
+///     Ion types from MS2 prediction (e.g., ["b", "y", "b", "y"]).
+/// predicted_charges : list of int
+///     Charges from MS2 prediction.
+/// predicted_ordinals : list of int
+///     Ordinals (series numbers) from MS2 prediction.
+///
+/// Returns
+/// -------
+/// list of float
+///     m/z values aligned with the predicted arrays. NaN if no match found.
+#[pyfunction]
+fn match_fragment_mzs(
+    proforma_sequence: &str,
+    max_fragment_charge: i32,
+    predicted_ion_types: Vec<String>,
+    predicted_charges: Vec<i32>,
+    predicted_ordinals: Vec<usize>,
+) -> PyResult<Vec<f64>> {
+    let product_ions = mz_utils::compute_product_mzs(proforma_sequence, max_fragment_charge)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    Ok(mz_utils::match_product_mzs(
+        &product_ions,
+        &predicted_ion_types,
+        &predicted_charges,
+        &predicted_ordinals,
+    ))
+}
+
 /// Python bindings for the redeem-properties peptide property prediction models.
 #[pymodule]
 fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -723,5 +870,9 @@ fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MS2Model>()?;
     m.add_function(wrap_pyfunction!(locate_pretrained, m)?)?;
     m.add_function(wrap_pyfunction!(validate_pretrained, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_precursor_mz, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_fragment_mzs, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_peptide_mz_info, m)?)?;
+    m.add_function(wrap_pyfunction!(match_fragment_mzs, m)?)?;
     Ok(())
 }
