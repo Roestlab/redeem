@@ -11,9 +11,6 @@ use include_dir::{include_dir, Dir};
 #[cfg(feature = "embed-pretrained")]
 static EMBEDDED_PRETRAINED_DIR: Dir = include_dir!("data/pretrained_models");
 
-/// Fallback filename used when the model path stem cannot be determined.
-const FALLBACK_MODEL_FILENAME: &str = "pretrained_model.bin";
-
 /// Enum of known pretrained model identifiers supported by the library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PretrainedModel {
@@ -42,18 +39,12 @@ impl std::str::FromStr for PretrainedModel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            // Keep explicit alphapeptdeep names mapping to the alphapeptdeep variants,
-            // but map the simple short names `rt` and `ccs` to the Redeem CNN-Transformer
-            // models (so `redeem_properties::PretrainedModel::from_str("rt")` will
-            // return the redeem `rt_cnn_tf` model).
-            "alphapeptdeep-rt" | "alphapeptdeep-rt-cnn-lstm" => {
+            "alphapeptdeep-rt" | "alphapeptdeep-rt-cnn-lstm" | "rt" => {
                 Ok(PretrainedModel::AlphapeptdeepRtCnnLstm)
             }
-            "alphapeptdeep-ccs" | "alphapeptdeep-ccs-cnn-lstm" => {
+            "alphapeptdeep-ccs" | "alphapeptdeep-ccs-cnn-lstm" | "ccs" => {
                 Ok(PretrainedModel::AlphapeptdeepCcsCnnLstm)
             }
-            "rt" => Ok(PretrainedModel::RedeemRtCnnTf),
-            "ccs" => Ok(PretrainedModel::RedeemCcsCnnTf),
             "alphapeptdeep-ms2" | "alphapeptdeep-ms2-bert" | "ms2" => {
                 Ok(PretrainedModel::AlphapeptdeepMs2Bert)
             }
@@ -159,18 +150,6 @@ impl PretrainedModel {
             }
         }
     }
-
-    /// Return the architecture string used by the high-level model wrappers
-    /// (e.g. `RTModelWrapper`, `CCSModelWrapper`) to select the correct model class.
-    pub fn arch(&self) -> &'static str {
-        match self {
-            PretrainedModel::AlphapeptdeepRtCnnLstm => "rt_cnn_lstm",
-            PretrainedModel::AlphapeptdeepCcsCnnLstm => "ccs_cnn_lstm",
-            PretrainedModel::AlphapeptdeepMs2Bert => "ms2_bert",
-            PretrainedModel::RedeemRtCnnTf => "rt_cnn_tf",
-            PretrainedModel::RedeemCcsCnnTf => "ccs_cnn_tf",
-        }
-    }
 }
 
 /// Try to locate a pretrained model file on disk.
@@ -249,7 +228,7 @@ fn extract_embedded_model_to_cache(model: &PretrainedModel) -> Result<PathBuf> {
         let filename = Path::new(model.filename())
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or(FALLBACK_MODEL_FILENAME);
+            .unwrap_or("pretrained_model.bin");
 
         let dst = target_base.join(filename);
         if !dst.exists() {
@@ -285,7 +264,7 @@ pub fn cache_pretrained_model(model: PretrainedModel) -> Result<PathBuf> {
     let filename = Path::new(model.filename())
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or(FALLBACK_MODEL_FILENAME);
+        .unwrap_or("pretrained_model.bin");
 
     let dst = target_base.join(filename);
     if !dst.exists() {
