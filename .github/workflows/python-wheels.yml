@@ -70,6 +70,12 @@ jobs:
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/redeem_properties
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+      contents: read
     steps:
       - name: Download all wheel artifacts
         uses: actions/download-artifact@v4
@@ -80,5 +86,4 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist/
