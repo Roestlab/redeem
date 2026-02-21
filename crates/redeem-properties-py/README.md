@@ -88,14 +88,14 @@ ccs_values = model.predict(
     ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
     charges=[2, 3],
 )
-# List of dicts, one per peptide
+# List of dicts, one per peptide-charge combination
 for res in ccs_values:
     print(res["ccs"])     # predicted CCS value (Å²)
     print(res["charge"])  # charge state used for this prediction
 
 # DataFrame output — columns: peptide, ccs, charge
 ccs_df = model.predict_df(["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"], charges=[2, 3])
-ccs_df_polars = model.predict_df(["AGHCEWQMKYR"], charges=[2], framework="polars")
+ccs_df_polars = model.predict_df(["AGHCEWQMKYR"], charges=2, framework="polars")
 ```
 
 ### MS2 Fragment Intensity Prediction
@@ -116,9 +116,9 @@ model = redeem_properties_py.MS2Model(
 
 results = model.predict(
     ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
-    charges=[2, 2],
-    nces=[20, 20],
-    instruments=["QE", "QE"],
+    charges=[2, 3],
+    nces=20,
+    instruments="QE",
 )
 # Each element is a dict with intensities + fragment annotations
 for res in results:
@@ -131,9 +131,9 @@ for res in results:
 # Long-format DataFrame — one row per (peptide, ion_type, fragment_charge, ordinal):
 ms2_df = model.predict_df(
     ["AGHCEWQMKYR", "SEQU[+42.0106]ENCE"],
-    charges=[2, 2],
-    nces=[20, 20],
-    instruments=["QE", "QE"],
+    charges=[2, 3],
+    nces=20,
+    instruments="QE",
 )
 # columns: peptide, ion_type, fragment_charge, ordinal, intensity
 print(ms2_df.head())
@@ -141,7 +141,7 @@ print(ms2_df.head())
 # polars variant
 ms2_df_polars = model.predict_df(
     ["AGHCEWQMKYR"],
-    charges=[2], nces=[20],
+    charges=2, nces=20,
     framework="polars",
 )
 
@@ -163,13 +163,15 @@ peptides = [
     "LPILVPSAKKAIYM",
     "RTPKIQVYSRHPAE",
 ]
-charges = [2, 2, 3]
-nces = [20, 20, 25]
-instruments = ["QE", "QE", "QE"]
+charges = [2, 3]
+nces = 20
+instruments = "QE"
 
 # Long-format DataFrame: one row per fragment. Columns include
 # peptide, charge, nce, instrument, rt, ccs, precursor_mz, ion_type,
 # fragment_charge, ordinal, intensity, and mz (when annotate_mz=True).
+# Because we provided 3 peptides and 2 charges, this will predict
+# 6 combinations (Cartesian product).
 df = prop.predict_df(
     peptides,
     charges=charges,
@@ -199,11 +201,11 @@ The `from_pretrained` method accepts the following names (case-insensitive):
 
 | Short name | Full name | Model class |
 |------------|-----------|-------------|
-| `"rt"` | `"alphapeptdeep-rt-cnn-lstm"` | `RTModel` |
+| `"alphapeptdeep-rt"` | `"alphapeptdeep-rt-cnn-lstm"` | `RTModel` |
 | `"redeem-rt"` | `"redeem-rt-cnn-tf"` | `RTModel` |
-| `"ccs"` | `"alphapeptdeep-ccs-cnn-lstm"` | `CCSModel` |
+| `"alphapeptdeep-ccs"` | `"alphapeptdeep-ccs-cnn-lstm"` | `CCSModel` |
 | `"redeem-ccs"` | `"redeem-ccs-cnn-tf"` | `CCSModel` |
-| `"ms2"` | `"alphapeptdeep-ms2-bert"` | `MS2Model` |
+| `"alphapeptdeep-ms2"` | `"alphapeptdeep-ms2-bert"` | `MS2Model` |
 
 Model files are looked up in this order:
 1. `$REDEEM_PRETRAINED_MODELS_DIR/<path>`
