@@ -1,35 +1,16 @@
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::Arc;
-
-use numpy::{PyArray1, PyArray2};
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pyo3::wrap_pyfunction;
-
-use redeem_properties::models::ccs_model::CCSModelWrapper;
-use redeem_properties::models::model_interface::PredictionResult;
-use redeem_properties::models::ms2_model::MS2ModelWrapper;
-use redeem_properties::models::rt_model::RTModelWrapper;
-use redeem_properties::pretrained::{locate_pretrained_model, PretrainedModel};
-use std::io::Read;
-use redeem_properties::utils::peptdeep_utils::{
-    get_modification_indices, get_modification_string, remove_mass_shift, MODIFICATION_MAP,
+use pyo3::exceptions::PyRuntimeError;
+use redeem_properties::models::{
+    ccs_cnn_tf_model::CCSCNNTFModel,
+    model_interface::{ModelInterface, PredictionResult},
+    ms2_bert_model::MS2BertModel,
+    rt_cnn_tf_model::RTCNNTFModel,
 };
 use redeem_properties::utils::mz_utils;
-
-fn strings_to_arcs(v: Vec<String>) -> Vec<Arc<[u8]>> {
-    v.into_iter()
-        .map(|s| Arc::from(s.into_bytes().into_boxed_slice()))
-        .collect()
-}
-
-fn opt_strings_to_arcs(v: Vec<Option<String>>) -> Vec<Option<Arc<[u8]>>> {
-    v.into_iter()
-        .map(|opt| opt.map(|s| Arc::from(s.into_bytes().into_boxed_slice())))
-        .collect()
-}
+use redeem_properties::utils::peptdeep_utils::ccs_to_mobility_bruker;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Decompose a list of (possibly modified) peptides into naked sequences, mod strings,
 /// and mod site strings that the Rust model API expects.
@@ -862,6 +843,12 @@ fn match_fragment_mzs(
     ))
 }
 
+/// Convert CCS to ion mobility for Bruker (timsTOF) instruments.
+#[pyfunction]
+fn ccs_to_mobility(ccs_value: f64, charge: f64, precursor_mz: f64) -> f64 {
+    ccs_to_mobility_bruker(ccs_value, charge, precursor_mz)
+}
+
 /// Python bindings for the redeem-properties peptide property prediction models.
 #[pymodule]
 fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -874,5 +861,6 @@ fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_fragment_mzs, m)?)?;
     m.add_function(wrap_pyfunction!(compute_peptide_mz_info, m)?)?;
     m.add_function(wrap_pyfunction!(match_fragment_mzs, m)?)?;
+    m.add_function(wrap_pyfunction!(ccs_to_mobility, m)?)?;
     Ok(())
 }

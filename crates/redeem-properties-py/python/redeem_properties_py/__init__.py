@@ -42,6 +42,7 @@ from redeem_properties_py._lib import (  # noqa: F401  (re-exported)
     compute_fragment_mzs as compute_fragment_mzs,
     compute_peptide_mz_info as compute_peptide_mz_info,
     match_fragment_mzs as match_fragment_mzs,
+    ccs_to_mobility as ccs_to_mobility,
 )
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "compute_fragment_mzs",
     "compute_peptide_mz_info",
     "match_fragment_mzs",
+    "ccs_to_mobility",
 ]
 
 
@@ -83,6 +85,73 @@ def _make_df(data: dict, framework: str):
         return pl.DataFrame(data)
     else:
         raise ValueError(f"Unknown framework '{framework}'. Use 'pandas' or 'polars'.")
+
+def _expand_inputs(
+    peptides: list[str],
+    charges: int | list[int] | None = None,
+    nces: int | float | list[int] | list[float] | None = None,
+    instruments: str | list[Optional[str]] | None = None,
+) -> tuple[list[str], list[int] | None, list[int] | None, list[Optional[str]] | None]:
+    """
+    Expands peptides and charges via Cartesian product if lengths differ.
+    Broadcasts nces and instruments to match the expanded length.
+    """
+    # 1. Expand peptides and charges
+    if charges is None:
+        exp_pep = list(peptides)
+        exp_charge = None
+    elif isinstance(charges, int):
+        exp_pep = list(peptides)
+        exp_charge = [charges] * len(peptides)
+    elif isinstance(charges, list):
+        if len(charges) == len(peptides):
+            # Assume 1:1 mapping
+            exp_pep = list(peptides)
+            exp_charge = list(charges)
+        else:
+            # Cartesian product
+            exp_pep = []
+            exp_charge = []
+            for p in peptides:
+                for c in charges:
+                    exp_pep.append(p)
+                    exp_charge.append(c)
+    else:
+        raise TypeError("charges must be an int or a list of ints")
+        
+    n = len(exp_pep)
+    
+    # 2. Broadcast nces
+    exp_nces = None
+    if nces is not None:
+        if isinstance(nces, (int, float)):
+            exp_nces = [int(nces)] * n
+        elif isinstance(nces, list):
+            if len(nces) == 1:
+                exp_nces = [int(nces[0])] * n
+            elif len(nces) == n:
+                exp_nces = [int(x) for x in nces]
+            else:
+                raise ValueError(f"nces must be a single value, a list of length 1, or match the expanded length {n}")
+        else:
+            raise TypeError("nces must be an int, float, or list")
+            
+    # 3. Broadcast instruments
+    exp_inst = None
+    if instruments is not None:
+        if isinstance(instruments, str):
+            exp_inst = [instruments] * n
+        elif isinstance(instruments, list):
+            if len(instruments) == 1:
+                exp_inst = [instruments[0]] * n
+            elif len(instruments) == n:
+                exp_inst = instruments
+            else:
+                raise ValueError(f"instruments must be a single value, a list of length 1, or match the expanded length {n}")
+        else:
+            raise TypeError("instruments must be a string or list")
+            
+    return exp_pep, exp_charge, exp_nces, exp_inst
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +355,7 @@ class CCSModel:
     def __str__(self) -> str:
         return self.__repr__()
 
-    def predict(self, peptides: list[str], charges: list[int]):
+    def predict(self, peptides: list[str], charges: int | list[int]):
         """Predict CCS values for a list of peptides.
 
         Parameters
@@ -294,7 +363,10 @@ class CCSModel:
         peptides:
             List of peptide sequences (inline modifications supported).
         charges:
-            Charge state per peptide.
+            Charge state per peptide. If a single integer is provided,
+            it is broadcast to all peptides. If a list of charges is provided
+            and its length differs from the number of peptides, a Cartesian
+            product is performed (predicting each peptide at each charge state).
 
         Returns
         -------
@@ -304,7 +376,8 @@ class CCSModel:
             * ``"ccs"`` – predicted CCS value (Å²).
             * ``"charge"`` – charge state used for the prediction.
         """
-        return self._inner.predict(peptides, charges)
+        peptides, exp_charges, _, _ = _expand_inputs(peptides, charges=charges)
+        return self._inner.predict(peptides, exp_charges)
 
     def param_count(self) -> int:
         """Return total number of parameters in the loaded model (if available)."""
@@ -344,7 +417,8 @@ class CCSModel:
     def predict_df(
         self,
         peptides: list[str],
-        charges: list[int],
+        charges: int | list[int],
+        annotate_mobility: bool = False,
         framework: str = "pandas",
     ):
         """Predict CCS values and return the result as a DataFrame.
@@ -354,24 +428,43 @@ class CCSModel:
         peptides:
             List of peptide sequences (inline modifications supported).
         charges:
-            Charge state per peptide.
+            Charge state per peptide. If a single integer is provided,
+            it is broadcast to all peptides. If a list of charges is provided
+            and its length differs from the number of peptides, a Cartesian
+            product is performed (predicting each peptide at each charge state).
+        annotate_mobility:
+            If ``True``, compute and append an ``ion_mobility`` column
+            converted from the predicted CCS value. Default ``False``.
         framework:
             ``'pandas'`` (default) or ``'polars'``.
 
         Returns
         -------
         pandas.DataFrame or polars.DataFrame
-            Columns: ``peptide`` (str), ``ccs`` (float32), ``charge`` (int).
+            Columns: ``peptide`` (str), ``ccs`` (float32), ``charge`` (int),
+            and optionally ``ion_mobility`` (float).
         """
-        results = self.predict(peptides, charges)
-        return _make_df(
-            {
-                "peptide": peptides,
-                "ccs": [r["ccs"] for r in results],
-                "charge": [r["charge"] for r in results],
-            },
-            framework,
-        )
+        peptides, exp_charges, _, _ = _expand_inputs(peptides, charges=charges)
+        results = self.predict(peptides, exp_charges)  # type: ignore
+        
+        data = {
+            "peptide": peptides,
+            "ccs": [r["ccs"] for r in results],
+            "charge": [r["charge"] for r in results],
+        }
+        
+        if annotate_mobility:
+            mobility_col = []
+            for pep, ch, res in zip(peptides, exp_charges, results):  # type: ignore
+                try:
+                    mz = compute_precursor_mz(pep, ch)
+                    mob = ccs_to_mobility(res["ccs"], float(ch), mz)
+                    mobility_col.append(mob)
+                except Exception:
+                    mobility_col.append(float("nan"))
+            data["ion_mobility"] = mobility_col
+            
+        return _make_df(data, framework)
 
 
 # ---------------------------------------------------------------------------
@@ -434,9 +527,9 @@ class MS2Model:
     def predict(
         self,
         peptides: list[str],
-        charges: list[int],
-        nces: list[int],
-        instruments: Optional[list[Optional[str]]] = None,
+        charges: int | list[int],
+        nces: int | float | list[int] | list[float],
+        instruments: str | list[Optional[str]] | None = None,
         multiplier: float = 10_000.0
     ):
         """Predict MS2 fragment intensities for a list of peptides.
@@ -446,11 +539,16 @@ class MS2Model:
         peptides:
             List of peptide sequences (inline modifications supported).
         charges:
-            Charge state per peptide.
+            Charge state per peptide. If a single integer is provided,
+            it is broadcast to all peptides. If a list of charges is provided
+            and its length differs from the number of peptides, a Cartesian
+            product is performed (predicting each peptide at each charge state).
         nces:
-            Normalized collision energy per peptide.
+            Normalized collision energy per peptide. Can be a single value
+            (broadcast to all) or a list matching the expanded length.
         instruments:
-            Instrument name per peptide (optional).
+            Instrument name per peptide (optional). Can be a single string
+            (broadcast to all) or a list matching the expanded length.
         multiplier:
             Scalar to multiply predicted intensities by (default 10_000.0). Use e.g.
             ``10000.0`` to scale normalized outputs into typical intensity ranges.
@@ -466,7 +564,10 @@ class MS2Model:
             * ``"b_ordinals"`` – 1-D int array ``[1, …, n_positions]``.
             * ``"y_ordinals"`` – 1-D int array ``[n_positions, …, 1]``.
         """
-        results = self._inner.predict(peptides, charges, nces, instruments=instruments)
+        peptides, exp_charges, exp_nces, exp_inst = _expand_inputs(
+            peptides, charges=charges, nces=nces, instruments=instruments
+        )
+        results = self._inner.predict(peptides, exp_charges, exp_nces, instruments=exp_inst)
 
         # Optionally scale predicted intensities by a multiplier before returning.
         if multiplier is not None and multiplier != 1.0:
@@ -527,9 +628,9 @@ class MS2Model:
     def predict_df(
         self,
         peptides: list[str],
-        charges: list[int],
-        nces: list[int],
-        instruments: Optional[list[Optional[str]]] = None,
+        charges: int | list[int],
+        nces: int | float | list[int] | list[float],
+        instruments: str | list[Optional[str]] | None = None,
         multiplier: float = 10_000.0,
         exclude_zeros: bool = True,
         annotate_mz: bool = False,
@@ -544,11 +645,16 @@ class MS2Model:
         peptides:
             List of peptide sequences (inline modifications supported).
         charges:
-            Precursor charge state per peptide.
+            Precursor charge state per peptide. If a single integer is provided,
+            it is broadcast to all peptides. If a list of charges is provided
+            and its length differs from the number of peptides, a Cartesian
+            product is performed (predicting each peptide at each charge state).
         nces:
-            Normalized collision energy per peptide.
+            Normalized collision energy per peptide. Can be a single value
+            (broadcast to all) or a list matching the expanded length.
         instruments:
-            Instrument name per peptide (optional).
+            Instrument name per peptide (optional). Can be a single string
+            (broadcast to all) or a list matching the expanded length.
         multiplier:
             Scalar to multiply predicted intensities by (default 10_000.0). Use e.g.
             ``10000.0`` to scale normalized outputs into typical intensity ranges.
@@ -580,8 +686,11 @@ class MS2Model:
         1  AGHCEWQMKYR       b                2        1      0.045
         ...
         """
+        peptides, exp_charges, exp_nces, exp_inst = _expand_inputs(
+            peptides, charges=charges, nces=nces, instruments=instruments
+        )
         results = self.predict(
-            peptides, charges, nces, instruments=instruments, multiplier=multiplier
+            peptides, exp_charges, exp_nces, instruments=exp_inst, multiplier=multiplier  # type: ignore
         )
 
         b_ion_types = {"b", "b_nl"}
@@ -592,7 +701,7 @@ class MS2Model:
         intensity_col: list[float] = []
         mz_col: list[float] = []
 
-        for pep, charge, res in zip(peptides, charges, results):
+        for pep, charge, res in zip(peptides, exp_charges, results):  # type: ignore
             intensities = res["intensities"]
             ion_types = res["ion_types"]
             frag_charges = res["ion_charges"]
@@ -779,9 +888,9 @@ class PropertyPrediction:
     def predict(
         self,
         peptides: list[str],
-        charges: Optional[list[int]] = None,
-        nces: Optional[list[int]] = None,
-        instruments: Optional[list[Optional[str]]] = None,
+        charges: int | list[int] | None = None,
+        nces: int | float | list[int] | list[float] | None = None,
+        instruments: str | list[Optional[str]] | None = None,
         multiplier: float = 10_000.0
     ) -> dict:
         """Run enabled models and return raw results in a dict.
@@ -791,11 +900,16 @@ class PropertyPrediction:
         peptides:
             List of peptide sequences (inline modifications supported).
         charges:
-            Charge state per peptide (required for CCS and MS2).
+            Charge state per peptide (required for CCS and MS2). If a single
+            integer is provided, it is broadcast to all peptides. If a list of
+            charges is provided and its length differs from the number of peptides,
+            a Cartesian product is performed.
         nces:
-            Normalized collision energy per peptide (required for MS2).
+            Normalized collision energy per peptide (required for MS2). Can be
+            a single value (broadcast to all) or a list matching the expanded length.
         instruments:
-            Instrument name per peptide (optional, used by MS2).
+            Instrument name per peptide (optional, used by MS2). Can be a single
+            string (broadcast to all) or a list matching the expanded length.
         multiplier:
             Scalar applied to MS2 predicted intensities (default 10 000).
 
@@ -805,23 +919,26 @@ class PropertyPrediction:
             Keys that may be present: ``"rt"`` (1-D ndarray), ``"ccs"``
             (list[dict]), ``"ms2"`` (list[dict]).
         """
+        peptides, exp_charges, exp_nces, exp_inst = _expand_inputs(
+            peptides, charges=charges, nces=nces, instruments=instruments
+        )
         out: dict = {}
 
         if self.rt_model is not None:
             out["rt"] = self.rt_model.predict(peptides)
 
         if self.ccs_model is not None:
-            if charges is None:
+            if exp_charges is None:
                 raise ValueError("charges are required for CCS prediction")
-            out["ccs"] = self.ccs_model.predict(peptides, charges)
+            out["ccs"] = self.ccs_model.predict(peptides, exp_charges)
 
         if self.ms2_model is not None:
-            if charges is None:
+            if exp_charges is None:
                 raise ValueError("charges are required for MS2 prediction")
-            if nces is None:
+            if exp_nces is None:
                 raise ValueError("nces are required for MS2 prediction")
             out["ms2"] = self.ms2_model.predict(
-                peptides, charges, nces, instruments=instruments, multiplier=multiplier,
+                peptides, exp_charges, exp_nces, instruments=exp_inst, multiplier=multiplier,
             )
 
         return out
@@ -830,12 +947,13 @@ class PropertyPrediction:
     def predict_df(
         self,
         peptides: list[str],
-        charges: Optional[list[int]] = None,
-        nces: Optional[list[int]] = None,
-        instruments: Optional[list[Optional[str]]] = None,
+        charges: int | list[int] | None = None,
+        nces: int | float | list[int] | list[float] | None = None,
+        instruments: str | list[Optional[str]] | None = None,
         multiplier: float = 10_000.0,
         exclude_zeros: bool = True,
         annotate_mz: bool = True,
+        annotate_mobility: bool = False,
         framework: str = "pandas",
     ):
         """Predict all enabled properties and return a single long-format DataFrame.
@@ -852,11 +970,16 @@ class PropertyPrediction:
         peptides:
             List of peptide sequences (inline modifications supported).
         charges:
-            Charge state per peptide (required for CCS and MS2).
+            Charge state per peptide (required for CCS and MS2). If a single
+            integer is provided, it is broadcast to all peptides. If a list of
+            charges is provided and its length differs from the number of peptides,
+            a Cartesian product is performed.
         nces:
-            Normalized collision energy per peptide (required for MS2).
+            Normalized collision energy per peptide (required for MS2). Can be
+            a single value (broadcast to all) or a list matching the expanded length.
         instruments:
-            Instrument name per peptide (optional, used by MS2).
+            Instrument name per peptide (optional, used by MS2). Can be a single
+            string (broadcast to all) or a list matching the expanded length.
         multiplier:
             Scalar applied to MS2 predicted intensities (default 10 000).
         exclude_zeros:
@@ -866,6 +989,10 @@ class PropertyPrediction:
             enabled a ``precursor_mz`` column and a per-fragment ``mz``
             column are added.  When MS2 is disabled only ``precursor_mz``
             is added.  Requires *charges* to be provided.
+        annotate_mobility:
+            If ``True``, compute and append an ``ion_mobility`` column
+            converted from the predicted CCS value. Requires *charges* and
+            the CCS model to be enabled. Default ``False``.
         framework:
             ``'pandas'`` (default) or ``'polars'``.
 
@@ -874,9 +1001,12 @@ class PropertyPrediction:
         pandas.DataFrame or polars.DataFrame
             Possible columns (depending on which models are enabled):
             ``peptide``, ``charge``, ``nce``, ``instrument``,
-            ``rt``, ``ccs``, ``precursor_mz``, ``ion_type``,
+            ``rt``, ``ccs``, ``ion_mobility``, ``precursor_mz``, ``ion_type``,
             ``fragment_charge``, ``ordinal``, ``intensity``, ``mz``.
         """
+        peptides, exp_charges, exp_nces, exp_inst = _expand_inputs(
+            peptides, charges=charges, nces=nces, instruments=instruments
+        )
         n = len(peptides)
 
         # -- scalar predictions (RT / CCS) ---------------------------------
@@ -886,21 +1016,21 @@ class PropertyPrediction:
 
         ccs_values = None
         if self.ccs_model is not None:
-            if charges is None:
+            if exp_charges is None:
                 raise ValueError("charges are required for CCS prediction")
-            ccs_results = self.ccs_model.predict(peptides, charges)
+            ccs_results = self.ccs_model.predict(peptides, exp_charges)
             ccs_values = [r["ccs"] for r in ccs_results]  # list[float]
 
         # -- MS2 fragment predictions --------------------------------------
         ms2_results = None
         if self.ms2_model is not None:
-            if charges is None:
+            if exp_charges is None:
                 raise ValueError("charges are required for MS2 prediction")
-            if nces is None:
+            if exp_nces is None:
                 raise ValueError("nces are required for MS2 prediction")
             ms2_results = self.ms2_model.predict(
-                peptides, charges, nces,
-                instruments=instruments, multiplier=multiplier,
+                peptides, exp_charges, exp_nces,
+                instruments=exp_inst, multiplier=multiplier,
             )
 
         # -- Build output columns ------------------------------------------
@@ -914,6 +1044,7 @@ class PropertyPrediction:
             instrument_col: list[Optional[str]] = []
             rt_col: list[float] = []
             ccs_col: list[float] = []
+            mobility_col: list[float] = []
             precursor_mz_col: list[float] = []
             ion_type_col: list[str] = []
             frag_charge_col: list[int] = []
@@ -930,20 +1061,21 @@ class PropertyPrediction:
                 n_pos, n_types = intensities.shape
 
                 # scalar values for this peptide
-                _charge = charges[idx] if charges is not None else 0
-                _nce = nces[idx] if nces is not None else 0
-                _instrument = instruments[idx] if instruments is not None else None
+                _charge = exp_charges[idx] if exp_charges is not None else 0
+                _nce = exp_nces[idx] if exp_nces is not None else 0
+                _instrument = exp_inst[idx] if exp_inst is not None else None
                 _rt = float(rt_values[idx]) if rt_values is not None else float("nan")
                 _ccs = float(ccs_values[idx]) if ccs_values is not None else float("nan")
 
                 # Precompute m/z info for this peptide (if requested)
                 _precursor_mz = float("nan")
                 frag_mz_lookup: dict[tuple[str, int, int], float] | None = None
-                if annotate_mz and charges is not None:
+                if (annotate_mz or annotate_mobility) and exp_charges is not None:
                     try:
                         _precursor_mz = compute_precursor_mz(pep, _charge)
                     except Exception:
                         pass
+                if annotate_mz and exp_charges is not None:
                     max_frag_charge = max(int(fc) for fc in frag_charges)
                     try:
                         frag_info = compute_fragment_mzs(pep, max_frag_charge)
@@ -959,6 +1091,13 @@ class PropertyPrediction:
                     except Exception:
                         frag_mz_lookup = {}
 
+                _ion_mobility = float("nan")
+                if annotate_mobility and ccs_values is not None and exp_charges is not None:
+                    try:
+                        _ion_mobility = ccs_to_mobility(_ccs, float(_charge), _precursor_mz)
+                    except Exception:
+                        pass
+
                 for r in range(n_pos):
                     for c in range(n_types):
                         t = ion_types[c]
@@ -972,6 +1111,8 @@ class PropertyPrediction:
                         instrument_col.append(_instrument)
                         rt_col.append(_rt)
                         ccs_col.append(_ccs)
+                        if annotate_mobility:
+                            mobility_col.append(_ion_mobility)
                         ion_type_col.append(t)
                         frag_charge_col.append(int(frag_charges[c]))
                         ordinal_col.append(ordinal)
@@ -990,16 +1131,18 @@ class PropertyPrediction:
                                 mz_col.append(float("nan"))
 
             data: dict = {"peptide": pep_col}
-            if charges is not None:
+            if exp_charges is not None:
                 data["charge"] = charge_col
-            if nces is not None:
+            if exp_nces is not None:
                 data["nce"] = nce_col
-            if instruments is not None:
+            if exp_inst is not None:
                 data["instrument"] = instrument_col
             if rt_values is not None:
                 data["rt"] = rt_col
             if ccs_values is not None:
                 data["ccs"] = ccs_col
+            if annotate_mobility:
+                data["ion_mobility"] = mobility_col
             if annotate_mz:
                 data["precursor_mz"] = precursor_mz_col
             data["ion_type"] = ion_type_col
@@ -1012,15 +1155,24 @@ class PropertyPrediction:
         else:
             # No MS2 – one row per peptide with scalar columns only
             data = {"peptide": list(peptides)}
-            if charges is not None:
-                data["charge"] = list(charges)
+            if exp_charges is not None:
+                data["charge"] = list(exp_charges)
             if rt_values is not None:
                 data["rt"] = [float(v) for v in rt_values]
             if ccs_values is not None:
                 data["ccs"] = ccs_values
-            if annotate_mz and charges is not None:
+            if annotate_mobility and ccs_values is not None and exp_charges is not None:
+                mob_col: list[float] = []
+                for pep, ch, ccs in zip(peptides, exp_charges, ccs_values):
+                    try:
+                        mz = compute_precursor_mz(pep, ch)
+                        mob_col.append(ccs_to_mobility(ccs, float(ch), mz))
+                    except Exception:
+                        mob_col.append(float("nan"))
+                data["ion_mobility"] = mob_col
+            if annotate_mz and exp_charges is not None:
                 prec_mz: list[float] = []
-                for pep, ch in zip(peptides, charges):
+                for pep, ch in zip(peptides, exp_charges):
                     try:
                         prec_mz.append(compute_precursor_mz(pep, ch))
                     except Exception:
