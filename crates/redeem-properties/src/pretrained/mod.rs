@@ -42,12 +42,18 @@ impl std::str::FromStr for PretrainedModel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "alphapeptdeep-rt" | "alphapeptdeep-rt-cnn-lstm" | "rt" => {
+            // Keep explicit alphapeptdeep names mapping to the alphapeptdeep variants,
+            // but map the simple short names `rt` and `ccs` to the Redeem CNN-Transformer
+            // models (so `redeem_properties::PretrainedModel::from_str("rt")` will
+            // return the redeem `rt_cnn_tf` model).
+            "alphapeptdeep-rt" | "alphapeptdeep-rt-cnn-lstm" => {
                 Ok(PretrainedModel::AlphapeptdeepRtCnnLstm)
             }
-            "alphapeptdeep-ccs" | "alphapeptdeep-ccs-cnn-lstm" | "ccs" => {
+            "alphapeptdeep-ccs" | "alphapeptdeep-ccs-cnn-lstm" => {
                 Ok(PretrainedModel::AlphapeptdeepCcsCnnLstm)
             }
+            "rt" => Ok(PretrainedModel::RedeemRtCnnTf),
+            "ccs" => Ok(PretrainedModel::RedeemCcsCnnTf),
             "alphapeptdeep-ms2" | "alphapeptdeep-ms2-bert" | "ms2" => {
                 Ok(PretrainedModel::AlphapeptdeepMs2Bert)
             }
