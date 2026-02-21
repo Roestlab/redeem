@@ -76,7 +76,22 @@ fn resolve_pretrained(name: &str, family: &str) -> PyResult<(String, PathBuf)> {
     Ok((arch.to_string(), model_path))
 }
 
-/// Expose a small helper to Python to show which pretrained model path will be used.
+/// Locate the absolute path to a pretrained model file on disk.
+///
+/// This function searches the pretrained model registry for the given model name.
+/// It checks the following locations in order:
+///   1. The directory specified by the `REDEEM_PRETRAINED_MODELS_DIR` environment variable.
+///   2. The `data/pretrained_models/` directory relative to the current working directory.
+///   3. The user's local data directory (e.g., `~/.local/share/redeem/models/` on Linux).
+///
+/// Args:
+///     name (str): The identifier of the pretrained model (e.g., "rt", "ccs", "ms2").
+///
+/// Returns:
+///     str: The absolute path to the located model file.
+///
+/// Raises:
+///     RuntimeError: If the model name is invalid or the file cannot be found.
 #[pyfunction]
 fn locate_pretrained(name: &str) -> PyResult<String> {
     let pm = PretrainedModel::from_str(name).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
