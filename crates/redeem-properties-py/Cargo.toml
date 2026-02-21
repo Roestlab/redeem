@@ -12,8 +12,6 @@ crate-type = ["cdylib"]
 redeem-properties = { path = "../redeem-properties" }
 pyo3 = { version = "0.22", features = ["extension-module"] }
 numpy = "0.22"
-# Use ndarray 0.15 to match numpy's dependency (avoid multiple ndarray versions)
-ndarray = "0.15"
 anyhow = "1.0"
 
 [dependencies.candle-core]

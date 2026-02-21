@@ -662,9 +662,6 @@ impl MS2Model {
                 let mut out = Vec::with_capacity(matrices.len());
                 for matrix in matrices {
                     let n_pos = matrix.len();
-                    let n_cols = if n_pos > 0 { matrix[0].len() } else { 0 };
-                    let arr =
-                        ndarray::Array2::from_shape_fn((n_pos, n_cols), |(r, c)| matrix[r][c]);
 
                     // b ordinals: 1, 2, ..., n_pos
                     let b_ords: Vec<i32> = (1..=(n_pos as i32)).collect();
@@ -672,7 +669,9 @@ impl MS2Model {
                     let y_ords: Vec<i32> = (1..=(n_pos as i32)).rev().collect();
 
                     let d = PyDict::new_bound(py);
-                    d.set_item("intensities", PyArray2::from_array_bound(py, &arr))?;
+                    let intensities = PyArray2::from_vec2_bound(py, &matrix)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create intensities array: {}", e)))?;
+                    d.set_item("intensities", intensities)?;
                     d.set_item("ion_types", ion_types.to_vec())?;
                     d.set_item("ion_charges", ion_charges.to_vec())?;
                     d.set_item("b_ordinals", PyArray1::from_slice_bound(py, &b_ords))?;
