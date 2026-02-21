@@ -144,6 +144,53 @@ ms2_df_polars = model.predict_df(
     charges=[2], nces=[20],
     framework="polars",
 )
+
+### Unified prediction with PropertyPrediction
+
+The `PropertyPrediction` helper loads RT, CCS and MS2 models (all optional)
+and returns a single long-format DataFrame combining scalar predictions
+(RT/CCS) with per-fragment MS2 rows. By default `annotate_mz=True` so
+precursor and fragment m/z values are included when a charge is supplied.
+
+```python
+import redeem_properties_py as rp
+
+# Create the unified predictor (loads pretrained models by default)
+prop = rp.PropertyPrediction()
+
+peptides = [
+    "SKEEET[+79.9663]SIDVAGKP",
+    "LPILVPSAKKAIYM",
+    "RTPKIQVYSRHPAE",
+]
+charges = [2, 2, 3]
+nces = [20, 20, 25]
+instruments = ["QE", "QE", "QE"]
+
+# Long-format DataFrame: one row per fragment. Columns include
+# peptide, charge, nce, instrument, rt, ccs, precursor_mz, ion_type,
+# fragment_charge, ordinal, intensity, and mz (when annotate_mz=True).
+df = prop.predict_df(
+    peptides,
+    charges=charges,
+    nces=nces,
+    instruments=instruments,
+    annotate_mz=True,
+)
+
+print(df.columns.tolist())
+print(df.head())
+```
+
+If you only need scalar predictions (RT/CCS) and not MS2, construct
+`PropertyPrediction(predict_ms2=False)` and call `predict_df` — it will
+return one row per peptide and will still include `precursor_mz` when
+`annotate_mz=True` and `charges` are provided.
+
+```python
+prop_scalar = rp.PropertyPrediction(predict_ms2=False)
+df_scalar = prop_scalar.predict_df(peptides, charges=charges, annotate_mz=True)
+print(df_scalar.head())
 ```
 
 ## Pretrained Model Names
