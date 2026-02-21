@@ -368,13 +368,37 @@ pub trait ModelInterface: Send + Sync + ModelClone {
 
         let output = self.forward(&input_tensor)?;
 
+        // Allow model implementations to provide an optional output denormalization
+        // (e.g. undo min-max or z-score scaling applied during training).
+        let denorm = self.get_output_denormalization();
+
         match self.property_type() {
             PropertyType::RT => {
-                let predictions: Vec<f32> = output.to_vec1()?;
+                let mut predictions: Vec<f32> = output.to_vec1()?;
+                if let Some(norm) = denorm {
+                    predictions = predictions
+                        .into_iter()
+                        .map(|pred| match norm {
+                            TargetNormalization::ZScore(mean, std) => pred * std + mean,
+                            TargetNormalization::MinMax(min, max) => pred * (max - min) + min,
+                            TargetNormalization::None => pred,
+                        })
+                        .collect();
+                }
                 Ok(PredictionResult::RTResult(predictions))
             }
             PropertyType::CCS => {
-                let predictions: Vec<f32> = output.to_vec1()?;
+                let mut predictions: Vec<f32> = output.to_vec1()?;
+                if let Some(norm) = denorm {
+                    predictions = predictions
+                        .into_iter()
+                        .map(|pred| match norm {
+                            TargetNormalization::ZScore(mean, std) => pred * std + mean,
+                            TargetNormalization::MinMax(min, max) => pred * (max - min) + min,
+                            TargetNormalization::None => pred,
+                        })
+                        .collect();
+                }
                 Ok(PredictionResult::CCSResult(predictions))
             }
             PropertyType::MS2 => {
@@ -991,6 +1015,25 @@ pub trait ModelInterface: Send + Sync + ModelClone {
     fn get_property_type(&self) -> String;
 
     fn get_model_arch(&self) -> String;
+
+    /// Optional: provide denormalization parameters for the model outputs.
+    ///
+    /// By default this returns `None`. Implementations can override to return
+    /// the normalization used during training so predictions can be converted
+    /// back to the original scale. For now we hard-code a minimal mapping for
+    /// known CNN-Transformer pretrained models; this can be replaced later by
+    /// storing the params in the pretrained artifact (recommended).
+    fn get_output_denormalization(&self) -> Option<TargetNormalization> {
+        match self.get_model_arch().as_str() {
+            // Redeem CNN-Transformer models were trained with min-max normalization
+            // using these ranges (hard-coded until we store them in the model files):
+            // CCS: min=275.4189, max=1118.786
+            // RT:  min=0.1764,   max=60.031
+            "ccs_cnn_tf" => Some(TargetNormalization::MinMax(275.4189_f32, 1118.786_f32)),
+            "rt_cnn_tf" => Some(TargetNormalization::MinMax(0.1764_f32, 60.031_f32)),
+            _ => None,
+        }
+    }
 
     fn get_device(&self) -> &Device;
 
