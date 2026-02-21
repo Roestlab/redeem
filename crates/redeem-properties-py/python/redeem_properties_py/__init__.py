@@ -136,6 +136,7 @@ class RTModel:
     def __str__(self) -> str:
         return self.__repr__()
 
+
     def predict(self, peptides: list[str]):
         """Predict retention times for a list of peptides.
 
@@ -422,6 +423,7 @@ class MS2Model:
         charges: list[int],
         nces: list[int],
         instruments: Optional[list[Optional[str]]] = None,
+        multiplier: float = 10_000.0
     ):
         """Predict MS2 fragment intensities for a list of peptides.
 
@@ -435,7 +437,10 @@ class MS2Model:
             Normalized collision energy per peptide.
         instruments:
             Instrument name per peptide (optional).
-
+        multiplier:
+            Scalar to multiply predicted intensities by (default 10_000.0). Use e.g.
+            ``10000.0`` to scale normalized outputs into typical intensity ranges.
+            
         Returns
         -------
         list[dict]
@@ -447,7 +452,28 @@ class MS2Model:
             * ``"b_ordinals"`` – 1-D int array ``[1, …, n_positions]``.
             * ``"y_ordinals"`` – 1-D int array ``[n_positions, …, 1]``.
         """
-        return self._inner.predict(peptides, charges, nces, instruments=instruments)
+        results = self._inner.predict(peptides, charges, nces, instruments=instruments)
+
+        # Optionally scale predicted intensities by a multiplier before returning.
+        if multiplier is not None and multiplier != 1.0:
+            try:
+                for r in results:
+                    # r["intensities"] is a numpy.ndarray; multiply in-place for efficiency
+                    r_int = r.get("intensities")
+                    if r_int is not None:
+                        r_int *= multiplier
+            except Exception:
+                # If in-place scaling fails for some reason, fall back to non-mutating scaling
+                scaled = []
+                for r in results:
+                    r2 = dict(r)
+                    arr = r2.get("intensities")
+                    if arr is not None:
+                        r2["intensities"] = arr * multiplier
+                    scaled.append(r2)
+                results = scaled
+
+        return results
 
     def param_count(self) -> int:
         """Return total number of parameters in the loaded model (if available)."""
@@ -490,6 +516,8 @@ class MS2Model:
         charges: list[int],
         nces: list[int],
         instruments: Optional[list[Optional[str]]] = None,
+        multiplier: float = 10_000.0,
+        exclude_zeros: bool = True,
         framework: str = "pandas",
     ):
         """Predict MS2 fragment intensities and return a long-format DataFrame.
@@ -506,6 +534,11 @@ class MS2Model:
             Normalized collision energy per peptide.
         instruments:
             Instrument name per peptide (optional).
+        multiplier:
+            Scalar to multiply predicted intensities by (default 10_000.0). Use e.g.
+            ``10000.0`` to scale normalized outputs into typical intensity ranges.
+        exclude_zeros:
+            If True, exclude rows where all predicted intensities are zero.
         framework:
             ``'pandas'`` (default) or ``'polars'``.
 
@@ -527,7 +560,9 @@ class MS2Model:
         1  AGHCEWQMKYR       b                2        1      0.045
         ...
         """
-        results = self.predict(peptides, charges, nces, instruments=instruments)
+        results = self.predict(
+            peptides, charges, nces, instruments=instruments, multiplier=multiplier
+        )
 
         b_ion_types = {"b", "b_nl"}
         pep_col: list[str] = []
@@ -547,11 +582,15 @@ class MS2Model:
                 for c in range(n_types):
                     t = ion_types[c]
                     ordinal = int(b_ords[r]) if t in b_ion_types else int(y_ords[r])
+                    val = float(intensities[r, c])
+                    # If requested, skip individual ion rows with zero intensity.
+                    if exclude_zeros and val == 0.0:
+                        continue
                     pep_col.append(pep)
                     ion_type_col.append(t)
                     frag_charge_col.append(int(frag_charges[c]))
                     ordinal_col.append(ordinal)
-                    intensity_col.append(float(intensities[r, c]))
+                    intensity_col.append(val)
 
         return _make_df(
             {
