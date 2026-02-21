@@ -26,32 +26,37 @@ redeem-classifiers = { git = "https://github.com/singjc/redeem.git", branch = "m
 
 #### Python
 
-Install the Python bindings using [maturin](https://www.maturin.rs):
+The Python bindings are available on PyPI and can be installed via `pip`:
 
 ```bash
-pip install maturin
-git clone https://github.com/singjc/redeem.git
-cd redeem/crates/redeem-properties-py
-maturin develop
+pip install redeem_properties
+```
+
+For `predict_df` support, install pandas or polars as extras:
+
+```bash
+pip install "redeem_properties[pandas]"   # or [polars]
 ```
 
 Quick example:
 
 ```python
-import redeem_properties_py
+import redeem_properties
 
 # Load from shipped pretrained weights (downloaded automatically on first use)
-rt_model = redeem_properties_py.RTModel.from_pretrained("rt")
+rt_model = redeem_properties.RTModel.from_pretrained("rt")
 rt_values = rt_model.predict(["PEPTIDE", "SEQU[+42.0106]ENCE"])
 print(rt_values)  # numpy array of RT predictions
 
 # Or load from a custom model file
-rt_model = redeem_properties_py.RTModel(
+rt_model = redeem_properties.RTModel(
     model_path="path/to/rt.pth",
     arch="rt_cnn_lstm",
     constants_path="path/to/rt.pth.model_const.yaml",
 )
 ```
+
+For full documentation, including installation with CUDA support, please visit the [Read the Docs page](https://redeem-properties.readthedocs.io/).
 
 ### Current Crates
 
@@ -84,7 +89,8 @@ The ReDeeM project consists of three primary crates:
 
 3. **redeem-properties-py**:
    - Python bindings for `redeem-properties` via [PyO3](https://pyo3.rs), exposing RT, CCS, and MS2 prediction models to Python.
-   - Build with [maturin](https://www.maturin.rs) for use in Python workflows.
+   - Available on PyPI as `redeem_properties`.
+   - Full documentation available on [Read the Docs](https://redeem-properties.readthedocs.io/).
 
 > [!NOTE]
 > To use the XGBoost classifier, or the SVM classifier, you need to compile with the `--features xgboost` or `--features linfa` flag respectively.
