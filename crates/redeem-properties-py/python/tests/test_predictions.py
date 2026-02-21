@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import pandas as pd
 import polars as pl
-import redeem_properties_py as rp
+import redeem_properties as rp
 
 TEST_PEPTIDES = [
     "AKPLMELIER",

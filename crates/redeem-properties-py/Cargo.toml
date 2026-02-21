@@ -5,7 +5,7 @@ edition = "2021"
 description = "Python bindings for redeem-properties peptide property prediction models"
 
 [lib]
-name = "redeem_properties_py"
+name = "redeem_properties"
 crate-type = ["cdylib"]
 
 [dependencies]

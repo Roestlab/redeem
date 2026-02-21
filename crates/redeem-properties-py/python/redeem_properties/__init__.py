@@ -1,5 +1,5 @@
 """
-redeem_properties_py
+redeem_properties
 ====================
 Python bindings for the redeem-properties Rust crate, exposing peptide property
 prediction models for retention time (RT), collisional cross-section (CCS), and
@@ -11,7 +11,7 @@ as a ``pandas`` or ``polars`` DataFrame.
 
 Quick start
 -----------
->>> import redeem_properties_py as rp
+>>> import redeem_properties as rp
 >>>
 >>> rt_model  = rp.RTModel.from_pretrained("rt")
 >>> ccs_model = rp.CCSModel.from_pretrained("ccs")
@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from redeem_properties_py._lib import (  # noqa: F401  (re-exported)
+from redeem_properties._lib import (  # noqa: F401  (re-exported)
     CCSModel as _CCSLib,
     MS2Model as _MS2Lib,
     RTModel as _RTLib,
@@ -806,7 +806,7 @@ class PropertyPrediction:
 
     Examples
     --------
-    >>> import redeem_properties_py as rp
+    >>> import redeem_properties as rp
     >>> prop = rp.PropertyPrediction()          # all three pretrained models
     >>> df = prop.predict_df(
     ...     ["PEPTIDE", "AGHCEWQMKYR"],

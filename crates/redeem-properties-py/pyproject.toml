@@ -14,5 +14,5 @@ polars = ["polars>=0.20"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "redeem_properties_py._lib"
+module-name = "redeem_properties._lib"
 features = ["pyo3/extension-module"]
