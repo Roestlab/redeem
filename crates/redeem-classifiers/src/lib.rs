@@ -8,6 +8,7 @@
 //! requiring native dependencies (e.g., libxgboost) unless explicitly enabled.
 pub mod config;
 pub mod data_handling;
+pub mod error;
 pub mod feature_selection;
 pub mod io;
 pub mod math;

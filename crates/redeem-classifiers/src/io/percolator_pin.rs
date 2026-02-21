@@ -203,7 +203,7 @@ pub fn read_pin_tsv_with_config<P: AsRef<Path>>(path: P, config: &PinReaderConfi
 /// Convenience helper to directly build an Experiment from a PIN file.
 pub fn read_pin_experiment<P: AsRef<Path>>(path: P) -> Result<Experiment> {
     let data = read_pin_tsv(path)?;
-    Ok(Experiment::new(data.x, data.y, data.metadata))
+    Ok(Experiment::new(data.x, data.y, data.metadata)?)
 }
 
 fn find_column(headers: &StringRecord, name: &str) -> Option<usize> {

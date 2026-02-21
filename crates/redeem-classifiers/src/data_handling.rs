@@ -9,6 +9,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 
 use crate::math::{Array1, Array2};
+use crate::error::ExperimentError;
 use crate::stats::tdc;
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]

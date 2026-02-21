@@ -61,8 +61,8 @@ fn resolve_pretrained(name: &str, family: &str) -> PyResult<(String, PathBuf)> {
     let pm = PretrainedModel::from_str(name)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-    let arch = pm.arch();
-    if !arch.starts_with(family) {
+    let arch = pm.to_string();
+    if !arch.starts_with(family) && !arch.contains(family) {
         return Err(PyRuntimeError::new_err(format!(
             "Pretrained model '{}' (arch '{}') is not a {} model. \
              Pass the correct name to the matching class.",

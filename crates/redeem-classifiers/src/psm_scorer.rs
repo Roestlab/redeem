@@ -403,7 +403,7 @@ impl SemiSupervisedLearner {
             x
         };
 
-        let mut experiment = Experiment::new(x, y, psm_metadata);
+        let mut experiment = Experiment::new(x, y, psm_metadata)?;
 
         experiment.log_input_data_summary();
 
