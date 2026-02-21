@@ -1,0 +1,21 @@
+version: 2
+
+build:
+  os: ubuntu-22.04
+  tools:
+    python: "3.10"
+  jobs:
+    post_install:
+      - pip install maturin
+      - cd crates/redeem-properties-py && maturin develop --release --features pretrained
+
+sphinx:
+  configuration: crates/redeem-properties-py/docs/source/conf.py
+
+python:
+  install:
+    - requirements: crates/redeem-properties-py/docs/requirements.txt
+    - method: pip
+      path: crates/redeem-properties-py
+      extra_requirements:
+        - pandas
