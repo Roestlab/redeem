@@ -37,6 +37,9 @@ exclude_patterns = []
 
 html_theme = 'sphinx_book_theme'
 html_static_path = ['_static']
+html_css_files = ['custom.css']
+html_logo = '_static/redeem_logo_new_submark.png'
+html_title = 'redeem_properties'
 
 # Theme options
 html_theme_options = {
@@ -45,6 +48,10 @@ html_theme_options = {
     "use_issues_button": True,
     "use_edit_page_button": True,
     "path_to_docs": "crates/redeem-properties-py/docs/source",
+    "logo": {
+        "image_light": "redeem_logo_new_submark.png",
+        "image_dark": "redeem_logo_new_submark.png",
+    }
 }
 
 # MyST settings

@@ -1,0 +1,5 @@
+/* Custom CSS to adjust the sidebar width for sphinx-book-theme */
+
+:root {
+    --pst-sidebar-width: 250px;
+}
