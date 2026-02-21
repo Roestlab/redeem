@@ -700,6 +700,7 @@ class MS2Model:
         ordinal_col: list[int] = []
         intensity_col: list[float] = []
         mz_col: list[float] = []
+        precursor_mz_col: list[float] = []
 
         for pep, charge, res in zip(peptides, exp_charges, results):  # type: ignore
             intensities = res["intensities"]
@@ -711,9 +712,11 @@ class MS2Model:
 
             # Pre-compute theoretical fragment m/z for this peptide (if needed)
             frag_mz_lookup: dict[tuple[str, int, int], float] | None = None
+            _precursor_mz = float("nan")
             if annotate_mz:
                 max_frag_charge = max(int(fc) for fc in frag_charges)
                 try:
+                    _precursor_mz = compute_precursor_mz(pep, charge)
                     frag_info = compute_fragment_mzs(pep, max_frag_charge)
                     frag_mz_lookup = {
                         (t, c, o): m
@@ -740,15 +743,19 @@ class MS2Model:
                     frag_charge_col.append(int(frag_charges[c]))
                     ordinal_col.append(ordinal)
                     intensity_col.append(val)
-                    if annotate_mz and frag_mz_lookup is not None:
-                        # Strip _nl suffix for lookup; NL ions won't match → NaN
-                        base_type = t.replace("_nl", "")
-                        mz_col.append(
-                            frag_mz_lookup.get(
-                                (base_type, int(frag_charges[c]), ordinal),
-                                float("nan"),
+                    if annotate_mz:
+                        precursor_mz_col.append(_precursor_mz)
+                        if frag_mz_lookup is not None:
+                            # Strip _nl suffix for lookup; NL ions won't match → NaN
+                            base_type = t.replace("_nl", "")
+                            mz_col.append(
+                                frag_mz_lookup.get(
+                                    (base_type, int(frag_charges[c]), ordinal),
+                                    float("nan"),
+                                )
                             )
-                        )
+                        else:
+                            mz_col.append(float("nan"))
 
         data: dict = {
             "peptide": pep_col,
@@ -758,6 +765,7 @@ class MS2Model:
             "intensity": intensity_col,
         }
         if annotate_mz:
+            data["precursor_mz"] = precursor_mz_col
             data["mz"] = mz_col
 
         return _make_df(data, framework)

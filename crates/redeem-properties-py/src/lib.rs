@@ -2,15 +2,33 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::exceptions::PyRuntimeError;
 use redeem_properties::models::{
-    ccs_cnn_tf_model::CCSCNNTFModel,
+    ccs_model::CCSModelWrapper,
     model_interface::{ModelInterface, PredictionResult},
-    ms2_bert_model::MS2BertModel,
-    rt_cnn_tf_model::RTCNNTFModel,
+    ms2_model::MS2ModelWrapper,
+    rt_model::RTModelWrapper,
 };
+use redeem_properties::pretrained::{locate_pretrained_model, PretrainedModel};
 use redeem_properties::utils::mz_utils;
-use redeem_properties::utils::peptdeep_utils::ccs_to_mobility_bruker;
+use redeem_properties::utils::peptdeep_utils::{
+    ccs_to_mobility_bruker, get_modification_indices, get_modification_string,
+    remove_mass_shift, MODIFICATION_MAP,
+};
+use std::io::Read;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
+use numpy::{PyArray1, PyArray2};
+
+fn strings_to_arcs(strings: Vec<String>) -> Vec<Arc<[u8]>> {
+    strings.into_iter().map(|s| Arc::from(s.into_bytes())).collect()
+}
+
+fn opt_strings_to_arcs(strings: Vec<Option<String>>) -> Vec<Option<Arc<[u8]>>> {
+    strings
+        .into_iter()
+        .map(|opt| opt.map(|s| Arc::from(s.into_bytes())))
+        .collect()
+}
 
 /// Decompose a list of (possibly modified) peptides into naked sequences, mod strings,
 /// and mod site strings that the Rust model API expects.
