@@ -40,7 +40,7 @@ from redeem_properties_py._lib import (  # noqa: F401  (re-exported)
     validate_pretrained as validate_pretrained,
 )
 
-__all__ = ["RTModel", "CCSModel", "MS2Model", "locate_pretrained"]
+__all__ = ["RTModel", "CCSModel", "MS2Model", "PropertyPrediction", "locate_pretrained"]
 
 
 # ---------------------------------------------------------------------------
@@ -602,3 +602,325 @@ class MS2Model:
             },
             framework,
         )
+
+
+# ---------------------------------------------------------------------------
+# PropertyPrediction  – unified RT + CCS + MS2 predictor
+# ---------------------------------------------------------------------------
+
+class PropertyPrediction:
+    """Unified peptide property predictor combining RT, CCS, and MS2 models.
+
+    Each model is **optional**.  When a model is ``None`` its columns are
+    omitted from the output.  By default the constructor loads the shipped
+    pretrained weights for all three models; pass ``predict_rt=False``,
+    ``predict_ccs=False``, or ``predict_ms2=False`` to skip a model entirely.
+
+    Parameters
+    ----------
+    rt_model:
+        An :class:`RTModel` instance, or ``None`` to skip RT prediction.
+        Ignored when *predict_rt* is ``False``.
+    ccs_model:
+        A :class:`CCSModel` instance, or ``None`` to skip CCS prediction.
+        Ignored when *predict_ccs* is ``False``.
+    ms2_model:
+        An :class:`MS2Model` instance, or ``None`` to skip MS2 prediction.
+        Ignored when *predict_ms2* is ``False``.
+    predict_rt:
+        Whether to include retention-time predictions. Default ``True``.
+    predict_ccs:
+        Whether to include CCS predictions. Default ``True``.
+    predict_ms2:
+        Whether to include MS2 fragment-intensity predictions. Default ``True``.
+    use_cuda:
+        Forwarded to ``from_pretrained`` when constructing default models.
+        Default ``False``.
+
+    Examples
+    --------
+    >>> import redeem_properties_py as rp
+    >>> prop = rp.PropertyPrediction()          # all three pretrained models
+    >>> df = prop.predict_df(
+    ...     ["PEPTIDE", "AGHCEWQMKYR"],
+    ...     charges=[2, 2], nces=[20, 20], instruments=["QE", "QE"],
+    ... )
+    >>> df.columns.tolist()
+    ['peptide', 'charge', 'nce', 'instrument', 'rt', 'ccs',
+     'ion_type', 'fragment_charge', 'ordinal', 'intensity']
+
+    Only RT + CCS (skip MS2):
+
+    >>> prop = rp.PropertyPrediction(predict_ms2=False)
+    >>> df = prop.predict_df(["PEPTIDE"], charges=[2])
+    """
+
+    def __init__(
+        self,
+        rt_model: Optional[RTModel] = None,
+        ccs_model: Optional[CCSModel] = None,
+        ms2_model: Optional[MS2Model] = None,
+        *,
+        predict_rt: bool = True,
+        predict_ccs: bool = True,
+        predict_ms2: bool = True,
+        use_cuda: bool = False,
+    ) -> None:
+        # ------ RT ------
+        if predict_rt:
+            if rt_model is not None:
+                self.rt_model: Optional[RTModel] = rt_model
+            else:
+                try:
+                    self.rt_model = RTModel.from_pretrained("rt", use_cuda=use_cuda)
+                except Exception:
+                    self.rt_model = None
+        else:
+            self.rt_model = None
+
+        # ------ CCS ------
+        if predict_ccs:
+            if ccs_model is not None:
+                self.ccs_model: Optional[CCSModel] = ccs_model
+            else:
+                try:
+                    self.ccs_model = CCSModel.from_pretrained("ccs", use_cuda=use_cuda)
+                except Exception:
+                    self.ccs_model = None
+        else:
+            self.ccs_model = None
+
+        # ------ MS2 ------
+        if predict_ms2:
+            if ms2_model is not None:
+                self.ms2_model: Optional[MS2Model] = ms2_model
+            else:
+                try:
+                    self.ms2_model = MS2Model.from_pretrained("ms2", use_cuda=use_cuda)
+                except Exception:
+                    self.ms2_model = None
+        else:
+            self.ms2_model = None
+
+    # -----------------------------------------------------------------
+    def __repr__(self) -> str:
+        parts = []
+        if self.rt_model is not None:
+            rt_arch = getattr(self.rt_model, "_arch", None) or getattr(self.rt_model, "_requested_name", None)
+            rt_params = self.rt_model.param_count() if hasattr(self.rt_model._inner, "param_count") else "unknown"
+            rt_path = getattr(self.rt_model, "_model_path", None)
+            parts.append(f"\nrt={rt_arch!r} params={rt_params} path={rt_path!r}")
+        if self.ccs_model is not None:
+            ccs_arch = getattr(self.ccs_model, "_arch", None) or getattr(self.ccs_model, "_requested_name", None)
+            ccs_params = self.ccs_model.param_count() if hasattr(self.ccs_model._inner, "param_count") else "unknown"
+            ccs_path = getattr(self.ccs_model, "_model_path", None)
+            parts.append(f"\nccs={ccs_arch!r} params={ccs_params} path={ccs_path!r}")
+        if self.ms2_model is not None:
+            ms2_arch = getattr(self.ms2_model, "_arch", None) or getattr(self.ms2_model, "_requested_name", None)
+            ms2_params = self.ms2_model.param_count() if hasattr(self.ms2_model._inner, "param_count") else "unknown"
+            ms2_path = getattr(self.ms2_model, "_model_path", None)
+            parts.append(f"\nms2={ms2_arch!r} params={ms2_params} path={ms2_path!r}")
+        return f"<PropertyPrediction {' '.join(parts)}\n>"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    # -----------------------------------------------------------------
+    def predict(
+        self,
+        peptides: list[str],
+        charges: Optional[list[int]] = None,
+        nces: Optional[list[int]] = None,
+        instruments: Optional[list[Optional[str]]] = None,
+        multiplier: float = 10_000.0
+    ) -> dict:
+        """Run enabled models and return raw results in a dict.
+
+        Parameters
+        ----------
+        peptides:
+            List of peptide sequences (inline modifications supported).
+        charges:
+            Charge state per peptide (required for CCS and MS2).
+        nces:
+            Normalized collision energy per peptide (required for MS2).
+        instruments:
+            Instrument name per peptide (optional, used by MS2).
+        multiplier:
+            Scalar applied to MS2 predicted intensities (default 10 000).
+
+        Returns
+        -------
+        dict
+            Keys that may be present: ``"rt"`` (1-D ndarray), ``"ccs"``
+            (list[dict]), ``"ms2"`` (list[dict]).
+        """
+        out: dict = {}
+
+        if self.rt_model is not None:
+            out["rt"] = self.rt_model.predict(peptides)
+
+        if self.ccs_model is not None:
+            if charges is None:
+                raise ValueError("charges are required for CCS prediction")
+            out["ccs"] = self.ccs_model.predict(peptides, charges)
+
+        if self.ms2_model is not None:
+            if charges is None:
+                raise ValueError("charges are required for MS2 prediction")
+            if nces is None:
+                raise ValueError("nces are required for MS2 prediction")
+            out["ms2"] = self.ms2_model.predict(
+                peptides, charges, nces, instruments=instruments, multiplier=multiplier,
+            )
+
+        return out
+
+    # -----------------------------------------------------------------
+    def predict_df(
+        self,
+        peptides: list[str],
+        charges: Optional[list[int]] = None,
+        nces: Optional[list[int]] = None,
+        instruments: Optional[list[Optional[str]]] = None,
+        multiplier: float = 10_000.0,
+        exclude_zeros: bool = True,
+        framework: str = "pandas",
+    ):
+        """Predict all enabled properties and return a single long-format DataFrame.
+
+        When MS2 is enabled every fragment row is emitted; the scalar RT and CCS
+        values are broadcast (repeated) across those rows so that each row is
+        fully self-contained.
+
+        When MS2 is **disabled** the DataFrame contains one row per peptide
+        with only the scalar columns that are enabled.
+
+        Parameters
+        ----------
+        peptides:
+            List of peptide sequences (inline modifications supported).
+        charges:
+            Charge state per peptide (required for CCS and MS2).
+        nces:
+            Normalized collision energy per peptide (required for MS2).
+        instruments:
+            Instrument name per peptide (optional, used by MS2).
+        multiplier:
+            Scalar applied to MS2 predicted intensities (default 10 000).
+        exclude_zeros:
+            If ``True``, individual zero-intensity fragment rows are dropped.
+        framework:
+            ``'pandas'`` (default) or ``'polars'``.
+
+        Returns
+        -------
+        pandas.DataFrame or polars.DataFrame
+            Possible columns (depending on which models are enabled):
+            ``peptide``, ``charge``, ``nce``, ``instrument``,
+            ``rt``, ``ccs``, ``ion_type``, ``fragment_charge``,
+            ``ordinal``, ``intensity``.
+        """
+        n = len(peptides)
+
+        # -- scalar predictions (RT / CCS) ---------------------------------
+        rt_values = None
+        if self.rt_model is not None:
+            rt_values = self.rt_model.predict(peptides)  # 1-D ndarray
+
+        ccs_values = None
+        if self.ccs_model is not None:
+            if charges is None:
+                raise ValueError("charges are required for CCS prediction")
+            ccs_results = self.ccs_model.predict(peptides, charges)
+            ccs_values = [r["ccs"] for r in ccs_results]  # list[float]
+
+        # -- MS2 fragment predictions --------------------------------------
+        ms2_results = None
+        if self.ms2_model is not None:
+            if charges is None:
+                raise ValueError("charges are required for MS2 prediction")
+            if nces is None:
+                raise ValueError("nces are required for MS2 prediction")
+            ms2_results = self.ms2_model.predict(
+                peptides, charges, nces,
+                instruments=instruments, multiplier=multiplier,
+            )
+
+        # -- Build output columns ------------------------------------------
+        b_ion_types = {"b", "b_nl"}
+
+        if ms2_results is not None:
+            # Long-format: one row per fragment ion
+            pep_col: list[str] = []
+            charge_col: list[int] = []
+            nce_col: list[int] = []
+            instrument_col: list[Optional[str]] = []
+            rt_col: list[float] = []
+            ccs_col: list[float] = []
+            ion_type_col: list[str] = []
+            frag_charge_col: list[int] = []
+            ordinal_col: list[int] = []
+            intensity_col: list[float] = []
+
+            for idx, (pep, res) in enumerate(zip(peptides, ms2_results)):
+                intensities = res["intensities"]
+                ion_types = res["ion_types"]
+                frag_charges = res["ion_charges"]
+                b_ords = res["b_ordinals"]
+                y_ords = res["y_ordinals"]
+                n_pos, n_types = intensities.shape
+
+                # scalar values for this peptide
+                _charge = charges[idx] if charges is not None else 0
+                _nce = nces[idx] if nces is not None else 0
+                _instrument = instruments[idx] if instruments is not None else None
+                _rt = float(rt_values[idx]) if rt_values is not None else float("nan")
+                _ccs = float(ccs_values[idx]) if ccs_values is not None else float("nan")
+
+                for r in range(n_pos):
+                    for c in range(n_types):
+                        t = ion_types[c]
+                        ordinal = int(b_ords[r]) if t in b_ion_types else int(y_ords[r])
+                        val = float(intensities[r, c])
+                        if exclude_zeros and val == 0.0:
+                            continue
+                        pep_col.append(pep)
+                        charge_col.append(_charge)
+                        nce_col.append(_nce)
+                        instrument_col.append(_instrument)
+                        rt_col.append(_rt)
+                        ccs_col.append(_ccs)
+                        ion_type_col.append(t)
+                        frag_charge_col.append(int(frag_charges[c]))
+                        ordinal_col.append(ordinal)
+                        intensity_col.append(val)
+
+            data: dict = {"peptide": pep_col}
+            if charges is not None:
+                data["charge"] = charge_col
+            if nces is not None:
+                data["nce"] = nce_col
+            if instruments is not None:
+                data["instrument"] = instrument_col
+            if rt_values is not None:
+                data["rt"] = rt_col
+            if ccs_values is not None:
+                data["ccs"] = ccs_col
+            data["ion_type"] = ion_type_col
+            data["fragment_charge"] = frag_charge_col
+            data["ordinal"] = ordinal_col
+            data["intensity"] = intensity_col
+
+        else:
+            # No MS2 – one row per peptide with scalar columns only
+            data = {"peptide": list(peptides)}
+            if charges is not None:
+                data["charge"] = list(charges)
+            if rt_values is not None:
+                data["rt"] = [float(v) for v in rt_values]
+            if ccs_values is not None:
+                data["ccs"] = ccs_values
+
+        return _make_df(data, framework)
+
