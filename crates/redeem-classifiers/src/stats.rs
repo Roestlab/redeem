@@ -6,6 +6,8 @@ use std::cmp::Ordering;
 
 use crate::math::Array1;
 
+use crate::error::TdcError;
+
 /// Estimate q-values using target-decoy competition.
 ///
 /// This function implements the simple target-decoy competition method to estimate q-values.

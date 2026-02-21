@@ -92,6 +92,80 @@ impl DecoderLinear {
 
         Ok(Self { nn })
     }
+
+    /// Dynamically build a DecoderLinear by probing the VarMap for layer tensors.
+    ///
+    /// This auto-detects both 3-layer (alphapeptdeep: linear→PReLU→linear) and
+    /// 5-layer (redeem: linear→PReLU→linear→PReLU→linear) architectures by
+    /// scanning for `{prefix}.nn.{i}.weight` entries in the varmap.
+    pub fn from_varmap_dynamic(
+        varmap: &candle_nn::VarMap,
+        prefix: &str,
+    ) -> Result<Self> {
+        let data = varmap.data().lock().unwrap();
+
+        // Collect all indices that have a .weight tensor under {prefix}.nn.{i}.weight
+        let nn_prefix = format!("{}.nn.", prefix);
+        let mut layer_indices: Vec<usize> = Vec::new();
+        for key in data.keys() {
+            if let Some(rest) = key.strip_prefix(&nn_prefix) {
+                if let Some(idx_str) = rest.strip_suffix(".weight") {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        layer_indices.push(idx);
+                    }
+                }
+            }
+        }
+        layer_indices.sort();
+        layer_indices.dedup();
+
+        log::debug!(
+            "[DecoderLinear::from_varmap_dynamic] prefix='{}', found weight indices: {:?}",
+            prefix, layer_indices
+        );
+
+        if layer_indices.is_empty() {
+            return Err(candle_core::Error::Msg(format!(
+                "No decoder layers found with prefix '{}.nn.'", prefix
+            )));
+        }
+
+        let mut sequential = seq();
+
+        for &idx in &layer_indices {
+            let weight_name = format!("{}.nn.{}.weight", prefix, idx);
+            let bias_name = format!("{}.nn.{}.bias", prefix, idx);
+
+            let var = data.get(&weight_name).ok_or_else(|| {
+                candle_core::Error::Msg(format!("Missing tensor: {}", weight_name))
+            })?;
+            let w = var.as_tensor().clone();
+            let dims = w.shape().dims().to_vec();
+
+            if dims.len() == 2 {
+                // Linear layer: shape [out_features, in_features]
+                let out_f = dims[0];
+                let in_f = dims[1];
+                log::debug!("[DecoderLinear] idx={}: Linear({} -> {})", idx, in_f, out_f);
+
+                let bias = data.get(&bias_name).map(|v| v.as_tensor().clone());
+                let linear = nn::Linear::new(w, bias);
+                sequential = sequential.add(linear);
+            } else if dims.len() == 1 {
+                // PReLU layer: shape [num_parameters]
+                log::debug!("[DecoderLinear] idx={}: PReLU({})", idx, dims[0]);
+                let prelu = nn::PReLU::new(w, true);
+                sequential = sequential.add(prelu);
+            } else {
+                return Err(candle_core::Error::Msg(format!(
+                    "Unexpected tensor rank for {}: {:?}", weight_name, dims
+                )));
+            }
+        }
+
+        drop(data);
+        Ok(Self { nn: sequential })
+    }
 }
 
 // A richer MLP decoder head used for transformer-based models during training.

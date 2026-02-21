@@ -57,17 +57,36 @@ pub struct Experiment {
 }
 
 impl Experiment {
-    pub fn new(x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> Self {
+    pub fn new(x: Array2<f32>, y: Array1<i32>, psm_metadata: PsmMetadata) -> Result<Self, ExperimentError> {
         let n_samples = x.nrows();
-        Experiment {
-            x,
-            y,
-            is_train: Array1::from_elem(n_samples, false),
-            is_top_peak: Array1::from_elem(n_samples, false),
-            tg_num_id: Array1::from_elem(n_samples, 0),
-            classifier_score: Array1::from_elem(n_samples, 0.0),
-            psm_metadata,
+
+        // Validate dimensions
+        if y.len() != n_samples {
+            return Err(ExperimentError::DimensionMismatch(n_samples, y.len()));
         }
+
+        // Check classes
+        let has_target = y.iter().any(|&label| label == 1);
+        let has_decoy = y.iter().any(|&label| label == -1);
+        
+        match (has_target, has_decoy) {
+            (false, false) => return Err(ExperimentError::SingleClass(true)), // Arbitrary
+            (true, false) => return Err(ExperimentError::SingleClass(true)),
+            (false, true) => return Err(ExperimentError::SingleClass(false)),
+            (true, true) => (), // Continue
+        }
+        
+        Ok(
+            Experiment {
+                x,
+                y,
+                is_train: Array1::from_elem(n_samples, false),
+                is_top_peak: Array1::from_elem(n_samples, false),
+                tg_num_id: Array1::from_elem(n_samples, 0),
+                classifier_score: Array1::from_elem(n_samples, 0.0),
+                psm_metadata,
+            }
+        )
     }
 
     pub fn log_input_data_summary(&self) {

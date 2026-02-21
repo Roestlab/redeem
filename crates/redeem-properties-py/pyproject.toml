@@ -1,0 +1,37 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "redeem-properties-py"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.20"]
+version = "0.1.0"
+license = { text = "BSD-3-Clause" }
+keywords = ["mass spectrometry", "proteomics", "deep learning", "peptide", "retention time", "collision cross section", "ms2"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+]
+
+[project.optional-dependencies]
+pandas = ["pandas>=1.3"]
+polars = ["polars>=0.20"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "redeem_properties._lib"
+features = ["pyo3/extension-module"]

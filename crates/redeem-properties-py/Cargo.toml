@@ -1,0 +1,26 @@
+[package]
+name = "redeem-properties-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for redeem-properties peptide property prediction models"
+
+[lib]
+name = "redeem_properties"
+crate-type = ["cdylib"]
+
+[dependencies]
+redeem-properties = { path = "../redeem-properties" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+# Use ndarray 0.15 to match numpy's dependency (avoid multiple ndarray versions)
+ndarray = "0.15"
+anyhow = "1.0"
+
+[dependencies.candle-core]
+version = "0.8.4"
+default-features = false
+
+[features]
+default = []
+cuda = ["redeem-properties/cuda"]
+pretrained = ["redeem-properties/embed-pretrained"]
