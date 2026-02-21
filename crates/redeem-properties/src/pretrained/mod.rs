@@ -34,6 +34,20 @@ impl std::fmt::Display for PretrainedModel {
     }
 }
 
+impl PretrainedModel {
+    /// Return the architecture string expected by the model wrapper constructors
+    /// (e.g. `RTModelWrapper::new`, `CCSModelWrapper::new`).
+    pub fn arch(&self) -> &'static str {
+        match self {
+            PretrainedModel::AlphapeptdeepRtCnnLstm => "rt_cnn_lstm",
+            PretrainedModel::AlphapeptdeepCcsCnnLstm => "ccs_cnn_lstm",
+            PretrainedModel::AlphapeptdeepMs2Bert => "ms2_bert",
+            PretrainedModel::RedeemRtCnnTf => "rt_cnn_tf",
+            PretrainedModel::RedeemCcsCnnTf => "ccs_cnn_tf",
+        }
+    }
+}
+
 impl std::str::FromStr for PretrainedModel {
     type Err = anyhow::Error;
 
