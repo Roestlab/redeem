@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "redeem-properties-py"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.20"]
-version = "0.0.1"
+version = "0.1.0"
 license = { text = "BSD-3-Clause" }
 keywords = ["mass spectrometry", "proteomics", "deep learning", "peptide", "retention time", "collision cross section", "ms2"]
 classifiers = [
