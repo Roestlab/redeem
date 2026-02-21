@@ -39,19 +39,19 @@ impl std::str::FromStr for PretrainedModel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "alphapeptdeep-rt" | "alphapeptdeep-rt-cnn-lstm" | "rt" => {
+            "peptdeep-rt" | "alphapeptdeep-rt" | "alphapeptdeep-rt-cnn-lstm" => {
                 Ok(PretrainedModel::AlphapeptdeepRtCnnLstm)
             }
-            "alphapeptdeep-ccs" | "alphapeptdeep-ccs-cnn-lstm" | "ccs" => {
+            "peptdeep-ccs" | "alphapeptdeep-ccs" | "alphapeptdeep-ccs-cnn-lstm" => {
                 Ok(PretrainedModel::AlphapeptdeepCcsCnnLstm)
             }
-            "alphapeptdeep-ms2" | "alphapeptdeep-ms2-bert" | "ms2" => {
+            "peptdeep-ms2" | "alphapeptdeep-ms2" | "alphapeptdeep-ms2-bert" | "ms2" => {
                 Ok(PretrainedModel::AlphapeptdeepMs2Bert)
             }
-            "redeem-rt" | "redeem-rt-cnn-tf" | "redeem-rt-cnn" => {
+            "redeem-rt" | "redeem-rt-cnn-tf" | "redeem-rt-cnn" | "rt" => {
                 Ok(PretrainedModel::RedeemRtCnnTf)
             }
-            "redeem-ccs" | "redeem-ccs-cnn-tf" | "redeem-ccs-cnn" => {
+            "redeem-ccs" | "redeem-ccs-cnn-tf" | "redeem-ccs-cnn" | "ccs" => {
                 Ok(PretrainedModel::RedeemCcsCnnTf)
             }
             other => Err(anyhow::anyhow!("Unknown pretrained model name: {}", other)),
