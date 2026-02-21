@@ -151,6 +151,184 @@ impl RTModelWrapper {
     pub fn save(&mut self, path: &str) -> Result<()> {
         self.model.save(path)
     }
+
+    /// Return the model architecture string (delegates to the inner model).
+    pub fn model_arch(&self) -> String {
+        self.model.get_model_arch()
+    }
+
+    /// Compute total number of parameters stored in the model's VarMap.
+    /// Requires mutable access because ModelInterface exposes get_mut_varmap().
+    pub fn param_count(&mut self) -> usize {
+        let vm = self.model.get_mut_varmap();
+        let data = vm.data().lock().unwrap();
+        let mut total: usize = 0;
+        for (_name, tensor) in data.iter() {
+            let shape = tensor.shape().dims();
+            let numel: usize = shape.iter().product();
+            total = total.saturating_add(numel);
+        }
+        total
+    }
+
+    /// Return a detailed summary grouping tensors by top-level prefix and
+    /// listing the top tensors by parameter count. This is intended for
+    /// developer-friendly repr output.
+    pub fn summary_detailed(&mut self) -> String {
+        let arch = self.model.get_model_arch();
+        let vm = self.model.get_mut_varmap();
+        let data = vm.data().lock().unwrap();
+
+        let mut entries: Vec<(String, Vec<usize>, usize)> = Vec::with_capacity(data.len());
+        for (name, tensor) in data.iter() {
+            let shape = tensor.shape().dims().to_vec();
+            let numel: usize = shape.iter().product();
+            entries.push((name.clone(), shape, numel));
+        }
+
+        let total: usize = entries.iter().map(|e| e.2).sum();
+
+        use std::collections::HashMap;
+        let mut groups: HashMap<String, (usize, usize)> = HashMap::new();
+        for (name, _shape, numel) in &entries {
+            let prefix = name.split('.').next().unwrap_or(name.as_str()).to_string();
+            let ent = groups.entry(prefix).or_insert((0usize, 0usize));
+            ent.0 += 1;
+            ent.1 += *numel;
+        }
+
+        let mut groups_vec: Vec<(String, (usize, usize))> = groups.into_iter().collect();
+        groups_vec.sort_by_key(|(_, (_count, params))| std::cmp::Reverse(*params));
+
+        entries.sort_by_key(|e| std::cmp::Reverse(e.2));
+
+        let mut s = String::new();
+        s.push_str(&format!("{} total_params={} groups={}\n", arch, total, groups_vec.len()));
+        s.push_str(&format!("{:<24} {:>8} {:>12}\n", "component", "tensors", "params"));
+        for (name, (count, params)) in groups_vec.iter().take(20) {
+            s.push_str(&format!("{:<24} {:>8} {:>12}\n", name, count, params));
+        }
+
+        s.push_str("\nTop tensors:\n");
+        for (name, shape, numel) in entries.iter().take(20) {
+            s.push_str(&format!("{:<40} {:<20} {:>12}\n", name, format!("{:?}", shape), numel));
+        }
+
+        s
+    }
+
+    /// Produce a pretty, hierarchical summary similar to PyTorch's module repr.
+    /// This builds a tree from varmap names and prints a compact nested view.
+    pub fn summary_pretty(&mut self) -> String {
+        let arch = self.model.get_model_arch();
+        let vm = self.model.get_mut_varmap();
+        let data = vm.data().lock().unwrap();
+
+        // Build a tree map where each node maps component -> children or tensors
+        use std::collections::BTreeMap;
+
+        #[derive(Default)]
+        struct Node {
+            children: BTreeMap<String, Node>,
+            tensors: Vec<(String, Vec<usize>, usize)>,
+        }
+
+        let mut root = Node::default();
+
+        for (name, tensor) in data.iter() {
+            let parts: Vec<&str> = name.split('.').collect();
+            let shape = tensor.shape().dims().to_vec();
+            let numel: usize = shape.iter().product();
+            let mut node = &mut root;
+            for p in &parts[..parts.len().saturating_sub(1)] {
+                node = node.children.entry(p.to_string()).or_default();
+            }
+            // last part stored as tensor entry
+            node.tensors.push((parts.last().unwrap().to_string(), shape, numel));
+        }
+
+        // Formatting helpers
+        fn fmt_tensor(name: &str, shape: &[usize]) -> String {
+            if name.ends_with("weight") && shape.len() == 2 {
+                return format!("{}(in_features={}, out_features={})", "Linear", shape[1], shape[0]);
+            }
+            if name.ends_with("bias") && shape.len() == 1 {
+                return format!("bias[{}]", shape[0]);
+            }
+            if name.contains("emb") && shape.len() == 2 {
+                return format!("Embedding(num={}, dim={})", shape[0], shape[1]);
+            }
+            format!("{} {:?}", name, shape)
+        }
+
+        fn write_node(s: &mut String, node: &Node, indent: usize, name: Option<&str>) {
+            let pad = "  ".repeat(indent);
+            if let Some(n) = name {
+                s.push_str(&format!("{}{}(\n", pad, n));
+            }
+            // print tensors at this node
+            for (tname, shape, _numel) in &node.tensors {
+                s.push_str(&format!("{}  ({}): {}\n", pad, tname, fmt_tensor(tname, shape)));
+            }
+            // Handle children; detect numeric-indexed children and compress ranges
+            let mut numeric_keys: Vec<usize> = vec![];
+            let mut numeric_map: std::collections::BTreeMap<usize, &Node> = std::collections::BTreeMap::new();
+            let mut non_numeric: Vec<(&String, &Node)> = vec![];
+            for (k, v) in &node.children {
+                if let Ok(idx) = k.parse::<usize>() {
+                    numeric_keys.push(idx);
+                    numeric_map.insert(idx, v);
+                } else {
+                    non_numeric.push((k, v));
+                }
+            }
+
+            for (k, v) in non_numeric {
+                s.push_str(&format!("{}  ({}):\n", pad, k));
+                write_node(s, v, indent + 2, None);
+            }
+
+            if !numeric_keys.is_empty() {
+                numeric_keys.sort();
+                let mut ranges: Vec<(usize, usize)> = Vec::new();
+                let mut start = numeric_keys[0];
+                let mut last = start;
+                for &k in &numeric_keys[1..] {
+                    if k == last + 1 {
+                        last = k;
+                    } else {
+                        ranges.push((start, last));
+                        start = k;
+                        last = k;
+                    }
+                }
+                ranges.push((start, last));
+                for (a, b) in ranges {
+                    let count = b - a + 1;
+                    if let Some(rep) = numeric_map.get(&a) {
+                        s.push_str(&format!("{}  ({}-{}): {} x <module>\n", pad, a, b, count));
+                        for (child_name, child_node) in &rep.children {
+                            s.push_str(&format!("{}    ({}):\n", pad, child_name));
+                            write_node(s, child_node, indent + 3, None);
+                        }
+                        for (tname, shape, _numel) in &rep.tensors {
+                            s.push_str(&format!("{}    ({}): {}\n", pad, tname, fmt_tensor(tname, shape)));
+                        }
+                    }
+                }
+            }
+
+            if name.is_some() {
+                s.push_str(&format!("{} )\n", pad));
+            }
+        }
+
+    let mut out = String::new();
+    out.push_str(&format!("{}(\n", arch));
+        write_node(&mut out, &root, 1, None);
+        out.push_str(")\n");
+        out
+    }
 }
 
 // Public API Function to load a new RT model
