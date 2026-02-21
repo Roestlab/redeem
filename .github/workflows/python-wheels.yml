@@ -30,7 +30,7 @@ jobs:
 
       - name: Build wheel
         working-directory: crates/redeem-properties-py
-        run: maturin build --release --interpreter python${{ matrix.python-version }} --out dist
+        run: maturin build --release --features pretrained --interpreter python${{ matrix.python-version }} --out dist
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
@@ -38,9 +38,36 @@ jobs:
           name: wheel-${{ matrix.os }}-py${{ matrix.python-version }}
           path: crates/redeem-properties-py/dist/*.whl
 
+  build-sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build sdist
+        working-directory: crates/redeem-properties-py
+        run: maturin sdist --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: crates/redeem-properties-py/dist/*.tar.gz
+
   publish-to-pypi:
     name: Publish to PyPI
-    needs: build-wheels
+    needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     steps:

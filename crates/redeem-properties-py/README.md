@@ -4,6 +4,21 @@ Python bindings for the [redeem-properties](../redeem-properties) Rust crate, ex
 
 ## Installation
 
+### From PyPI
+
+By default, installing from PyPI provides a CPU-only build with embedded pretrained weights:
+
+```bash
+pip install redeem_properties
+```
+
+To install with CUDA support, you can compile the package from the source distribution (sdist) provided on PyPI. This requires the Rust toolchain to be installed on your system:
+
+```bash
+# Install with CUDA support and embedded pretrained weights
+pip install redeem_properties --no-binary redeem_properties --config-settings=cargo-args="--features=cuda,pretrained"
+```
+
 ### From source (requires Rust + maturin)
 
 ```bash
@@ -15,7 +30,7 @@ maturin develop
 For `predict_df` support install pandas or polars as extras:
 
 ```bash
-pip install "redeem-properties-py[pandas]"   # or [polars]
+pip install "redeem_properties[pandas]"   # or [polars]
 # from source:
 pip install ".[pandas]"
 ```
@@ -39,15 +54,15 @@ are supported.
 ### Retention Time (RT) Prediction
 
 ```python
-import redeem_properties_py
+import redeem_properties
 
 # From the shipped pretrained weights using the pretrained model registry
 # Accepted names: "rt", "alphapeptdeep-rt", "alphapeptdeep-rt-cnn-lstm",
 #                 "redeem-rt", "redeem-rt-cnn-tf"
-model = redeem_properties_py.RTModel.from_pretrained("rt")
+model = redeem_properties.RTModel.from_pretrained("rt")
 
 # Or load from a custom model file
-model = redeem_properties_py.RTModel(
+model = redeem_properties.RTModel(
     model_path="path/to/rt.pth",
     arch="rt_cnn_lstm",
     constants_path="path/to/rt.pth.model_const.yaml",
@@ -70,15 +85,15 @@ rt_df_polars = model.predict_df(["AGHCEWQMKYR"], framework="polars")
 ### Collision Cross Section (CCS) Prediction
 
 ```python
-import redeem_properties_py
+import redeem_properties
 
 # From the shipped pretrained weights
 # Accepted names: "ccs", "alphapeptdeep-ccs", "alphapeptdeep-ccs-cnn-lstm",
 #                 "redeem-ccs", "redeem-ccs-cnn-tf"
-model = redeem_properties_py.CCSModel.from_pretrained("ccs")
+model = redeem_properties.CCSModel.from_pretrained("ccs")
 
 # Or load from a custom model file
-model = redeem_properties_py.CCSModel(
+model = redeem_properties.CCSModel(
     model_path="path/to/ccs.pth",
     arch="ccs_cnn_lstm",
     constants_path="path/to/ccs.pth.model_const.yaml",
@@ -101,14 +116,14 @@ ccs_df_polars = model.predict_df(["AGHCEWQMKYR"], charges=2, framework="polars")
 ### MS2 Fragment Intensity Prediction
 
 ```python
-import redeem_properties_py
+import redeem_properties
 
 # From the shipped pretrained weights
 # Accepted names: "ms2", "alphapeptdeep-ms2", "alphapeptdeep-ms2-bert"
-model = redeem_properties_py.MS2Model.from_pretrained("ms2")
+model = redeem_properties.MS2Model.from_pretrained("ms2")
 
 # Or load from a custom model file
-model = redeem_properties_py.MS2Model(
+model = redeem_properties.MS2Model(
     model_path="path/to/ms2.pth",
     arch="ms2_bert",
     constants_path="path/to/ms2.pth.model_const.yaml",
@@ -153,7 +168,7 @@ and returns a single long-format DataFrame combining scalar predictions
 precursor and fragment m/z values are included when a charge is supplied.
 
 ```python
-import redeem_properties_py as rp
+import redeem_properties as rp
 
 # Create the unified predictor (loads pretrained models by default)
 prop = rp.PropertyPrediction()
