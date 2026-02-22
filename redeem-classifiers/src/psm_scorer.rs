@@ -603,7 +603,10 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
 
+    use crate::config::ModelType;
+    use crate::data_handling::RankGrouping;
     use crate::math::{Array1, Array2};
+    use super::SemiSupervisedLearner;
 
     #[allow(dead_code)]
     fn read_features_tsv(path: &str) -> Result<Array2<f32>, Box<dyn Error>> {
