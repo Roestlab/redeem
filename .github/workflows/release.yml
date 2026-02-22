@@ -1,0 +1,117 @@
+name: Release CLI Binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build (e.g. v0.1.0). Defaults to the latest tag."
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: redeem
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+
+      # ---------- Linux cross-compile dependencies ----------
+      - name: Install cross-compilation tools (aarch64-linux)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Set linker for aarch64-linux
+        if: matrix.cross
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      # ---------- Build ----------
+      - name: Build release binary
+        run: cargo build --release --package redeem-cli --target ${{ matrix.target }}
+
+      # ---------- Package ----------
+      - name: Prepare archive directory (unix)
+        if: runner.os != 'Windows'
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          dir="${BINARY_NAME}-${tag}-${{ matrix.target }}"
+          mkdir -p "${dir}"
+          cp "target/${{ matrix.target }}/release/${BINARY_NAME}" "${dir}/"
+          cp redeem-cli/README.md "${dir}/"
+          cp LICENSE "${dir}/"
+          tar czf "${dir}.tar.gz" "${dir}"
+          echo "ASSET=${dir}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Prepare archive directory (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $dir = "${env:BINARY_NAME}-${tag}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $dir
+          Copy-Item "target/${{ matrix.target }}/release/${env:BINARY_NAME}.exe" "$dir/"
+          Copy-Item "redeem-cli/README.md" "$dir/"
+          Copy-Item "LICENSE" "$dir/"
+          Compress-Archive -Path "$dir/*" -DestinationPath "$dir.zip"
+          echo "ASSET=$dir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+      # ---------- Attach to GitHub Release ----------
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
