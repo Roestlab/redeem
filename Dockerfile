@@ -30,7 +30,7 @@ ENV CUDA_COMPUTE_CAP=70
 WORKDIR /app
 
 # Copy source files
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 COPY redeem-classifiers ./redeem-classifiers
 COPY redeem-cli ./redeem-cli
 COPY redeem-properties ./redeem-properties
