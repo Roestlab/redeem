@@ -82,11 +82,18 @@ jobs:
         override: true
 
     - name: Install Python test dependencies
-      run: pip install maturin pytest numpy
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install maturin pytest numpy
 
     - name: Build & install Python bindings
       working-directory: redeem-properties-py
-      run: maturin develop --release --features pretrained
+      run: |
+        source ../.venv/bin/activate
+        maturin develop --release --features pretrained
 
     - name: Run Python tests
-      run: python -m pytest redeem-properties-py/tests/ -v
+      run: |
+        source .venv/bin/activate
+        python -m pytest redeem-properties-py/tests/ -v
