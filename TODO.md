@@ -6,7 +6,7 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 ### Todo
 
-- [ ] implement learning rate scheduler  
+- [ ] Save target normalization min/max values in safetensor.  
 - [ ] implement early stopping during fine-tuning  
 - [ ] freeze certain layers for fine-tuning?  
 - [ ] xgboost/semi-supervised learning param cleanup  
@@ -17,6 +17,7 @@ ReDeeM is a Rust crate designed for implementing deep learning models specifical
 
 ### Done ✓
 
+- [x] implement learning rate scheduler  
 - [x] Implement XGBoost classifier PSM scoring  
 - [x] Implement redeem property prediction into Sage  
 - [x] Refactor peptdeep RT CNN-LSTM model to use refactored codebase  
