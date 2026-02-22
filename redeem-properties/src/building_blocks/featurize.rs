@@ -239,6 +239,12 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    /// Ensure pretrained models are downloaded before tests that need them.
+    fn ensure_models() {
+        crate::utils::peptdeep_utils::download_pretrained_models_exist()
+            .expect("Failed to download pretrained models");
+    }
+
     #[test]
     fn test_aa_indices_tensor() {
         let device = Device::Cpu;
@@ -283,6 +289,7 @@ mod tests {
 
     #[test]
     fn test_get_mod_features_from_parsed() {
+        ensure_models();
         let mods_str = "Acetyl@Protein N-term;Carbamidomethyl@C;Oxidation@M";
         let sites_str = "0;4;8";
 
@@ -297,7 +304,7 @@ mod tests {
         let mod_feature_size = 109;
 
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let constants: ModelConstants =
             parse_model_constants(constants_path.to_str().unwrap()).unwrap();
         let mod_to_feature: HashMap<String, Vec<f32>> = load_mod_to_feature(&constants).unwrap();

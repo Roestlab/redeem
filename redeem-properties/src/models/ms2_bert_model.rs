@@ -445,15 +445,21 @@ mod tests {
     use candle_core::Device;
     use std::path::PathBuf;
 
+    /// Ensure pretrained models are downloaded before tests that need them.
+    fn ensure_models() {
+        crate::utils::peptdeep_utils::download_pretrained_models_exist()
+            .expect("Failed to download pretrained models");
+    }
+
     #[test]
     fn test_parse_model_constants() {
-        let path = "data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml";
+        let path = "data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml";
         let result = parse_model_constants(path);
         assert!(result.is_ok());
         let constants = result.unwrap();
         assert_eq!(constants.aa_embedding_size.unwrap(), 27);
         // assert_eq!(constants.charge_factor, 0.1);
-        assert_eq!(constants.instruments.len(), 4);
+        assert_eq!(constants.instruments.len(), 5);
         assert_eq!(constants.max_instrument_num, 8);
         assert_eq!(constants.mod_elements.len(), 109);
         // assert_eq!(constants.nce_factor, 0.01);
@@ -461,9 +467,9 @@ mod tests {
 
     #[test]
     fn test_load_pretrained_ms2_bert_model() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
         let model =
             MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
@@ -473,9 +479,9 @@ mod tests {
 
     #[test]
     fn test_encode_peptides() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
         let model =
             MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();
@@ -500,9 +506,9 @@ mod tests {
 
     #[test]
     fn test_forward() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
         let device = Device::Cpu;
         let model =
             MS2BertModel::new(model_path, Some(constants_path), 0, 8, 4, true, device).unwrap();

@@ -338,16 +338,24 @@ mod tests {
 
     use super::*;
 
+    /// Ensure pretrained models are downloaded before tests that need them.
+    fn ensure_models() {
+        crate::utils::peptdeep_utils::download_pretrained_models_exist()
+            .expect("Failed to download pretrained models");
+    }
+
     #[test]
     fn test_tensor_from_pth() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        ensure_models();
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth");
         let tensor_data = candle_core::pickle::read_all(model_path).unwrap();
         println!("{:?}", tensor_data);
     }
 
     #[test]
     fn test_parse_model_constants() {
-        let path = "data/models/alphapeptdeep/generic/rt.pth.model_const.yaml";
+        ensure_models();
+        let path = "data/pretrained_models/alphapeptdeep/generic/rt.pth.model_const.yaml";
         let result = parse_model_constants(path);
         assert!(result.is_ok());
         let constants = result.unwrap();
@@ -361,9 +369,10 @@ mod tests {
 
     #[test]
     fn test_encode_peptides() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        ensure_models();
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth");
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::Cpu;
         let model =
             RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device).unwrap();
@@ -388,9 +397,10 @@ mod tests {
 
     #[test]
     fn test_encode_peptides_batch() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
+        ensure_models();
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth");
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::Cpu;
 
         let model = RTCNNLSTMModel::new(
@@ -435,12 +445,10 @@ mod tests {
 
     #[test]
     fn test_prediction() {
-        let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-        let model_path = PathBuf::from(
-            "/home/singjc/Documents/github/easypqp-rs/pretrained_models_v3/generic/rt.pth",
-        );
+        ensure_models();
+        let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth");
         let constants_path =
-            PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+            PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth.model_const.yaml");
         let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
         let mut model =
             RTCNNLSTMModel::new(&model_path, Some(&constants_path), 0, 8, 4, true, device).unwrap();

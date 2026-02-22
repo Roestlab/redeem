@@ -359,9 +359,9 @@ pub fn load_retention_time_model<P: AsRef<Path>>(
 
 //     #[test]
 //     fn peptide_retention_time_prediction() {
-//         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth");
-//         // let model_path = PathBuf::from("data/models/alphapeptdeep/generic/rt_resaved_model.pth");
-//         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+//         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth");
+//         // let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt_resaved_model.pth");
+//         let constants_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/rt.pth.model_const.yaml");
 
 //         assert!(
 //             model_path.exists(),

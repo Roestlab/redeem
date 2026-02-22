@@ -234,6 +234,7 @@ mod test {
     use candle_core::{DType, Device};
 
     #[test]
+    #[ignore] // Requires local model file not available in CI
     fn test_bilstm() -> Result<()> {
         // Set dimensions
         let batch_size = 1;

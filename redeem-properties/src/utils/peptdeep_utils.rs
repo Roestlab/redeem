@@ -496,17 +496,27 @@ pub fn get_modification_string(
 
             // If not found and it's a terminal mod, look for Protein_N-term
             if mod_str.is_none() && pos == 0 {
-                // Try all entries with same key and look for *_N-term
-                let fallback = modification_map.iter().find_map(|((k, _), v)| {
-                    if k == &key
-                        && (v.name.contains("Protein_N-term") || v.name.contains("Any_N-term"))
-                    {
-                        Some(v.name.clone())
-                    } else {
-                        None
-                    }
+                // Try all entries with same key and look for *_N-term, preferring Protein_N-term
+                let mut candidates: Vec<String> = modification_map
+                    .iter()
+                    .filter_map(|((k, _), v)| {
+                        if k == &key
+                            && (v.name.contains("Protein_N-term")
+                                || v.name.contains("Any_N-term"))
+                        {
+                            Some(v.name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                // Prefer Protein_N-term over Any_N-term for deterministic results
+                candidates.sort_by(|a, b| {
+                    let a_protein = a.contains("Protein_N-term");
+                    let b_protein = b.contains("Protein_N-term");
+                    b_protein.cmp(&a_protein)
                 });
-                fallback
+                candidates.into_iter().next()
             } else {
                 mod_str
             }

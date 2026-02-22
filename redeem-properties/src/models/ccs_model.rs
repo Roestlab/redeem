@@ -327,8 +327,8 @@ pub fn load_collision_cross_section_model<P: AsRef<Path>>(
 
 //     #[test]
 //     fn peptide_ccs_prediction() {
-//         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth");
-//         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
+//         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth");
+//         let constants_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
 
 //         assert!(
 //             model_path.exists(),

@@ -298,8 +298,8 @@ pub fn load_ms2_model<P: AsRef<Path>>(
 
 //     #[test]
 //     fn peptide_ms2_prediction() {
-//         let model_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth");
-//         let constants_path = PathBuf::from("data/models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
+//         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
+//         let constants_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
 
 //         assert!(
 //             model_path.exists(),
