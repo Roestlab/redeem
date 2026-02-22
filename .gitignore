@@ -1,41 +1,41 @@
-# # Rust build artifacts
+# Rust build artifacts
 target/
 Cargo.lock
 
-# # Python
-# __pycache__/
-# *.py[cod]
-# *.egg-info/
-# dist/
-# build/
-# .venv/
-# *.so
-# *.pyd
-# *.ipynb
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.so
+*.pyd
+*.ipynb
 **/docs/build/**
 
-# # IDE
-# .idea/
-# .vscode/
-# *.swp
-# *.swo
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# # OS
-# .DS_Store
-# Thumbs.db
+# OS
+.DS_Store
+Thumbs.db
 
-# *.json
+*.json
 # *.png
 # *.svg
-# *.html
-# *.webp
-# *.safetensors
-# *.log
-# *.tsv
-# *.csv
-# *.zip
+*.html
+*.webp
+*.safetensors
+*.log
+*.tsv
+*.csv
+*.zip
 # *.yaml
-# *.pin
+*.pin
 **/data/**
 **/generic/**
 scripts/*
