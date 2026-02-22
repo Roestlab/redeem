@@ -1,6 +1,6 @@
 # redeem-cli
 
-Command-line interface for [ReDeeM](../README.md), providing peptide property prediction and PSM rescoring from the terminal.
+Command-line interface for [ReDeeM](../README.md), providing peptide property prediction and PSM scoring from the terminal.
 
 The `redeem` binary wraps the [`redeem-properties`](../redeem-properties/) and [`redeem-classifiers`](../redeem-classifiers/) libraries into a single CLI with two top-level subcommands: **`properties`** and **`classifiers`**.
 
@@ -35,7 +35,7 @@ redeem <COMMAND>
 
 Commands:
   properties   Train or run peptide property prediction models
-  classifiers  Run classification tools such as rescoring
+  classifiers  Run classification tools such as scoring PSMs
 ```
 
 ### Properties — Train
@@ -129,14 +129,6 @@ redeem classifiers score results.pin \
     -o scored.tsv \
     --model-type gbdt \
     --rank-grouping spec-id
-```
-
-### Classifiers — Rescore
-
-Run the rescoring pipeline with a configuration file.
-
-```bash
-redeem classifiers rescore <CONFIG>
 ```
 
 ## Environment Variables
