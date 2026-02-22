@@ -159,6 +159,7 @@ ms2_df_polars = model.predict_df(
     charges=2, nces=20,
     framework="polars",
 )
+```
 
 ### Unified prediction with PropertyPrediction
 
