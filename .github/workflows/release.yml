@@ -32,6 +32,10 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            musl: true
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
@@ -71,6 +75,17 @@ jobs:
           cat >> .cargo/config.toml <<'EOF'
           [target.aarch64-unknown-linux-gnu]
           linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Install musl toolchain and set linker for musl target
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.x86_64-unknown-linux-musl]
+          linker = "musl-gcc"
           EOF
 
       # ---------- Build ----------
