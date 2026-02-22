@@ -10,11 +10,23 @@
 
 # ReDeeM: Repository for Deep Learning Models for Mass Spectrometry
 
-ReDeeM is a Rust crate designed for implementing deep learning models specifically tailored for mass spectrometry data. The primary goal of this project is to facilitate the prediction of peptide properties and to develop classifier scoring models (TDA). 
+ReDeeM is a Rust workspace for mass spectrometry proteomics, providing deep learning models for peptide property prediction and machine learning classifiers for PSM rescoring. It is designed to be used as a library in other tools (e.g. [Sage](https://github.com/lazear/sage)).
 
-### Usage
+## Crates
 
-The ReDeeM crates are designed to be used as a library in other projects, i.e. in Sage. To use the ReDeeM crates, add the following to your `Cargo.toml` file:
+| Crate | Description | Docs |
+|-------|-------------|------|
+| [`redeem-cli`](crates/redeem-cli/) | Command-line interface for ReDeeM | [README](crates/redeem-cli/README.md) |
+| [`redeem-classifiers`](crates/redeem-classifiers/) | Semi-supervised PSM rescoring (GBDT, XGBoost, SVM) | [README](crates/redeem-classifiers/README.md) |
+| [`redeem-properties`](crates/redeem-properties/) | Peptide property prediction (RT, CCS, MS2) using candle | [README](crates/redeem-properties/README.md) |
+| [`redeem-properties-py`](crates/redeem-properties-py/) | Python bindings for `redeem-properties` via PyO3 | [README](crates/redeem-properties-py/README.md) · [Docs](https://redeem-properties.readthedocs.io/) |
+
+## Installation
+
+### Rust
+
+> [!NOTE]
+> The ReDeeM crates are still under development and are not yet available on crates.io.
 
 ```toml
 [dependencies]
@@ -22,85 +34,72 @@ redeem-properties = { git = "https://github.com/singjc/redeem.git", branch = "ma
 redeem-classifiers = { git = "https://github.com/singjc/redeem.git", branch = "master" }
 ```
 
-**Note**: The ReDeeM crates are still under development and are not yet available on crates.io.
-
-#### Python
-
-The Python bindings are available on PyPI and can be installed via `pip`:
+### Python
 
 ```bash
 pip install redeem_properties
 ```
 
-For `predict_df` support, install pandas or polars as extras:
+For DataFrame output support:
 
 ```bash
 pip install "redeem_properties[pandas]"   # or [polars]
 ```
 
-Quick example:
+## Quick Example
+
+### Python
 
 ```python
-import redeem_properties
+import redeem_properties as rp
 
-# Load from shipped pretrained weights (downloaded automatically on first use)
-rt_model = redeem_properties.RTModel.from_pretrained("rt")
-rt_values = rt_model.predict(["PEPTIDE", "SEQU[+42.0106]ENCE"])
-print(rt_values)  # numpy array of RT predictions
+# Create a unified predictor (loads pretrained models by default)
+model = rp.PropertyPrediction()
 
-# Or load from a custom model file
-rt_model = redeem_properties.RTModel(
-    model_path="path/to/rt.pth",
-    arch="rt_cnn_lstm",
-    constants_path="path/to/rt.pth.model_const.yaml",
+peptides = [
+    "SKEEET[+79.9663]SIDVAGKP",
+    "LPILVPSAKKAIYM",
+    "RTPKIQVYSRHPAE",
+]
+
+df = model.predict_df(
+    peptides,
+    charges=[2, 3],
+    nces=20,
+    instruments="timsTOF",
+    annotate_mz=True,
+    annotate_mobility=True
 )
 ```
 
-For full documentation, including installation with CUDA support, please visit the [Read the Docs page](https://redeem-properties.readthedocs.io/).
+```python
+>>> df.head()
+                    peptide  charge  nce instrument         rt         ccs  ion_mobility  precursor_mz ion_type  fragment_charge  ordinal    intensity          mz
+0  SKEEET[+79.9663]SIDVAGKP       2   20    timsTOF  26.884516  535.355408      1.324961     785.35581        b                1        2   790.534363  216.134268
+1  SKEEET[+79.9663]SIDVAGKP       2   20    timsTOF  26.884516  535.355408      1.324961     785.35581        b                1        3   822.035767  345.176861
+2  SKEEET[+79.9663]SIDVAGKP       2   20    timsTOF  26.884516  535.355408      1.324961     785.35581        b                1        4  1272.754517  474.219454
+3  SKEEET[+79.9663]SIDVAGKP       2   20    timsTOF  26.884516  535.355408      1.324961     785.35581        b                1        5  1806.533691  603.262047
+4  SKEEET[+79.9663]SIDVAGKP       2   20    timsTOF  26.884516  535.355408      1.324961     785.35581        y                1        9   218.158798  967.449573
+```
 
-### Current Crates
+See the [Python bindings README](crates/redeem-properties-py/README.md) for full usage, including MS2 prediction, DataFrame output, and the unified `PropertyPrediction` helper.
 
-The ReDeeM project consists of three primary crates:
+### Rust
 
-1. **redeem-properties**: 
-   - This crate focuses on deep learning models for peptide property prediction. It implements models for predicting retention time (RT), ion mobility (IM), and MS2 fragment intensities using the Candle library.
-   - The models can be trained, fine-tuned on new data and can be saved in the safetensor format for later use.
-   
-   - Current Models
-  
-    Model | Name | Architecture | Implemented
-    --- | --- | --- | ---
-    AlphaPept RT Model | `rt_cnn_lstm` | CNN-LSTM | :heavy_check_mark:
-    AlphaPept MS2 Model | `ms2_bert` | Bert | :heavy_check_mark:
-    AlphaPept CCS Model | `ccs_cnn_lstm` | CNN-LSTM | :heavy_check_mark:
-    RT Model | `rt_tf_lstm` | CNN-Transformer | :heavy_check_mark:
-    CCS Model | `ccs_tf_lstm` | CNN-Transformer | :heavy_check_mark:
+```rust
+use redeem_properties::pretrained::{locate_pretrained_model, PretrainedModel};
+use redeem_properties::models::rt_model::RTModelWrapper;
+use candle_core::Device;
+use std::sync::Arc;
 
-2. **redeem-classifiers**:
-   - This crate is aimed at developing semi-supervised scoring classifier models. The goal is to create models for separating target peptides from decoys.
-  
-   - Current Models
-  
-    Model | Name | Architecture | Implemented
-    --- | --- | --- | ---
-    XGBoost Classifier | `redeem_classifiers::XGBoostClassifier` | XGBoost | :heavy_check_mark:
-    GBDT Classifier | `redeem_classifiers::GBDTClassifier` | GBDT | :heavy_check_mark:
-    SVM Classifier | `redeem_classifiers::SVMClassifier` | SVM | :heavy_check_mark:
+let model_path = locate_pretrained_model(PretrainedModel::RedeemRtCnnTf)?;
+let model = RTModelWrapper::new(&model_path, None::<&str>, "rt_cnn_tf", Device::Cpu)?;
 
-3. **redeem-properties-py**:
-   - Python bindings for `redeem-properties` via [PyO3](https://pyo3.rs), exposing RT, CCS, and MS2 prediction models to Python.
-   - Available on PyPI as `redeem_properties`.
-   - Full documentation available on [Read the Docs](https://redeem-properties.readthedocs.io/).
+let sequences = vec![Arc::from(b"PEPTIDEK".as_slice())];
+let mods = vec![Arc::from(b"".as_slice())];
+let mod_sites = vec![Arc::from(b"".as_slice())];
+let result = model.predict(&sequences, &mods, &mod_sites)?;
+```
 
-> [!NOTE]
-> To use the XGBoost classifier, or the SVM classifier, you need to compile with the `--features xgboost` or `--features linfa` flag respectively.
+See each crate's README for detailed API documentation and examples.
 
-> [!IMPORTANT]
-> The XGBoost crate is a wrapper around the original XGBoost library, which requires clang/c++ to be installed on the system. On Ubuntu, you can do the following:
-    
-    ```bash
-    sudo apt update
-    sudo apt install build-essential
-    sudo apt install clang
-    sudo apt install libstdc++-12-dev
-    ```
