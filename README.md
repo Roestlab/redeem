@@ -10,6 +10,10 @@
 
 # ReDeeM: Repository for Deep Learning Models for Mass Spectrometry
 
+[![Rust](https://github.com/singjc/redeem/actions/workflows/rust.yml/badge.svg)](https://github.com/singjc/redeem/actions/workflows/rust.yml)
+[![PyPI](https://img.shields.io/pypi/v/redeem_properties.svg)](https://pypi.org/project/redeem_properties/)
+[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://redeem-properties.readthedocs.io/)
+
 ReDeeM is a Rust workspace for mass spectrometry proteomics, providing deep learning models for peptide property prediction and machine learning classifiers for PSM rescoring. It is designed to be used as a library in other tools (e.g. [Sage](https://github.com/lazear/sage)).
 
 ## Crates
