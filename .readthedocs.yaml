@@ -4,10 +4,13 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.10"
+    rust: "1.82"
   jobs:
     post_install:
-      - pip install maturin
-      - cd crates/redeem-properties-py && maturin develop --release --features pretrained
+      - python -m pip install maturin pandas
+      # RTD creates the virtualenv at $READTHEDOCS_VIRTUALENV_PATH but does not
+      # export VIRTUAL_ENV, which maturin needs to locate the environment.
+      - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH maturin develop --release --features pretrained --manifest-path crates/redeem-properties-py/Cargo.toml
 
 sphinx:
   configuration: crates/redeem-properties-py/docs/source/conf.py
@@ -15,7 +18,3 @@ sphinx:
 python:
   install:
     - requirements: crates/redeem-properties-py/docs/requirements.txt
-    - method: pip
-      path: crates/redeem-properties-py
-      extra_requirements:
-        - pandas
