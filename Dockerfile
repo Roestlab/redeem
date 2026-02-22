@@ -31,7 +31,10 @@ WORKDIR /app
 
 # Copy source files
 COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
+COPY redeem-classifiers ./redeem-classifiers
+COPY redeem-cli ./redeem-cli
+COPY redeem-properties ./redeem-properties
+COPY redeem-properties-py ./redeem-properties-py
 
 # Build release binary with CUDA
 RUN cargo build --release --bin redeem --features cuda
@@ -62,3 +65,5 @@ ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
 # Add binary directory to PATH
 ENV PATH="/app:${PATH}"
+
+ENTRYPOINT ["redeem"]
