@@ -16,10 +16,10 @@ ReDeeM is a Rust workspace for mass spectrometry proteomics, providing deep lear
 
 | Crate | Description | Docs |
 |-------|-------------|------|
-| [`redeem-cli`](redeem-cli/) | Command-line interface for ReDeeM | [README](redeem-cli/README.md) |
-| [`redeem-classifiers`](redeem-classifiers/) | Semi-supervised PSM rescoring (GBDT, XGBoost, SVM) | [README](redeem-classifiers/README.md) |
-| [`redeem-properties`](redeem-properties/) | Peptide property prediction (RT, CCS, MS2) using candle | [README](redeem-properties/README.md) |
-| [`redeem-properties-py`](redeem-properties-py/) | Python bindings for `redeem-properties` via PyO3 | [README](redeem-properties-py/README.md) · [Docs](https://redeem-properties.readthedocs.io/) |
+| [`redeem-cli`](redeem-cli/) | Command-line interface for ReDeeM | [README](redeem-cli/) |
+| [`redeem-classifiers`](redeem-classifiers/) | Semi-supervised PSM rescoring (GBDT, XGBoost, SVM) | [README](redeem-classifiers/) |
+| [`redeem-properties`](redeem-properties/) | Peptide property prediction (RT, CCS, MS2) using candle | [README](redeem-properties/) |
+| [`redeem-properties-py`](redeem-properties-py/) | Python bindings for `redeem-properties` via PyO3 | [README](redeem-properties-py/) · [Docs](https://redeem-properties.readthedocs.io/) |
 
 ## Installation
 
