@@ -165,6 +165,42 @@ fn validate_pretrained(py: Python, name: &str) -> PyResult<PyObject> {
     Ok(dict.into())
 }
 
+/// Download pretrained models from the GitHub release and extract them locally.
+///
+/// This fetches the pretrained model archive from the redeem GitHub releases page,
+/// validates the download, and extracts the model files so they can be used by
+/// ``RTModel.from_pretrained()``, ``CCSModel.from_pretrained()``, and
+/// ``MS2Model.from_pretrained()``.
+///
+/// The models are downloaded to ``data/pretrained_models/`` relative to the current
+/// working directory. If the models already exist, this function returns immediately
+/// without re-downloading.
+///
+/// Returns:
+///     str: The absolute path to the extracted pretrained models directory.
+///
+/// Raises:
+///     RuntimeError: If the download fails, the archive is corrupted, or extraction fails.
+///
+/// Example:
+///     >>> import redeem_properties as rp
+///     >>> models_dir = rp.download_pretrained_models()
+///     >>> print(f"Models available at: {models_dir}")
+///     >>> rt_model = rp.RTModel.from_pretrained("rt")
+#[pyfunction]
+fn download_pretrained_models() -> PyResult<String> {
+    use redeem_properties::utils::peptdeep_utils::download_pretrained_models_exist;
+
+    let path = download_pretrained_models_exist()
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to download pretrained models: {}", e)))?;
+
+    // Return the absolute path as a string
+    let abs_path = std::fs::canonicalize(&path)
+        .unwrap_or(path);
+
+    Ok(abs_path.to_string_lossy().into_owned())
+}
+
 /// Python wrapper for the RT (retention time) prediction model.
 #[pyclass]
 struct RTModel {
@@ -889,6 +925,7 @@ fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MS2Model>()?;
     m.add_function(wrap_pyfunction!(locate_pretrained, m)?)?;
     m.add_function(wrap_pyfunction!(validate_pretrained, m)?)?;
+    m.add_function(wrap_pyfunction!(download_pretrained_models, m)?)?;
     m.add_function(wrap_pyfunction!(compute_precursor_mz, m)?)?;
     m.add_function(wrap_pyfunction!(compute_fragment_mzs, m)?)?;
     m.add_function(wrap_pyfunction!(compute_peptide_mz_info, m)?)?;

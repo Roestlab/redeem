@@ -41,6 +41,7 @@ def test_utility_functions_exist():
         "ccs_to_mobility",
         "locate_pretrained",
         "validate_pretrained",
+        "download_pretrained_models",
     ):
         assert hasattr(redeem_properties, name), f"{name} not found"
 

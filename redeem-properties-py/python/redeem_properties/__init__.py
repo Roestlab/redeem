@@ -38,6 +38,7 @@ from redeem_properties._lib import (  # noqa: F401  (re-exported)
     RTModel as _RTLib,
     locate_pretrained as locate_pretrained,
     validate_pretrained as validate_pretrained,
+    download_pretrained_models as download_pretrained_models,
     compute_precursor_mz as compute_precursor_mz,
     compute_fragment_mzs as compute_fragment_mzs,
     compute_peptide_mz_info as compute_peptide_mz_info,
@@ -51,6 +52,7 @@ __all__ = [
     "MS2Model",
     "PropertyPrediction",
     "locate_pretrained",
+    "download_pretrained_models",
     "compute_precursor_mz",
     "compute_fragment_mzs",
     "compute_peptide_mz_info",
@@ -62,6 +64,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
 
 def _make_df(data: dict, framework: str):
     """Build a DataFrame from a column dict using *framework* ('pandas'/'polars')."""
@@ -85,6 +88,7 @@ def _make_df(data: dict, framework: str):
         return pl.DataFrame(data)
     else:
         raise ValueError(f"Unknown framework '{framework}'. Use 'pandas' or 'polars'.")
+
 
 def _expand_inputs(
     peptides: list[str],
@@ -118,9 +122,9 @@ def _expand_inputs(
                     exp_charge.append(c)
     else:
         raise TypeError("charges must be an int or a list of ints")
-        
+
     n = len(exp_pep)
-    
+
     # 2. Broadcast nces
     exp_nces = None
     if nces is not None:
@@ -132,10 +136,12 @@ def _expand_inputs(
             elif len(nces) == n:
                 exp_nces = [int(x) for x in nces]
             else:
-                raise ValueError(f"nces must be a single value, a list of length 1, or match the expanded length {n}")
+                raise ValueError(
+                    f"nces must be a single value, a list of length 1, or match the expanded length {n}"
+                )
         else:
             raise TypeError("nces must be an int, float, or list")
-            
+
     # 3. Broadcast instruments
     exp_inst = None
     if instruments is not None:
@@ -147,16 +153,19 @@ def _expand_inputs(
             elif len(instruments) == n:
                 exp_inst = instruments
             else:
-                raise ValueError(f"instruments must be a single value, a list of length 1, or match the expanded length {n}")
+                raise ValueError(
+                    f"instruments must be a single value, a list of length 1, or match the expanded length {n}"
+                )
         else:
             raise TypeError("instruments must be a string or list")
-            
+
     return exp_pep, exp_charge, exp_nces, exp_inst
 
 
 # ---------------------------------------------------------------------------
 # RTModel
 # ---------------------------------------------------------------------------
+
 
 class RTModel:
     """Retention time prediction model.
@@ -180,7 +189,9 @@ class RTModel:
         constants_path: Optional[str] = None,
         use_cuda: bool = False,
     ) -> None:
-        self._inner = _RTLib(model_path, arch, constants_path=constants_path, use_cuda=use_cuda)
+        self._inner = _RTLib(
+            model_path, arch, constants_path=constants_path, use_cuda=use_cuda
+        )
         # preserve construction metadata for nicer repr/str
         self._model_path = model_path
         self._arch = arch
@@ -213,12 +224,13 @@ class RTModel:
     def __repr__(self) -> str:
         arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
         path = getattr(self, "_model_path", None)
-        param_count = self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        param_count = (
+            self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        )
         return f"<RTModel arch={arch!r} params={param_count} path={path!r}>"
 
     def __str__(self) -> str:
         return self.__repr__()
-
 
     def predict(self, peptides: list[str]):
         """Predict retention times for a list of peptides.
@@ -302,6 +314,7 @@ class RTModel:
 # CCSModel
 # ---------------------------------------------------------------------------
 
+
 class CCSModel:
     """Collisional cross-section prediction model.
 
@@ -349,7 +362,9 @@ class CCSModel:
     def __repr__(self) -> str:
         arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
         path = getattr(self, "_model_path", None)
-        param_count = self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        param_count = (
+            self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        )
         return f"<CCSModel arch={arch!r} params={param_count} path={path!r}>"
 
     def __str__(self) -> str:
@@ -446,13 +461,13 @@ class CCSModel:
         """
         peptides, exp_charges, _, _ = _expand_inputs(peptides, charges=charges)
         results = self.predict(peptides, exp_charges)  # type: ignore
-        
+
         data = {
             "peptide": peptides,
             "ccs": [r["ccs"] for r in results],
             "charge": [r["charge"] for r in results],
         }
-        
+
         if annotate_mobility:
             mobility_col = []
             for pep, ch, res in zip(peptides, exp_charges, results):  # type: ignore
@@ -463,13 +478,14 @@ class CCSModel:
                 except Exception:
                     mobility_col.append(float("nan"))
             data["ion_mobility"] = mobility_col
-            
+
         return _make_df(data, framework)
 
 
 # ---------------------------------------------------------------------------
 # MS2Model
 # ---------------------------------------------------------------------------
+
 
 class MS2Model:
     """MS2 fragment intensity prediction model.
@@ -518,7 +534,9 @@ class MS2Model:
     def __repr__(self) -> str:
         arch = getattr(self, "_arch", None) or getattr(self, "_requested_name", None)
         path = getattr(self, "_model_path", None)
-        param_count = self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        param_count = (
+            self.param_count() if hasattr(self._inner, "param_count") else "unknown"
+        )
         return f"<MS2Model arch={arch!r} params={param_count} path={path!r}>"
 
     def __str__(self) -> str:
@@ -530,7 +548,7 @@ class MS2Model:
         charges: int | list[int],
         nces: int | float | list[int] | list[float],
         instruments: str | list[Optional[str]] | None = None,
-        multiplier: float = 10_000.0
+        multiplier: float = 10_000.0,
     ):
         """Predict MS2 fragment intensities for a list of peptides.
 
@@ -552,7 +570,7 @@ class MS2Model:
         multiplier:
             Scalar to multiply predicted intensities by (default 10_000.0). Use e.g.
             ``10000.0`` to scale normalized outputs into typical intensity ranges.
-            
+
         Returns
         -------
         list[dict]
@@ -567,7 +585,9 @@ class MS2Model:
         peptides, exp_charges, exp_nces, exp_inst = _expand_inputs(
             peptides, charges=charges, nces=nces, instruments=instruments
         )
-        results = self._inner.predict(peptides, exp_charges, exp_nces, instruments=exp_inst)
+        results = self._inner.predict(
+            peptides, exp_charges, exp_nces, instruments=exp_inst
+        )
 
         # Optionally scale predicted intensities by a multiplier before returning.
         if multiplier is not None and multiplier != 1.0:
@@ -690,7 +710,11 @@ class MS2Model:
             peptides, charges=charges, nces=nces, instruments=instruments
         )
         results = self.predict(
-            peptides, exp_charges, exp_nces, instruments=exp_inst, multiplier=multiplier  # type: ignore
+            peptides,
+            exp_charges,
+            exp_nces,
+            instruments=exp_inst,
+            multiplier=multiplier,  # type: ignore
         )
 
         b_ion_types = {"b", "b_nl"}
@@ -774,6 +798,7 @@ class MS2Model:
 # ---------------------------------------------------------------------------
 # PropertyPrediction  – unified RT + CCS + MS2 predictor
 # ---------------------------------------------------------------------------
+
 
 class PropertyPrediction:
     """Unified peptide property predictor combining RT, CCS, and MS2 models.
@@ -873,18 +898,36 @@ class PropertyPrediction:
     def __repr__(self) -> str:
         parts = []
         if self.rt_model is not None:
-            rt_arch = getattr(self.rt_model, "_arch", None) or getattr(self.rt_model, "_requested_name", None)
-            rt_params = self.rt_model.param_count() if hasattr(self.rt_model._inner, "param_count") else "unknown"
+            rt_arch = getattr(self.rt_model, "_arch", None) or getattr(
+                self.rt_model, "_requested_name", None
+            )
+            rt_params = (
+                self.rt_model.param_count()
+                if hasattr(self.rt_model._inner, "param_count")
+                else "unknown"
+            )
             rt_path = getattr(self.rt_model, "_model_path", None)
             parts.append(f"\nrt={rt_arch!r} params={rt_params} path={rt_path!r}")
         if self.ccs_model is not None:
-            ccs_arch = getattr(self.ccs_model, "_arch", None) or getattr(self.ccs_model, "_requested_name", None)
-            ccs_params = self.ccs_model.param_count() if hasattr(self.ccs_model._inner, "param_count") else "unknown"
+            ccs_arch = getattr(self.ccs_model, "_arch", None) or getattr(
+                self.ccs_model, "_requested_name", None
+            )
+            ccs_params = (
+                self.ccs_model.param_count()
+                if hasattr(self.ccs_model._inner, "param_count")
+                else "unknown"
+            )
             ccs_path = getattr(self.ccs_model, "_model_path", None)
             parts.append(f"\nccs={ccs_arch!r} params={ccs_params} path={ccs_path!r}")
         if self.ms2_model is not None:
-            ms2_arch = getattr(self.ms2_model, "_arch", None) or getattr(self.ms2_model, "_requested_name", None)
-            ms2_params = self.ms2_model.param_count() if hasattr(self.ms2_model._inner, "param_count") else "unknown"
+            ms2_arch = getattr(self.ms2_model, "_arch", None) or getattr(
+                self.ms2_model, "_requested_name", None
+            )
+            ms2_params = (
+                self.ms2_model.param_count()
+                if hasattr(self.ms2_model._inner, "param_count")
+                else "unknown"
+            )
             ms2_path = getattr(self.ms2_model, "_model_path", None)
             parts.append(f"\nms2={ms2_arch!r} params={ms2_params} path={ms2_path!r}")
         return f"<PropertyPrediction {' '.join(parts)}\n>"
@@ -899,7 +942,7 @@ class PropertyPrediction:
         charges: int | list[int] | None = None,
         nces: int | float | list[int] | list[float] | None = None,
         instruments: str | list[Optional[str]] | None = None,
-        multiplier: float = 10_000.0
+        multiplier: float = 10_000.0,
     ) -> dict:
         """Run enabled models and return raw results in a dict.
 
@@ -946,7 +989,11 @@ class PropertyPrediction:
             if exp_nces is None:
                 raise ValueError("nces are required for MS2 prediction")
             out["ms2"] = self.ms2_model.predict(
-                peptides, exp_charges, exp_nces, instruments=exp_inst, multiplier=multiplier,
+                peptides,
+                exp_charges,
+                exp_nces,
+                instruments=exp_inst,
+                multiplier=multiplier,
             )
 
         return out
@@ -1037,8 +1084,11 @@ class PropertyPrediction:
             if exp_nces is None:
                 raise ValueError("nces are required for MS2 prediction")
             ms2_results = self.ms2_model.predict(
-                peptides, exp_charges, exp_nces,
-                instruments=exp_inst, multiplier=multiplier,
+                peptides,
+                exp_charges,
+                exp_nces,
+                instruments=exp_inst,
+                multiplier=multiplier,
             )
 
         # -- Build output columns ------------------------------------------
@@ -1073,7 +1123,9 @@ class PropertyPrediction:
                 _nce = exp_nces[idx] if exp_nces is not None else 0
                 _instrument = exp_inst[idx] if exp_inst is not None else None
                 _rt = float(rt_values[idx]) if rt_values is not None else float("nan")
-                _ccs = float(ccs_values[idx]) if ccs_values is not None else float("nan")
+                _ccs = (
+                    float(ccs_values[idx]) if ccs_values is not None else float("nan")
+                )
 
                 # Precompute m/z info for this peptide (if requested)
                 _precursor_mz = float("nan")
@@ -1100,9 +1152,15 @@ class PropertyPrediction:
                         frag_mz_lookup = {}
 
                 _ion_mobility = float("nan")
-                if annotate_mobility and ccs_values is not None and exp_charges is not None:
+                if (
+                    annotate_mobility
+                    and ccs_values is not None
+                    and exp_charges is not None
+                ):
                     try:
-                        _ion_mobility = ccs_to_mobility(_ccs, float(_charge), _precursor_mz)
+                        _ion_mobility = ccs_to_mobility(
+                            _ccs, float(_charge), _precursor_mz
+                        )
                     except Exception:
                         pass
 
@@ -1188,4 +1246,3 @@ class PropertyPrediction:
                 data["precursor_mz"] = prec_mz
 
         return _make_df(data, framework)
-
