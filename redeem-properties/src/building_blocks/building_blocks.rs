@@ -1767,6 +1767,7 @@ mod tests {
 
     #[test]
     fn test_decoder_linear() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1896,6 +1897,7 @@ mod tests {
 
     #[test]
     fn test_meta_embedding() {
+
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");

@@ -453,6 +453,7 @@ mod tests {
 
     #[test]
     fn test_parse_model_constants() {
+        ensure_models();
         let path = "data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml";
         let result = parse_model_constants(path);
         assert!(result.is_ok());
