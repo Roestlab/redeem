@@ -10,7 +10,10 @@ build:
       - python -m pip install maturin pandas
       # RTD creates the virtualenv at $READTHEDOCS_VIRTUALENV_PATH but does not
       # export VIRTUAL_ENV, which maturin needs to locate the environment.
-      - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH maturin develop --release --features pretrained --manifest-path crates/redeem-properties-py/Cargo.toml
+      # Note: we omit --features pretrained because the model weights are not
+      # checked into git; the embed-pretrained feature would fail at compile
+      # time.  The extension is still fully importable for autodoc purposes.
+      - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH maturin develop --release --manifest-path crates/redeem-properties-py/Cargo.toml
 
 sphinx:
   configuration: crates/redeem-properties-py/docs/source/conf.py
