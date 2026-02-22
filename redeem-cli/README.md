@@ -4,6 +4,9 @@ Command-line interface for [ReDeeM](../README.md), providing peptide property pr
 
 The `redeem` binary wraps the [`redeem-properties`](../redeem-properties/) and [`redeem-classifiers`](../redeem-classifiers/) libraries into a single CLI with two top-level subcommands: **`properties`** and **`classifiers`**.
 
+> [!NOTE]
+> The CLI is still under development
+
 ## Installation
 
 ### From source
