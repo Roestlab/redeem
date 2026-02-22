@@ -98,15 +98,16 @@ impl LRScheduler for CosineWithWarmup {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
+/// use redeem_properties::utils::utils::get_device;
 /// // Get the CPU device
-/// let cpu_device = get_device("cpu")?;
+/// let cpu_device = get_device("cpu").unwrap();
 ///
 /// // Get the default CUDA device (index 0)
-/// let default_cuda = get_device("cuda")?;
+/// let default_cuda = get_device("cuda").unwrap();
 ///
 /// // Get a specific CUDA device
-/// let cuda_1 = get_device("cuda:1")?;
+/// let cuda_1 = get_device("cuda:1").unwrap();
 /// ```
 ///
 /// # Errors

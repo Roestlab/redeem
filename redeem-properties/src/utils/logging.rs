@@ -44,6 +44,7 @@ impl Progress {
     ///
     /// # Example
     /// ```
+    /// use redeem_properties::utils::logging::Progress;
     /// let progress = Progress::new(100, "Processing data");
     /// ```
     pub fn new(total: usize, description: &str) -> Self {
@@ -79,6 +80,7 @@ impl Progress {
     ///
     /// # Example
     /// ```
+    /// use redeem_properties::utils::logging::Progress;
     /// let progress = Progress::new(100, "Loading");
     /// progress.inc();
     /// ```
@@ -106,6 +108,7 @@ impl Progress {
     ///
     /// # Example
     /// ```
+    /// use redeem_properties::utils::logging::Progress;
     /// let progress = Progress::new(100, "Downloading files");
     /// for _ in 0..100 {
     ///     progress.inc();
@@ -130,6 +133,7 @@ impl Progress {
 ///
 /// # Example
 /// ```
+/// use redeem_properties::utils::logging::get_rss_memory;
 /// let mem_usage = get_rss_memory();
 /// println!("Current memory usage: {} KB", mem_usage / 1024);
 /// ```

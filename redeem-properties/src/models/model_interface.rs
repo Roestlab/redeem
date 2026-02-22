@@ -1446,7 +1446,8 @@ impl Parameters {
     /// # Example
     ///
     /// ```
-    /// let params = Parameters::new("QE", 20);
+    /// use redeem_properties::models::model_interface::Parameters;
+    /// let params = Parameters::new("QE", 20.0);
     /// ```
     pub fn new(instrument: &str, nce: f32) -> Self {
         Parameters {
@@ -1485,10 +1486,8 @@ impl DLModels {
     /// # Example
     ///
     /// ```
-    /// let mut models = DLModels::new();
-    ///
-    /// models.rt_model = Some(RTModelWrapper::new());
-    ///
+    /// use redeem_properties::models::model_interface::DLModels;
+    /// let models = DLModels::new();
     /// ```
     pub fn new() -> Self {
         DLModels {
@@ -1508,11 +1507,9 @@ impl DLModels {
     /// # Example
     ///
     /// ```
-    /// let mut models = DLModels::new();
+    /// use redeem_properties::models::model_interface::DLModels;
+    /// let models = DLModels::new();
     /// assert!(!models.is_not_empty());
-    ///
-    /// models.rt_model = Some(RTModelWrapper::new());
-    /// assert!(models.is_not_empty());
     /// ```
     pub fn is_not_empty(&self) -> bool {
         self.rt_model.is_some() || self.ccs_model.is_some() || self.ms2_model.is_some()

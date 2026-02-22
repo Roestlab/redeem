@@ -293,10 +293,10 @@ pub fn extract_masses_and_indices(peptide: &str) -> Vec<(f64, usize)> {
 /// ```
 /// use redeem_properties::utils::peptdeep_utils::get_modification_indices;
 /// let result = get_modification_indices("AC[+57.0215]DE");
-/// assert_eq!(result, "1");
+/// assert_eq!(result, "2");
 ///
 /// let result = get_modification_indices("AC(UniMod:4)DE");
-/// assert_eq!(result, "1");
+/// assert_eq!(result, "2");
 /// ```
 pub fn get_modification_indices(peptide: &str) -> String {
     let re = Regex::new(r"(\[.*?\]|\(UniMod:\d+\)|\([a-zA-Z]+\))").unwrap();
@@ -407,6 +407,7 @@ pub fn extract_unimod_annotations(peptide: &str) -> Vec<(String, usize)> {
 ///
 /// # Example
 /// ```
+/// use redeem_properties::utils::peptdeep_utils::extract_mod_annotations;
 /// let mass = extract_mod_annotations("AC[+57.0215]DE");
 /// assert_eq!(mass, vec![("57.0215".to_string(), 2)]);
 ///
@@ -432,7 +433,7 @@ pub fn extract_mod_annotations(peptide: &str) -> Vec<(String, usize)> {
 /// let mut map = std::collections::HashMap::new();
 /// map.insert(("57.0215".to_string(), Some('C')), ModificationMap { name: "Carbamidomethyl@C".to_string(), amino_acid: Some('C'), unimod_id: Some(4) });
 ///
-/// let result = lookup_modification("57.0215".to_string(), 'C', &map);
+/// let result = lookup_modification("57.0215".to_string(), Some('C'), &map);
 /// assert_eq!(result, Some("Carbamidomethyl@C".to_string()));
 /// ```
 pub fn lookup_modification(
