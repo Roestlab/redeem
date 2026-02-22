@@ -23,7 +23,7 @@ pip install redeem_properties --no-binary redeem_properties --config-settings=ca
 
 ```bash
 pip install maturin
-cd crates/redeem-properties-py
+cd redeem-properties-py
 maturin develop
 ```
 

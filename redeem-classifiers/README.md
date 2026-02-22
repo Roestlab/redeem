@@ -175,4 +175,4 @@ pub trait ClassifierModel: Send {
 
 ## License
 
-See the repository [LICENSE](../../LICENSE) file.
+See the repository [LICENSE](../LICENSE) file.

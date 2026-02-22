@@ -18,13 +18,13 @@ Common commands
 
 ```bash
 # from repository root
-cargo run --manifest-path crates/redeem-classifiers/Cargo.toml --example gbdt_semi_supervised_learning
+cargo run --manifest-path redeem-classifiers/Cargo.toml --example gbdt_semi_supervised_learning
 ```
 
 - Run the XGBoost semi-supervised example (requires `xgboost` feature and libxgboost at runtime):
 
 ```bash
-cargo run --manifest-path crates/redeem-classifiers/Cargo.toml --example xgb_semi_supervised_learning --features xgboost -- --scale --normalize-scores
+cargo run --manifest-path redeem-classifiers/Cargo.toml --example xgb_semi_supervised_learning --features xgboost -- --scale --normalize-scores
 ```
 
 Notes about the above command:
@@ -36,12 +36,12 @@ Notes about the above command:
 - Run the synthetic XGBoost example (quick smoke test):
 
 ```bash
-cargo run --manifest-path crates/redeem-classifiers/Cargo.toml --example xgb_synthetic --features xgboost
+cargo run --manifest-path redeem-classifiers/Cargo.toml --example xgb_synthetic --features xgboost
 ```
 
 - Run the SVM semi-supervised example (requires `svm` feature):
 
 ```bash
-cargo run --manifest-path crates/redeem-classifiers/Cargo.toml --example svm_semi_supervised_learning --features svm -- --scale
+cargo run --manifest-path redeem-classifiers/Cargo.toml --example svm_semi_supervised_learning --features svm -- --scale
 ```
 

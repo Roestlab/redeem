@@ -13,11 +13,11 @@ build:
       # Note: we omit --features pretrained because the model weights are not
       # checked into git; the embed-pretrained feature would fail at compile
       # time.  The extension is still fully importable for autodoc purposes.
-      - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH maturin develop --release --manifest-path crates/redeem-properties-py/Cargo.toml
+      - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH maturin develop --release --manifest-path redeem-properties-py/Cargo.toml
 
 sphinx:
-  configuration: crates/redeem-properties-py/docs/source/conf.py
+  configuration: redeem-properties-py/docs/source/conf.py
 
 python:
   install:
-    - requirements: crates/redeem-properties-py/docs/requirements.txt
+    - requirements: redeem-properties-py/docs/requirements.txt

@@ -76,7 +76,7 @@ fn main() -> Result<()> {
 
     let model_path =
         PathBuf::from("/home/singjc/Documents/github/redeem/rt_fine_tuned.safetensors");
-    let constants_path = PathBuf::from("/home/singjc/Documents/github/redeem/crates/redeem-properties/data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
+    let constants_path = PathBuf::from("/home/singjc/Documents/github/redeem/redeem-properties/data/models/alphapeptdeep/generic/rt.pth.model_const.yaml");
     let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
     println!("Device: {:?}", device);
 

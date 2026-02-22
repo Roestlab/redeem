@@ -261,4 +261,4 @@ rt_values = model.predict(["PEPTIDE", "SEQU[+42.0106]ENCE"])
 
 ## License
 
-See the repository [LICENSE](../../LICENSE) file.
+See the repository [LICENSE](../LICENSE) file.
