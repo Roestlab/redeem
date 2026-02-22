@@ -13,6 +13,9 @@ Quick start
 -----------
 >>> import redeem_properties as rp
 >>>
+>>> # Download pretrained models (only needed once)
+>>> rp.download_pretrained_models()
+>>>
 >>> rt_model  = rp.RTModel.from_pretrained("rt")
 >>> ccs_model = rp.CCSModel.from_pretrained("ccs")
 >>> ms2_model = rp.MS2Model.from_pretrained("ms2")

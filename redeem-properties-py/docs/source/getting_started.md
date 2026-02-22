@@ -6,8 +6,6 @@ This guide will walk you through installing `redeem_properties` and using it to 
 
 ### From PyPI
 
-By default, installing from PyPI provides a CPU-only build with embedded pretrained weights:
-
 ```bash
 pip install redeem_properties
 ```
@@ -15,14 +13,37 @@ pip install redeem_properties
 To install with CUDA support, you can compile the package from the source distribution (sdist) provided on PyPI. This requires the Rust toolchain to be installed on your system:
 
 ```bash
-# Install with CUDA support and embedded pretrained weights
-pip install redeem_properties --no-binary redeem_properties --config-settings=cargo-args="--features=cuda,pretrained"
+# Install with CUDA support
+pip install redeem_properties --no-binary redeem_properties --config-settings=cargo-args="--features=cuda"
 ```
 
 For `predict_df` support, install pandas or polars as extras:
 
 ```bash
 pip install "redeem_properties[pandas]"   # or [polars]
+```
+
+## Downloading Pretrained Models
+
+Before running predictions you need to download the pretrained models.
+The package provides a helper function that fetches them from the latest GitHub release
+and caches them locally:
+
+```python
+import redeem_properties
+
+# Download pretrained models (only needs to be done once)
+redeem_properties.download_pretrained_models()
+```
+
+This downloads the models to `data/pretrained_models/` relative to the package
+installation directory.  Subsequent calls are a no-op if the models already
+exist on disk.
+
+```{note}
+The pretrained models are **not** bundled inside the wheel to keep the download
+size small.  You must call `download_pretrained_models()` at least once before
+using any of the `from_pretrained()` class methods.
 ```
 
 ## Usage Examples
@@ -33,6 +54,9 @@ Peptides can be passed with inline modification annotations — the binding hand
 
 ```python
 import redeem_properties
+
+# Ensure pretrained models are available (downloads once, then skips)
+redeem_properties.download_pretrained_models()
 
 # Load the pretrained RT model
 model = redeem_properties.RTModel.from_pretrained("rt")
