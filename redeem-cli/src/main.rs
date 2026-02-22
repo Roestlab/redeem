@@ -34,8 +34,8 @@ fn main() -> Result<()> {
                         .about("Train a new property prediction model from scratch")
                         .arg(
                             Arg::new("config")
-                                .help("Path to training configuration file")
-                                .required(true)
+                                .help("Path to training configuration file (omit to print a template)")
+                                .required(false)
                                 .value_parser(clap::value_parser!(PathBuf))
                                 .value_hint(ValueHint::FilePath),
                         )
@@ -111,8 +111,8 @@ fn main() -> Result<()> {
                     )
                     .arg(
                         Arg::new("config")
-                            .help("Path to training configuration file")
-                            .required(true)
+                            .help("Path to inference configuration file (omit to print a template)")
+                            .required(false)
                             .value_parser(clap::value_parser!(PathBuf))
                             .value_hint(ValueHint::FilePath),
                     )
@@ -150,8 +150,8 @@ fn main() -> Result<()> {
                         .about("Run rescoring tool with specified configuration")
                         .arg(
                             Arg::new("config")
-                                .help("Path to classifier configuration file")
-                                .required(true)
+                                .help("Path to classifier configuration file (omit to print a template)")
+                                .required(false)
                                 .value_parser(clap::value_parser!(PathBuf))
                                 .value_hint(ValueHint::FilePath),
                         ),
@@ -227,7 +227,23 @@ fn main() -> Result<()> {
 fn handle_properties(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("train", train_matches)) => {
-            let config_path: &PathBuf = train_matches.get_one("config").unwrap();
+            let config_path: Option<&PathBuf> = train_matches.get_one("config");
+
+            if config_path.is_none() {
+                let default = PropertyTrainConfig::default();
+                let json = serde_json::to_string_pretty(&default)
+                    .expect("failed to serialize default config");
+                eprintln!(
+                    "\n\u{2139}\u{fe0f}  No config file provided.\n\n\
+                     Save the following JSON template to a file (e.g. train_config.json),\n\
+                     fill in the fields, and re-run:\n\n\
+                       redeem properties train train_config.json\n"
+                );
+                println!("{}", json);
+                std::process::exit(0);
+            }
+
+            let config_path = config_path.unwrap();
             log::info!(
                 "[ReDeeM::Properties] Training from config: {:?}",
                 config_path
@@ -245,7 +261,23 @@ fn handle_properties(matches: &ArgMatches) -> Result<()> {
             }
         }
         Some(("inference", inference_matches)) => {
-            let config_path: &PathBuf = inference_matches.get_one("config").unwrap();
+            let config_path: Option<&PathBuf> = inference_matches.get_one("config");
+
+            if config_path.is_none() {
+                let default = PropertyInferenceConfig::default();
+                let json = serde_json::to_string_pretty(&default)
+                    .expect("failed to serialize default config");
+                eprintln!(
+                    "\n\u{2139}\u{fe0f}  No config file provided.\n\n\
+                     Save the following JSON template to a file (e.g. inference_config.json),\n\
+                     fill in the fields, and re-run:\n\n\
+                       redeem properties inference inference_config.json\n"
+                );
+                println!("{}", json);
+                std::process::exit(0);
+            }
+
+            let config_path = config_path.unwrap();
             log::info!(
                 "[ReDeeM::Properties] Inference using config: {:?}",
                 config_path
@@ -269,7 +301,23 @@ fn handle_properties(matches: &ArgMatches) -> Result<()> {
 fn handle_classifiers(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("rescore", rescore_matches)) => {
-            let config_path: &PathBuf = rescore_matches.get_one("config").unwrap();
+            let config_path: Option<&PathBuf> = rescore_matches.get_one("config");
+
+            if config_path.is_none() {
+                let default = ScoreConfig::default();
+                let json = serde_json::to_string_pretty(&default)
+                    .expect("failed to serialize default config");
+                eprintln!(
+                    "\n\u{2139}\u{fe0f}  No config file provided.\n\n\
+                     Save the following JSON template to a file (e.g. rescore_config.json),\n\
+                     fill in the fields, and re-run:\n\n\
+                       redeem classifiers rescore rescore_config.json\n"
+                );
+                println!("{}", json);
+                std::process::exit(0);
+            }
+
+            let config_path = config_path.unwrap();
             println!(
                 "[ReDeeM::Classifiers] Rescoring using config: {:?}",
                 config_path

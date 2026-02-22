@@ -55,11 +55,14 @@ fn properties_no_subcommand_errors() {
 }
 
 #[test]
-fn properties_train_no_config_errors() {
+fn properties_train_no_config_prints_template() {
     cmd()
         .args(["properties", "train"])
         .assert()
-        .failure();
+        .success()
+        .stdout(predicate::str::contains("\"train_data\""))
+        .stdout(predicate::str::contains("\"model_arch\""))
+        .stderr(predicate::str::contains("No config file provided"));
 }
 
 #[test]
@@ -71,11 +74,14 @@ fn properties_train_nonexistent_config_errors() {
 }
 
 #[test]
-fn properties_inference_no_config_errors() {
+fn properties_inference_no_config_prints_template() {
     cmd()
         .args(["properties", "inference"])
         .assert()
-        .failure();
+        .success()
+        .stdout(predicate::str::contains("\"model_path\""))
+        .stdout(predicate::str::contains("\"inference_data\""))
+        .stderr(predicate::str::contains("No config file provided"));
 }
 
 // ---------------------------------------------------------------------------
@@ -105,4 +111,15 @@ fn classifiers_score_nonexistent_pin_errors() {
         .args(["classifiers", "score", "/nonexistent/results.pin"])
         .assert()
         .failure();
+}
+
+#[test]
+fn classifiers_rescore_no_config_prints_template() {
+    cmd()
+        .args(["classifiers", "rescore"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"train_fdr\""))
+        .stdout(predicate::str::contains("\"model\""))
+        .stderr(predicate::str::contains("No config file provided"));
 }
