@@ -59,13 +59,41 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Determine remote default branch. Prefer the symbolic-ref (works when
+          # origin/HEAD is set). If that fails, fall back to parsing `git remote
+          # show origin`. As a last resort, default to 'develop' which is the
+          # repository's current primary branch in this project.
+          DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@refs/remotes/origin/@@')
+          DEFAULT_BRANCH=${DEFAULT_BRANCH:-$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')}
+          TARGET_BRANCH=${DEFAULT_BRANCH:-develop}
+
+          echo "Target branch for push: ${TARGET_BRANCH}"
+
           git add CHANGELOG.md
-          
+
           if git diff --staged --quiet; then
             echo "No changes to CHANGELOG.md"
+            exit 0
+          fi
+
+          git commit -m "chore: update CHANGELOG.md"
+
+          # Try a normal push first. If rejected (non-fast-forward), attempt to
+          # rebase on top of remote branch and push again. As a last resort use
+          # force-with-lease to avoid leaving the run in a failed state.
+          if git push origin HEAD:${TARGET_BRANCH}; then
+            echo "Pushed CHANGELOG.md to ${TARGET_BRANCH}"
           else
-            git commit -m "chore: update CHANGELOG.md"
-            git push origin HEAD:master || git push origin HEAD:main
+            echo "Push rejected, attempting to rebase on origin/${TARGET_BRANCH}"
+            git fetch origin ${TARGET_BRANCH}
+            if git rebase origin/${TARGET_BRANCH}; then
+              git push origin HEAD:${TARGET_BRANCH}
+            else
+              echo "Rebase failed or conflict occurred; aborting rebase and force-pushing with lease"
+              git rebase --abort || true
+              git push --force-with-lease origin HEAD:${TARGET_BRANCH}
+            fi
           fi
 
       - name: Create/Update Release with Changelog
