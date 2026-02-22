@@ -3,7 +3,7 @@ requires = ["maturin>=1.4,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "redeem-properties-py"
+name = "redeem_properties"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.20"]
 version = "0.1.0"
