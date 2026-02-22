@@ -91,7 +91,7 @@ jobs:
       working-directory: redeem-properties-py
       run: |
         source ../.venv/bin/activate
-        maturin develop --release --features pretrained
+        maturin develop --release
 
     - name: Run Python tests
       run: |
