@@ -525,9 +525,33 @@ pub fn get_modification_string(
         .join(";")
 }
 
+/// Thread-safe, one-shot download and extraction of pretrained models.
+///
+/// Uses a global `OnceLock` so that even when many tests run in parallel
+/// the download + unzip happens exactly once.  Subsequent callers just
+/// get the cached path.
 pub fn download_pretrained_models_exist() -> Result<PathBuf, io::Error> {
+    use std::sync::OnceLock;
+    static MODELS: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+    let result = MODELS.get_or_init(|| {
+        download_pretrained_models_inner().map_err(|e| e.to_string())
+    });
+
+    match result {
+        Ok(path) => Ok(path.clone()),
+        Err(msg) => Err(io::Error::new(io::ErrorKind::Other, msg.clone())),
+    }
+}
+
+fn download_pretrained_models_inner() -> Result<PathBuf, io::Error> {
     let zip_path = PathBuf::from(PRETRAINED_MODELS_ZIP);
     let extract_dir = PathBuf::from(PRETRAINED_MODELS_PATH);
+
+    // If already fully extracted, return immediately
+    if extract_dir.exists() {
+        return Ok(extract_dir);
+    }
 
     // Ensure the parent directory exists
     if let Some(parent) = zip_path.parent() {
@@ -536,37 +560,76 @@ pub fn download_pretrained_models_exist() -> Result<PathBuf, io::Error> {
 
     // Download the zip file if it doesn't exist
     if !zip_path.exists() {
-        info!("Downloading pretrained models...");
-        let mut response = reqwest::blocking::get(PRETRAINED_MODELS_URL)
+        info!("Downloading pretrained models from {} ...", PRETRAINED_MODELS_URL);
+
+        // Use a temporary file so concurrent readers never see a partial zip
+        let tmp_path = zip_path.with_extension("zip.tmp");
+
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        let mut file = File::create(&zip_path)?;
-        io::copy(&mut response, &mut file)?;
+
+        let response = client
+            .get(PRETRAINED_MODELS_URL)
+            .header("Accept", "application/octet-stream")
+            .send()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "Failed to download pretrained models: HTTP {}",
+                    response.status()
+                ),
+            ));
+        }
+
+        let bytes = response
+            .bytes()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+        // Verify we got a real zip (starts with PK magic bytes)
+        if bytes.len() < 4 || &bytes[..2] != b"PK" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Downloaded file is not a valid zip archive ({} bytes, starts with {:?})",
+                    bytes.len(),
+                    &bytes[..bytes.len().min(16)]
+                ),
+            ));
+        }
+
+        fs::write(&tmp_path, &bytes)?;
+        fs::rename(&tmp_path, &zip_path)?;
     }
 
-    // Unzip the file if the target directory doesn't exist
-    if !extract_dir.exists() {
-        info!("Unzipping pretrained models...");
-        let file = File::open(&zip_path)?;
-        let mut archive = ZipArchive::new(file)?;
+    // Unzip into the parent directory (e.g., "data/") so that the zip's
+    // top-level "pretrained_models/" folder lands at "data/pretrained_models/".
+    info!("Unzipping pretrained models...");
+    let file = File::open(&zip_path)?;
+    let mut archive = ZipArchive::new(file)?;
 
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)?;
-            let outpath = extract_dir.join(file.mangled_name());
+    let parent_dir = extract_dir
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
 
-            if file.name().ends_with('/') {
-                // Create directory
-                fs::create_dir_all(&outpath)?;
-            } else {
-                // Write file
-                if let Some(parent) = outpath.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let mut outfile = File::create(&outpath)?;
-                io::copy(&mut file, &mut outfile)?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let outpath = parent_dir.join(file.mangled_name());
+
+        if file.name().ends_with('/') {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                fs::create_dir_all(parent)?;
             }
+            let mut outfile = File::create(&outpath)?;
+            io::copy(&mut file, &mut outfile)?;
         }
     }
-
     Ok(extract_dir)
 }
 

@@ -1799,6 +1799,7 @@ mod tests {
 
     #[test]
     fn test_mod_embedding_fix_first_k() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1825,6 +1826,7 @@ mod tests {
 
     #[test]
     fn test_aa_embedding() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1845,6 +1847,7 @@ mod tests {
 
     #[test]
     fn test_positional_encoding() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1867,6 +1870,7 @@ mod tests {
 
     #[test]
     fn test_input_26aa_mod_positional_encoding() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1897,6 +1901,7 @@ mod tests {
 
     #[test]
     fn test_meta_embedding() {
+        ensure_models();
 
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
@@ -1923,6 +1928,7 @@ mod tests {
 
     #[test]
     fn test_hidden_hface_transformer() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1952,6 +1958,7 @@ mod tests {
 
     #[test]
     fn test_mod_loss_nn() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -1989,6 +1996,7 @@ mod tests {
 
     #[test]
     fn test_seq_cnn() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
@@ -2023,6 +2031,7 @@ mod tests {
 
     #[test]
     fn test_seq_lstm() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth.model_const.yaml");
@@ -2044,6 +2053,7 @@ mod tests {
 
     #[test]
     fn test_seq_attention_sum() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ccs.pth.model_const.yaml");

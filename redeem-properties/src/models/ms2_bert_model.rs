@@ -468,6 +468,7 @@ mod tests {
 
     #[test]
     fn test_load_pretrained_ms2_bert_model() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -480,6 +481,7 @@ mod tests {
 
     #[test]
     fn test_encode_peptides() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
@@ -507,6 +509,7 @@ mod tests {
 
     #[test]
     fn test_forward() {
+        ensure_models();
         let model_path = PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth");
         let constants_path =
             PathBuf::from("data/pretrained_models/alphapeptdeep/generic/ms2.pth.model_const.yaml");
